@@ -25,6 +25,11 @@ public abstract class DesignBox : Panel
     public abstract object Model { get; }
     /// <summary>定義裡的位置</summary>
     public abstract Point ModelLocation { get; }
+    /// <summary>
+    /// 水平對齊用的基準線（畫面座標）：預設是元件左緣；
+    /// 欄位改用輸入框左緣，標籤寬度不同時輸入框才排得整齊
+    /// </summary>
+    public virtual int AlignX => ModelLocation.X;
     public abstract void SetModelLocation(int x, int y);
     /// <summary>屬性改了之後，依定義重畫</summary>
     public abstract void RefreshFromModel();

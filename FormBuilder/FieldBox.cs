@@ -30,6 +30,12 @@ public class FieldBox : DesignBox
     public override object Model => Field;
     public override Point ModelLocation => new(Field.X, Field.Y);
 
+    /// <summary>輸入框左緣與欄位左緣的距離（= 標籤寬度 + 間隔）</summary>
+    public int InputOffset => Math.Clamp(Field.LabelWidth, 0, MaxLabelWidth) + 4;
+
+    /// <summary>對齊基準線用輸入框左緣</summary>
+    public override int AlignX => Field.X + InputOffset;
+
     public override void SetModelLocation(int x, int y)
     {
         Field.X = x;

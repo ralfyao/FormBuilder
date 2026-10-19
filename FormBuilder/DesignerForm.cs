@@ -595,7 +595,7 @@ public class DesignerForm : Form
         int dy = (int)Math.Round(delta.Height / (double)DesignBox.Grid) * DesignBox.Grid;
         // 靠近其他元件時自動貼齊（以滑鼠拖的那個元件為準）
         if (dragStarts.TryGetValue(lead, out var leadStart))
-            (dx, dy) = AlignHelper.Magnetize(leadStart, dx, dy,
+            (dx, dy) = AlignHelper.Magnetize(lead, leadStart, dx, dy,
                 canvas.Controls.OfType<DesignBox>().Where(b => !dragStarts.ContainsKey(b) && b is not GridBox { IsDocked: true }));
         dx = Math.Max(dx, -dragStarts.Values.Min(p => p.X));
         dy = Math.Max(dy, -dragStarts.Values.Min(p => p.Y));
