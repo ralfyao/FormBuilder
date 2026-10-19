@@ -314,7 +314,7 @@ public class EditLayoutDialog : Form
         int dx = (int)Math.Round(delta.Width / (double)DesignBox.Grid) * DesignBox.Grid;
         int dy = (int)Math.Round(delta.Height / (double)DesignBox.Grid) * DesignBox.Grid;
         if (dragStarts.TryGetValue(lead, out var leadStart))
-            (dx, dy) = AlignHelper.Magnetize(leadStart, dx, dy, canvas.Controls.OfType<DesignBox>().Where(b => !dragStarts.ContainsKey(b)));
+            (dx, dy) = AlignHelper.Magnetize(lead, leadStart, dx, dy, canvas.Controls.OfType<DesignBox>().Where(b => !dragStarts.ContainsKey(b)));
         dx = Math.Max(dx, -dragStarts.Values.Min(p => p.X));
         dy = Math.Max(dy, -dragStarts.Values.Min(p => p.Y));
         foreach (var (box, start) in dragStarts) box.SetModelLocation(start.X + dx, start.Y + dy);
