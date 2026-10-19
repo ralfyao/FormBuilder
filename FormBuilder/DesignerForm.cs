@@ -3,7 +3,7 @@ namespace FormBuilder;
 /// <summary>
 /// 後台設計視窗：連線資料庫 → 選資料表 → 把欄位拖到畫面上 → 存成畫面定義檔（JSON）給使用者使用
 /// </summary>
-public class DesignerForm : Form
+public partial class DesignerForm : Form
 {
     private FormDefinition def = new();
     private List<ColumnInfo> defTableColumns = new();      // 畫面所屬資料表的全部欄位（用來提醒漏放的必填欄位）
@@ -22,86 +22,29 @@ public class DesignerForm : Form
     private const string LoadingNodeText = "載入中…";
 
     private string connectionString;                       // 由「資料庫連線設定」視窗組成
-    private readonly Label lblConn = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
-    private readonly TextBox txtTableFilter = new() { Dock = DockStyle.Top, PlaceholderText = "篩選資料表" };
-    private readonly TreeView treeTables = new() { Dock = DockStyle.Fill, HideSelection = false, ShowLines = true };
-    private readonly PropertyGrid columnGrid = new() { Dock = DockStyle.Fill, ToolbarVisible = false, HelpVisible = false, PropertySort = PropertySort.NoSort };
-    private readonly SplitContainer mainSplit = new() { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
-    private readonly SplitContainer leftSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
-    private readonly SplitContainer rightSplit = new() { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2 };
-    private readonly Panel canvasHost = new() { Dock = DockStyle.Fill, AutoScroll = true, BackColor = SystemColors.AppWorkspace };
-    private readonly Panel canvas = new() { BackColor = SystemColors.Control, AllowDrop = true, Location = new Point(10, 10), BorderStyle = BorderStyle.FixedSingle };
-    private readonly PropertyGrid propertyGrid = new() { Dock = DockStyle.Fill, ToolbarVisible = false, HelpVisible = true };
-    private readonly ToolStripStatusLabel lblStatus = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
     private List<(string Schema, string Name)> allTables = new();
 
     public DesignerForm()
     {
-        Text = "畫面設計（後台）";
-        Font = new Font("Microsoft JhengHei UI", 9F);
-        Size = new Size(1400, 850);
-        StartPosition = FormStartPosition.CenterScreen;
+        InitializeComponent();
 
-        // ---- 工具列 ----
-        var toolStrip = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-        toolStrip.Items.Add("開新畫面", null, (s, e) => NewForm());
-        toolStrip.Items.Add("開啟", null, (s, e) => OpenForm());
-        toolStrip.Items.Add("存檔", null, (s, e) => SaveForm(false));
-        toolStrip.Items.Add("另存新檔", null, (s, e) => SaveForm(true));
-        toolStrip.Items.Add(new ToolStripSeparator());
-        toolStrip.Items.Add("移除選取欄位", null, (s, e) => RemoveSelectedField());
-        toolStrip.Items.Add("加入全部欄位", null, (s, e) => AddAllColumns());
-        toolStrip.Items.Add("單身欄位設定", null, (s, e) => EditGridColumns(canvas.Controls.OfType<GridBox>().FirstOrDefault()));
-        toolStrip.Items.Add(new ToolStripSeparator());
-        toolStrip.Items.Add("預覽執行", null, (s, e) => Preview());
-        toolStrip.Items.Add(new ToolStripSeparator());
+        // ---- 工具列（按鈕在 Designer.cs；對齊按鈕由 AlignHelper 加在後面）----
+        btnNewForm.Click += (s, e) => NewForm();
+        btnOpen.Click += (s, e) => OpenForm();
+        btnSave.Click += (s, e) => SaveForm(false);
+        btnSaveAs.Click += (s, e) => SaveForm(true);
+        btnRemove.Click += (s, e) => RemoveSelectedField();
+        btnAddAll.Click += (s, e) => AddAllColumns();
+        btnGridColumns.Click += (s, e) => EditGridColumns(canvas.Controls.OfType<GridBox>().FirstOrDefault());
+        btnPreview.Click += (s, e) => Preview();
         AlignHelper.AddAlignButtons(toolStrip, () => selection.ToList(), () => { propertyGrid.Refresh(); ApplyCanvasSize(); });
 
         // ---- 連線列 ----
-        var btnConnect = new Button { Text = "設定連線…", Dock = DockStyle.Right, Width = 100 };
         btnConnect.Click += (s, e) => ChooseConnection();
-        var btnReconnect = new Button { Text = "重新連線", Dock = DockStyle.Right, Width = 90 };
         btnReconnect.Click += (s, e) => Connect();
-        var connPanel = new Panel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(6, 4, 6, 4) };
-        connPanel.Controls.Add(lblConn);
-        connPanel.Controls.Add(btnReconnect);
-        connPanel.Controls.Add(btnConnect);
-        connPanel.Controls.Add(new Label { Text = "資料庫連線", Dock = DockStyle.Left, Width = 80, TextAlign = ContentAlignment.MiddleLeft });
 
-        // 版面：左（樹狀 / 欄位屬性）｜ 中（畫面）｜ 右（屬性面板），分隔線都可以拖曳調整寬度
-        // ---- 左邊：上面資料表樹狀清單，下面點選欄位的屬性 ----
-        // 左上：「資料表」頁籤（樹狀清單）與「工具箱」頁籤（按鈕、下拉選單）放在同一個位置
-        var tabTables = new TabPage("資料表");
-        tabTables.Controls.Add(treeTables);
-        tabTables.Controls.Add(new Label { Text = "欄位拖到畫面 = 單頭欄位；整個資料表拖到畫面 = 單身 Grid", Dock = DockStyle.Bottom, Height = 20 });
-        tabTables.Controls.Add(txtTableFilter);
-        var toolbox = new ToolboxList();
+        // ---- 左上「工具箱」頁籤 ----
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
-        var tabToolbox = new TabPage("工具箱") { Padding = new Padding(4) };
-        tabToolbox.Controls.Add(toolbox);
-        tabToolbox.Controls.Add(new Label { Text = "拖到畫面上，或雙擊加入", Dock = DockStyle.Top, Height = 22 });
-        var leftTabs = new TabControl { Dock = DockStyle.Fill };
-        leftTabs.TabPages.Add(tabTables);
-        leftTabs.TabPages.Add(tabToolbox);
-        leftSplit.Panel1.Controls.Add(leftTabs);
-        leftSplit.Panel2.Controls.Add(columnGrid);
-        leftSplit.Panel2.Controls.Add(new Label { Text = "欄位屬性", Dock = DockStyle.Top, Height = 20, Font = new Font(Font, FontStyle.Bold) });
-
-        // ---- 中間：畫面（canvas 放在可捲動的 canvasHost 裡）；右邊：屬性面板 ----
-        canvasHost.Controls.Add(canvas);
-        rightSplit.Panel1.Controls.Add(canvasHost);
-        rightSplit.Panel2.Controls.Add(propertyGrid);
-        mainSplit.Panel1.Controls.Add(leftSplit);
-        mainSplit.Panel2.Controls.Add(rightSplit);
-
-        var statusStrip = new StatusStrip();
-        statusStrip.Items.Add(lblStatus);
-
-        // Dock 順序：先加入的 Fill 最後排版
-        Controls.Add(mainSplit);
-        Controls.Add(connPanel);
-        Controls.Add(toolStrip);
-        Controls.Add(statusStrip);
 
         // 分隔線位置要等視窗有實際大小後才能設定
         Load += (s, e) =>

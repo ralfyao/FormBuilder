@@ -7,47 +7,20 @@ namespace FormBuilder;
 /// 資料庫連線設定：輸入伺服器、資料庫、驗證方式、帳號、密碼，組成連線字串。
 /// 會記住上次的伺服器、資料庫、帳號（不記密碼）
 /// </summary>
-public class ConnectionDialog : Form
+public partial class ConnectionDialog : Form
 {
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FormBuilder", "last-connection.json");
-
-    private readonly TextBox txtServer = new() { Width = 260 };
-    private readonly ComboBox cboDatabase = new() { Width = 180 };
-    private readonly RadioButton rbSql = new() { Text = "SQL Server 帳號", AutoSize = true, Checked = true };
-    private readonly RadioButton rbWindows = new() { Text = "Windows 驗證", AutoSize = true };
-    private readonly TextBox txtUser = new() { Width = 260 };
-    private readonly TextBox txtPassword = new() { Width = 260, UseSystemPasswordChar = true };
 
     /// <summary>按「確定」後組好的連線字串</summary>
     public string ConnectionString { get; private set; }
 
     public ConnectionDialog(string currentConnectionString)
     {
-        Text = "資料庫連線設定";
-        Font = new Font("Microsoft JhengHei UI", 9F);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterParent;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        Padding = new Padding(10);
-
-        var btnListDb = new Button { Text = "列出資料庫", AutoSize = true };
+        InitializeComponent();
         btnListDb.Click += (s, e) => ListDatabases();
-        var dbRow = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty };
-        dbRow.Controls.Add(cboDatabase);
-        dbRow.Controls.Add(btnListDb);
-
-        var authRow = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty };
-        authRow.Controls.Add(rbSql);
-        authRow.Controls.Add(rbWindows);
         rbSql.CheckedChanged += (s, e) => txtUser.Enabled = txtPassword.Enabled = rbSql.Checked;
-
-        var btnTest = new Button { Text = "測試連線", AutoSize = true };
         btnTest.Click += (s, e) => TestConnection(true);
-        var btnOk = new Button { Text = "確定", AutoSize = true };
         btnOk.Click += (s, e) =>
         {
             if (!TestConnection(false)) return;
@@ -55,31 +28,7 @@ public class ConnectionDialog : Form
             SaveLastSettings();
             DialogResult = DialogResult.OK;
         };
-        var btnCancel = new Button { Text = "取消", AutoSize = true, DialogResult = DialogResult.Cancel };
-        var buttonRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill };
-        buttonRow.Controls.Add(btnCancel);
-        buttonRow.Controls.Add(btnOk);
-        buttonRow.Controls.Add(btnTest);
-        AcceptButton = btnOk;
-        CancelButton = btnCancel;
-
-        var layout = new TableLayoutPanel { AutoSize = true, ColumnCount = 2 };
-        AddRow(layout, "伺服器", txtServer);
-        AddRow(layout, "資料庫", dbRow);
-        AddRow(layout, "驗證方式", authRow);
-        AddRow(layout, "帳號", txtUser);
-        AddRow(layout, "密碼", txtPassword);
-        layout.Controls.Add(buttonRow);
-        layout.SetColumnSpan(buttonRow, 2);
-        Controls.Add(layout);
-
         LoadInitialValues(currentConnectionString);
-    }
-
-    private static void AddRow(TableLayoutPanel layout, string caption, Control control)
-    {
-        layout.Controls.Add(new Label { Text = caption, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 10, 3) });
-        layout.Controls.Add(control);
     }
 
     /// <summary>有目前的連線字串就用它（含密碼）；沒有的話用上次記住的設定</summary>

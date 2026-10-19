@@ -4,7 +4,7 @@ namespace FormBuilder;
 /// 單筆資料編輯視窗：在執行畫面雙擊 Grid 的某一列時開啟，列出這筆的欄位讓使用者修改。
 /// 只回傳可以修改的欄位值；存回資料庫由呼叫端處理
 /// </summary>
-public class RecordEditDialog : Form
+public partial class RecordEditDialog : Form
 {
     private readonly List<FieldDefinition> fields;
     private readonly Dictionary<FieldDefinition, Control> inputs;
@@ -16,15 +16,12 @@ public class RecordEditDialog : Form
     public RecordEditDialog(string title, List<FieldDefinition> editFields, Func<string, object> currentValue, Size? bodySize = null,
                             string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null)
     {
+        InitializeComponent();
         fields = editFields;
         Text = title;
-        Font = new Font("Microsoft JhengHei UI", 9F);
-        StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.Sizable;
-        MinimizeBox = false;
+        btnOk.Click += (s, e) => Accept();
 
-        // 欄位照後台「編輯視窗版面」設計的位置擺放
-        var body = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        // 欄位照後台「編輯視窗版面」設計的位置擺放（body 在 Designer.cs，欄位依定義動態產生）
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
         foreach (var (f, input) in inputs)
         {
@@ -65,17 +62,6 @@ public class RecordEditDialog : Form
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         content = new Size(Math.Max(content.Width, buttonExtent.Width), Math.Max(content.Height, buttonExtent.Height));
 
-        var btnOk = new Button { Text = "確定", Width = 90, Dock = DockStyle.Right };
-        btnOk.Click += (s, e) => Accept();
-        var btnCancel = new Button { Text = "取消", Width = 90, Dock = DockStyle.Right, DialogResult = DialogResult.Cancel };
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 40, Padding = new Padding(8) };
-        bottom.Controls.Add(btnOk);
-        bottom.Controls.Add(btnCancel);
-        AcceptButton = btnOk;
-        CancelButton = btnCancel;
-
-        Controls.Add(body);
-        Controls.Add(bottom);
         // 視窗大小照版面；超過螢幕可用範圍時縮到螢幕內，欄位區可以捲動
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         ClientSize = new Size(Math.Min(Math.Max(content.Width, 360), screen.Width - 40),
