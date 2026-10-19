@@ -9,7 +9,7 @@ namespace FormBuilder;
 /// 新增、修改時輸入完按確定寫回資料表，按取消放棄。
 /// 有單身 Grid 時（類似 4GL t 類程式）：Grid 只列出目前單頭的明細，按「單身」後可在 Grid 新增、修改、刪除明細
 /// </summary>
-public class RuntimeForm : Form, IRecordNavigator
+public partial class RuntimeForm : Form, IRecordNavigator
 {
     /// <summary>畫面目前的狀態：瀏覽（不可輸入）、輸入查詢條件、新增、修改</summary>
     private enum Mode { Browse, Query, Insert, Modify, Detail }
@@ -21,8 +21,6 @@ public class RuntimeForm : Form, IRecordNavigator
     private DataTable results = new();
     private int current = -1;
 
-    private readonly ToolStripButton btnQuery, btnInsert, btnModify, btnDelete, btnDetail;
-
     // 單身
     private readonly GridDefinition gridDef;
     private readonly DataGridView detailGrid;
@@ -32,46 +30,30 @@ public class RuntimeForm : Form, IRecordNavigator
     private readonly GridDefinition listDef;
     private readonly DataGridView listGrid;
     private bool syncingList;                  // 程式在同步選取列時，不要觸發「切換單頭」
-    private readonly ToolStripButton btnFirst, btnPrevious, btnNext, btnLast;
-    private readonly ToolStripButton btnOk, btnCancel, btnExit;
-    private readonly ToolStripSeparator sepNavigate;
     /// <summary>後台設計的按鈕，以及對應的控制項</summary>
     private readonly List<(ButtonDefinition Def, Button Control)> customButtons = new();
-    private readonly ToolStripStatusLabel lblMode = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly ToolStripStatusLabel lblPosition = new();
 
     public RuntimeForm(FormDefinition definition)
     {
+        InitializeComponent();
         def = definition;
         Text = def.Title;
-        Font = new Font("Microsoft JhengHei UI", 9F);
-        StartPosition = FormStartPosition.CenterScreen;
 
-        var toolStrip = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(4) };
-        ToolStripButton Add(string text, Action action)
-        {
-            var b = new ToolStripButton(text, null, (s, e) => action()) { DisplayStyle = ToolStripItemDisplayStyle.Text, AutoSize = false, Width = 64, Height = 28 };
-            toolStrip.Items.Add(b);
-            return b;
-        }
-        btnQuery = Add("查詢", BeginQuery);
-        btnInsert = Add("新增", BeginInsert);
-        btnModify = Add("修改", BeginModify);
-        btnDelete = Add("刪除", () => DeleteRecord());
-        btnDetail = Add("單身", BeginDetail);
-        sepNavigate = new ToolStripSeparator();
-        toolStrip.Items.Add(sepNavigate);
-        btnFirst = Add("首筆", () => MoveTo(0));
-        btnPrevious = Add("上筆", () => MoveTo(current - 1));
-        btnNext = Add("下筆", () => MoveTo(current + 1));
-        btnLast = Add("末筆", () => MoveTo(results.Rows.Count - 1));
-        toolStrip.Items.Add(new ToolStripSeparator());
-        btnOk = Add("確定", Accept);
-        btnCancel = Add("取消", CancelEdit);
-        toolStrip.Items.Add(new ToolStripSeparator());
-        btnExit = Add("離開", Close);
+        // 工具列按鈕在 Designer.cs
+        btnQuery.Click += (s, e) => BeginQuery();
+        btnInsert.Click += (s, e) => BeginInsert();
+        btnModify.Click += (s, e) => BeginModify();
+        btnDelete.Click += (s, e) => DeleteRecord();
+        btnDetail.Click += (s, e) => BeginDetail();
+        btnFirst.Click += (s, e) => MoveTo(0);
+        btnPrevious.Click += (s, e) => MoveTo(current - 1);
+        btnNext.Click += (s, e) => MoveTo(current + 1);
+        btnLast.Click += (s, e) => MoveTo(results.Rows.Count - 1);
+        btnOk.Click += (s, e) => Accept();
+        btnCancel.Click += (s, e) => CancelEdit();
+        btnExit.Click += (s, e) => Close();
 
-        var body = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        // 欄位、按鈕、Grid 依畫面定義動態產生到 body（body 在 Designer.cs）
         foreach (var f in def.Fields)
         {
             body.Controls.Add(new Label
@@ -135,13 +117,6 @@ public class RuntimeForm : Form, IRecordNavigator
             body.Controls.Add(grid);
         }
 
-        var statusStrip = new StatusStrip();
-        statusStrip.Items.Add(lblMode);
-        statusStrip.Items.Add(lblPosition);
-
-        Controls.Add(body);
-        Controls.Add(toolStrip);
-        Controls.Add(statusStrip);
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
 
         ShowCurrent();

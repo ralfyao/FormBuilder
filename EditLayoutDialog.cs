@@ -7,7 +7,7 @@ namespace FormBuilder;
 /// 左邊「欄位」頁籤拖欄位、「工具箱」頁籤拖按鈕或下拉選單到版面上；
 /// 版面上可拖曳移動、拖邊緣調整大小、圈選或 Ctrl 點選後按 Delete 刪除。按「確定」才寫回 GridDefinition
 /// </summary>
-public class EditLayoutDialog : Form
+public partial class EditLayoutDialog : Form
 {
     private readonly GridDefinition grid;
     /// <summary>版面上的欄位（用 FieldDefinition 暫存位置，確定時再寫回 Grid 欄位）</summary>
@@ -16,12 +16,6 @@ public class EditLayoutDialog : Form
     private readonly List<ButtonBox> buttonBoxes = new();
     private readonly List<DesignBox> selection = new();
     private Dictionary<DesignBox, Point> dragStarts;
-
-    private readonly ListBox lstAvailable = new() { Dock = DockStyle.Fill, IntegralHeight = false };
-    private readonly Panel canvasHost = new() { Dock = DockStyle.Fill, AutoScroll = true, BackColor = SystemColors.AppWorkspace };
-    private readonly Panel canvas = new() { BackColor = SystemColors.Control, AllowDrop = true, Location = new Point(10, 10), BorderStyle = BorderStyle.FixedSingle };
-    private readonly Label lblHint = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly PropertyGrid propertyGrid = new() { Dock = DockStyle.Fill, ToolbarVisible = false, HelpVisible = true, PropertySort = PropertySort.NoSort };
 
     /// <summary>編輯視窗欄位區的大小（拖版面的右邊、下邊、右下角調整）</summary>
     private Size formSize;
@@ -34,27 +28,11 @@ public class EditLayoutDialog : Form
 
     public EditLayoutDialog(GridDefinition gridDefinition)
     {
+        InitializeComponent();
         grid = gridDefinition;
         Text = $"編輯視窗版面：{grid.Title ?? grid.TableName}";
-        Font = new Font("Microsoft JhengHei UI", 9F);
-        Size = new Size(1100, 700);
-        StartPosition = FormStartPosition.CenterParent;
-        KeyPreview = true;
 
-        // ---- 左邊：「欄位」頁籤（還沒放上版面的欄位）、「工具箱」頁籤（按鈕、下拉選單）----
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        var tabColumns = new TabPage("欄位") { Padding = new Padding(4) };
-        tabColumns.Controls.Add(lstAvailable);
-        tabColumns.Controls.Add(new Label { Text = "拖到右邊版面，或雙擊加入", Dock = DockStyle.Top, Height = 22 });
-        var toolbox = new ToolboxList();
-        toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
-        var tabToolbox = new TabPage("工具箱") { Padding = new Padding(4) };
-        tabToolbox.Controls.Add(toolbox);
-        tabToolbox.Controls.Add(new Label { Text = "拖到右邊版面，或雙擊加入", Dock = DockStyle.Top, Height = 22 });
-        tabs.TabPages.Add(tabColumns);
-        tabs.TabPages.Add(tabToolbox);
-        var left = new Panel { Dock = DockStyle.Left, Width = 220, Padding = new Padding(6) };
-        left.Controls.Add(tabs);
+        // ---- 左邊「欄位」頁籤：拖到版面或雙擊加入 ----
         lstAvailable.DisplayMember = nameof(GridColumnDefinition.Header);
         lstAvailable.MouseDown += (s, e) =>
         {
@@ -66,9 +44,10 @@ public class EditLayoutDialog : Form
         {
             if (lstAvailable.SelectedItem is GridColumnDefinition c) PlaceColumn(c, NextFreePoint());
         };
+        // ---- 左邊「工具箱」頁籤 ----
+        toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // ---- 中間：版面 ----
-        canvasHost.Controls.Add(canvas);
         canvas.DragEnter += (s, e) =>
             e.Effect = e.Data.GetDataPresent(typeof(GridColumnDefinition)) || e.Data.GetDataPresent(typeof(ToolboxDragData))
                 ? DragDropEffects.Copy : DragDropEffects.None;
@@ -87,43 +66,20 @@ public class EditLayoutDialog : Form
         canvas.Paint += (s, e) =>                          // 右下角畫出可拖曳的格紋
             ControlPaint.DrawSizeGrip(e.Graphics, canvas.BackColor, canvas.ClientSize.Width - 16, canvas.ClientSize.Height - 16, 16, 16);
 
-        // ---- 下方按鈕 ----
-        var btnArrange = new Button { Text = "重新排列成一欄", Width = 130, Dock = DockStyle.Left };
-        btnArrange.Click += (s, e) => ArrangeAll();
-        var btnRemove = new Button { Text = "刪除選取欄位", Width = 110, Dock = DockStyle.Left };
-        btnRemove.Click += (s, e) => RemoveSelected();
-        var btnOk = new Button { Text = "確定", Width = 90, Dock = DockStyle.Right };
-        btnOk.Click += (s, e) => Apply();
-        var btnCancel = new Button { Text = "取消", Width = 90, Dock = DockStyle.Right, DialogResult = DialogResult.Cancel };
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 40, Padding = new Padding(6) };
-        bottom.Controls.Add(lblHint);
-        bottom.Controls.Add(btnRemove);
-        bottom.Controls.Add(btnArrange);
-        bottom.Controls.Add(btnOk);
-        bottom.Controls.Add(btnCancel);
-        CancelButton = btnCancel;
-
-        // 版面上方的對齊工具列（只蓋在版面區，不蓋左邊清單）
-        var alignBar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden, Dock = DockStyle.Top };
+        // 版面上方的對齊工具列
         AlignHelper.AddAlignButtons(alignBar, () => selection.ToList(), UpdateCanvasSize);
-        var center = new Panel { Dock = DockStyle.Fill };
-        center.Controls.Add(canvasHost);
-        center.Controls.Add(alignBar);
 
-        // 右邊：點選欄位後修改標籤、提示文字（placeholder）、寬度、位置
-        var right = new Panel { Dock = DockStyle.Right, Width = 280, Padding = new Padding(6) };
-        right.Controls.Add(propertyGrid);
-        right.Controls.Add(new Label { Text = "屬性（點選欄位或按鈕後修改；多選時一次改全部）", Dock = DockStyle.Top, Height = 36 });
+        // 右邊屬性面板：點選欄位後修改標籤、提示文字（placeholder）、寬度、位置
         propertyGrid.PropertyValueChanged += (s, e) =>
         {
             foreach (var b in selection) b.RefreshFromModel();
             UpdateCanvasSize();
         };
 
-        Controls.Add(center);
-        Controls.Add(left);
-        Controls.Add(right);
-        Controls.Add(bottom);
+        // ---- 下方按鈕 ----
+        btnArrange.Click += (s, e) => ArrangeAll();
+        btnRemove.Click += (s, e) => RemoveSelected();
+        btnOk.Click += (s, e) => Apply();
 
         // 目前的版面（還沒設計過就先排成一欄）
         grid.EnsureEditLayout();
