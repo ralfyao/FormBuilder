@@ -107,6 +107,60 @@ public partial class EditLayoutDialog : Form
         RefreshAvailable();
         SetSelection(Array.Empty<DesignBox>());
         UpdateCanvasSize();
+
+        // Ctrl+Z 復原、Ctrl+Y 取消復原：記錄版面（欄位、按鈕、大小）的快照
+        history = new UndoHistory(this, CaptureLayout, RestoreLayout);
+    }
+
+    private readonly UndoHistory history;
+
+    /// <summary>復原用的版面快照</summary>
+    private sealed class LayoutState
+    {
+        public List<PlacedField> Fields { get; set; } = new();
+        public List<ButtonDefinition> Buttons { get; set; } = new();
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public string EffectiveColumn { get; set; }
+    }
+
+    private sealed class PlacedField
+    {
+        public string Column { get; set; }
+        public FieldDefinition Field { get; set; }
+    }
+
+    private string CaptureLayout() => System.Text.Json.JsonSerializer.Serialize(new LayoutState
+    {
+        Fields = placed.Select(p => new PlacedField { Column = p.Key.Column, Field = p.Value.Field }).ToList(),
+        Buttons = buttonBoxes.Select(b => b.ButtonDef).ToList(),
+        Width = formSize.Width,
+        Height = formSize.Height,
+        EffectiveColumn = effectiveColumn,
+    });
+
+    private void RestoreLayout(string json)
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<LayoutState>(json);
+        foreach (var box in canvas.Controls.OfType<DesignBox>().ToList()) box.Dispose();
+        canvas.Controls.Clear();
+        placed.Clear();
+        buttonBoxes.Clear();
+        foreach (var p in state.Fields)
+        {
+            var column = grid.Columns.FirstOrDefault(c => c.Column == p.Column);
+            if (column == null) continue;
+            var box = new FieldBox(p.Field);
+            placed[column] = box;
+            AttachBox(box);
+        }
+        foreach (var b in state.Buttons) AddButtonBox(b, select: false);
+        formSize = new Size(state.Width, state.Height);
+        effectiveColumn = state.EffectiveColumn;
+        UpdateEffectiveButton();
+        RefreshAvailable();
+        SetSelection(Array.Empty<DesignBox>());
+        UpdateCanvasSize();
     }
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / (double)DesignBox.Grid) * DesignBox.Grid);
@@ -116,6 +170,8 @@ public partial class EditLayoutDialog : Form
     {
         bool typing = propertyGrid.ContainsFocus;            // 在屬性面板打字時，Delete / Ctrl+A 照常作用在文字上
         if (!typing && keyData == Keys.Delete && selection.Count > 0) { RemoveSelected(); return true; }
+        if (!UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.Z)) { history.Undo(); return true; }
+        if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z))) { history.Redo(); return true; }
         if (!typing && keyData == (Keys.Control | Keys.A)) { SetSelection(canvas.Controls.OfType<DesignBox>()); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
     }
