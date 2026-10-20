@@ -646,11 +646,9 @@ public partial class DesignerForm : Form
 
     private readonly CanvasResizer canvasResizer;
 
-    // 圈選：從按下的位置拉出虛線框，放開時選取框內（含碰到框）的欄位
-    private bool banding;
+    // 圈選：從按下的位置拉出選取框，放開時選取框內（含碰到框）的欄位
+    private SelectionBand band;
     private bool bandAdditive;                             // 按住 Ctrl 圈選 = 加選，不清掉原本的選取
-    private Point bandStart;
-    private Rectangle bandScreenRect;                      // 目前畫在螢幕上的虛線框（螢幕座標，用來擦掉重畫）
 
     private void OnCanvasMouseDown(MouseEventArgs e)
     {
@@ -658,9 +656,8 @@ public partial class DesignerForm : Form
         if (canvasResizer.TryStart(e)) return;             // 抓到邊緣 = 調整畫面大小
         bandAdditive = ModifierKeys.HasFlag(Keys.Control);
         if (!bandAdditive) SelectBox(null);                // 點空白處：屬性面板改顯示畫面本身
-        banding = true;
-        bandStart = e.Location;
-        bandScreenRect = Rectangle.Empty;
+        band ??= new SelectionBand(canvas);
+        band.Begin(e.Location);
     }
 
     private void OnCanvasMouseMove(MouseEventArgs e)
@@ -670,12 +667,9 @@ public partial class DesignerForm : Form
             canvasResizer.Move(e);
             return;
         }
-        if (banding)
+        if (band is { Active: true })
         {
-            // 反相繪製：同一個框再畫一次就會擦掉
-            if (!bandScreenRect.IsEmpty) ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
-            bandScreenRect = canvas.RectangleToScreen(BandRect(e.Location));
-            ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
+            band.Move(e.Location);
             return;
         }
         canvasResizer.Move(e);                             // 沒在拖曳時：滑鼠移到邊緣換成調整大小的游標
@@ -688,19 +682,12 @@ public partial class DesignerForm : Form
             propertyGrid.Refresh();                        // 屬性面板的寬度、高度跟著更新
             return;
         }
-        if (!banding) return;
-        banding = false;
-        if (bandScreenRect.IsEmpty) return;                // 只是點一下，沒有拉框
-        ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
-        Rectangle band = canvas.RectangleToClient(bandScreenRect);
-        bandScreenRect = Rectangle.Empty;
-        var hit = canvas.Controls.OfType<DesignBox>().Where(b => b.Bounds.IntersectsWith(band));
+        if (band is not { Active: true }) return;
+        Rectangle rect = band.End();
+        if (rect.IsEmpty) return;                          // 只是點一下，沒有拉框
+        var hit = canvas.Controls.OfType<DesignBox>().Where(b => b.Bounds.IntersectsWith(rect));
         SetSelection(bandAdditive ? selection.Concat(hit) : hit);
     }
-
-    /// <summary>按下點到目前滑鼠位置的矩形（往任何方向拉都可以）</summary>
-    private Rectangle BandRect(Point p) =>
-        Rectangle.FromLTRB(Math.Min(bandStart.X, p.X), Math.Min(bandStart.Y, p.Y), Math.Max(bandStart.X, p.X), Math.Max(bandStart.Y, p.Y));
 
     private void UpdateStatus(string message = null)
     {

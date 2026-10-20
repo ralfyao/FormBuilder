@@ -22,9 +22,8 @@ public partial class EditLayoutDialog : Form
     private readonly CanvasResizer canvasResizer;
 
     // 圈選
-    private bool banding, bandAdditive;
-    private Point bandStart;
-    private Rectangle bandScreenRect;
+    private SelectionBand band;
+    private bool bandAdditive;
 
     /// <summary>生效欄位（按「確定」才寫回 grid）</summary>
     private string effectiveColumn;
@@ -313,34 +312,27 @@ public partial class EditLayoutDialog : Form
         if (canvasResizer.TryStart(e)) return;
         bandAdditive = ModifierKeys.HasFlag(Keys.Control);
         if (!bandAdditive) SetSelection(Array.Empty<DesignBox>());
-        banding = true;
-        bandStart = e.Location;
-        bandScreenRect = Rectangle.Empty;
+        band ??= new SelectionBand(canvas);
+        band.Begin(e.Location);
     }
 
     private void OnCanvasMouseMove(MouseEventArgs e)
     {
-        if (canvasResizer.Active || !banding)
+        if (canvasResizer.Active || band is not { Active: true })
         {
             canvasResizer.Move(e);                         // 拖曳中調整大小；沒在拖曳時切換游標
             return;
         }
-        if (!bandScreenRect.IsEmpty) ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
-        var rect = Rectangle.FromLTRB(Math.Min(bandStart.X, e.X), Math.Min(bandStart.Y, e.Y), Math.Max(bandStart.X, e.X), Math.Max(bandStart.Y, e.Y));
-        bandScreenRect = canvas.RectangleToScreen(rect);
-        ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
+        band.Move(e.Location);
     }
 
     private void OnCanvasMouseUp()
     {
         if (canvasResizer.End()) return;
-        if (!banding) return;
-        banding = false;
-        if (bandScreenRect.IsEmpty) return;
-        ControlPaint.DrawReversibleFrame(bandScreenRect, canvas.BackColor, FrameStyle.Dashed);
-        Rectangle band = canvas.RectangleToClient(bandScreenRect);
-        bandScreenRect = Rectangle.Empty;
-        var hit = canvas.Controls.OfType<DesignBox>().Where(b => b.Bounds.IntersectsWith(band));
+        if (band is not { Active: true }) return;
+        Rectangle rect = band.End();
+        if (rect.IsEmpty) return;                          // 只是點一下，沒有拉框
+        var hit = canvas.Controls.OfType<DesignBox>().Where(b => b.Bounds.IntersectsWith(rect));
         SetSelection(bandAdditive ? selection.Concat(hit) : hit);
     }
 
