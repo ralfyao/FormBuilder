@@ -50,6 +50,41 @@ public static class AlignHelper
         foreach (var b in boxes) b.SetModelLocation(Math.Max(0, target - b.Width), b.ModelLocation.Y);
     }
 
+    /// <summary>右緣差多少像素以內，算同一排（同一欄）的右緣</summary>
+    private const int RightEdgeTolerance = 20;
+
+    /// <summary>
+    /// 右緣拉齊：只改欄位輸入框的寬度，位置不動。右緣靠得近的欄位視為同一排（例如左半邊一排、右半邊一排），
+    /// 每一排都拉到該排最右邊的那條線；相距很遠的不會被拉在一起，所以可以直接全選一次對齊
+    /// </summary>
+    public static void AlignRightEdges(IList<DesignBox> boxes)
+    {
+        var fields = boxes.OfType<FieldBox>().ToList();
+        if (fields.Count < 2) return;
+        static int Right(FieldBox f) => f.Field.X + f.InputOffset + Math.Max(f.Field.Width, 30);
+
+        var cluster = new List<FieldBox>();
+        void Flush()
+        {
+            if (cluster.Count >= 2)
+            {
+                int target = cluster.Max(Right);
+                foreach (var f in cluster)
+                {
+                    f.Field.Width = Math.Max(30, target - f.Field.X - f.InputOffset);
+                    f.RefreshFromModel();
+                }
+            }
+            cluster.Clear();
+        }
+        foreach (var f in fields.OrderBy(Right))
+        {
+            if (cluster.Count > 0 && Right(f) - Right(cluster[^1]) > RightEdgeTolerance) Flush();
+            cluster.Add(f);
+        }
+        Flush();
+    }
+
     /// <summary>水平置中：中心線對齊到第一個選取的元件</summary>
     public static void AlignCenter(IList<DesignBox> boxes)
     {
@@ -141,6 +176,57 @@ public static class AlignHelper
             sorted[i].SetModelLocation(sorted[i].ModelLocation.X, first + (int)Math.Round(step * i));
     }
 
+    /// <summary>
+    /// 建立對齊選單（水平、垂直、大小三個子選單），加到「編輯」選單；
+    /// getSelection 取目前選取的元件，after 在調整後呼叫（重算畫面大小等）
+    /// </summary>
+    public static void AddAlignMenu(ToolStripItemCollection items, Func<IList<DesignBox>> getSelection, Action after)
+    {
+        ToolStripMenuItem Group(string text, params (string Text, Action<IList<DesignBox>> Action, int Min, string Tip)[] entries)
+        {
+            var group = new ToolStripMenuItem(text);
+            foreach (var (entryText, action, min, tip) in entries)
+            {
+                if (action == null)
+                {
+                    group.DropDownItems.Add(new ToolStripSeparator());
+                    continue;
+                }
+                var item = new ToolStripMenuItem(entryText) { ToolTipText = tip };
+                item.Click += (s, e) =>
+                {
+                    var boxes = getSelection();
+                    if (boxes.Count < min)
+                    {
+                        MessageBox.Show($"請先選取至少 {min} 個元件（圈選或按住 Ctrl 點選）。", "提醒");
+                        return;
+                    }
+                    action(boxes);
+                    after();
+                };
+                group.DropDownItems.Add(item);
+            }
+            return group;
+        }
+
+        items.Add(Group("水平",
+            ("靠左", AlignLeft, 2, "對齊到最左邊（欄位以輸入框左緣為準）"),
+            ("置中", AlignCenter, 2, "中心線對齊到第一個選取的元件"),
+            ("靠右", AlignRight, 2, "右緣對齊到最右邊的元件（移動位置）"),
+            ("右緣拉齊", AlignRightEdges, 2, "位置不動，只調整輸入框寬度，讓同一排的右緣切齊（可以全選一次對齊）"),
+            ("", null, 0, null),
+            ("水平等距", DistributeHorizontally, 3, "依左右順序平均分配間距")));
+        items.Add(Group("垂直",
+            ("靠上", AlignTop, 2, "上緣對齊（排成同一行）"),
+            ("置中", AlignMiddle, 2, "中心線對齊到第一個選取的元件（按鈕和欄位高度不同時用）"),
+            ("靠下", AlignBottom, 2, "下緣對齊到最下面的元件"),
+            ("", null, 0, null),
+            ("垂直等距", DistributeVertically, 3, "依上下順序平均分配間距")));
+        items.Add(Group("大小",
+            ("同寬", SameWidth, 2, "輸入框寬度都改成第一個選取欄位的寬度"),
+            ("同標籤寬", SameLabelWidth, 2, "標籤寬度都改成第一個選取欄位的寬度（輸入框位置不動）")));
+    }
+
     /// <summary>建立對齊按鈕，加到工具列；getSelection 取目前選取的元件，after 在調整後呼叫（重算畫面大小等）</summary>
     public static void AddAlignButtons(ToolStrip toolStrip, Func<IList<DesignBox>> getSelection, Action after)
     {
@@ -163,7 +249,8 @@ public static class AlignHelper
         toolStrip.Items.Add(new ToolStripLabel("水平："));
         Add("靠左", AlignLeft, 2, "對齊到最左邊（欄位以輸入框左緣為準）");
         Add("置中", AlignCenter, 2, "中心線對齊到第一個選取的元件");
-        Add("靠右", AlignRight, 2, "右緣對齊到最右邊的元件");
+        Add("靠右", AlignRight, 2, "右緣對齊到最右邊的元件（移動位置）");
+        Add("右緣拉齊", AlignRightEdges, 2, "位置不動，只調整輸入框寬度，讓同一排的右緣切齊（可以全選一次對齊）");
         toolStrip.Items.Add(new ToolStripSeparator());
         toolStrip.Items.Add(new ToolStripLabel("垂直："));
         Add("靠上", AlignTop, 2, "上緣對齊（排成同一行）");

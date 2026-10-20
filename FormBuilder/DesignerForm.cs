@@ -37,7 +37,23 @@ public partial class DesignerForm : Form
         btnAddAll.Click += (s, e) => AddAllColumns();
         btnGridColumns.Click += (s, e) => EditGridColumns(canvas.Controls.OfType<GridBox>().FirstOrDefault());
         btnPreview.Click += (s, e) => Preview();
-        AlignHelper.AddAlignButtons(toolStrip, () => selection.ToList(), () => { propertyGrid.Refresh(); ApplyCanvasSize(); });
+        // 「編輯」選單：移除 / 加入欄位之後，接著是水平、垂直、大小的對齊子選單
+        AlignHelper.AddAlignMenu(btnEditMenu.DropDownItems, () => selection.ToList(), () => { propertyGrid.Refresh(); ApplyCanvasSize(); });
+        toolStrip.Items.Add(new ToolStripLabel("拖曳時靠近其他欄位會自動貼齊（按住 Alt 不貼齊）") { ForeColor = SystemColors.GrayText });
+
+        // 畫面底色：編輯選單，或在畫面空白處按右鍵（也可以在屬性面板的「背景色」改）
+        var backColorMenu = new ToolStripMenuItem("畫面背景色");
+        backColorMenu.DropDownItems.Add("選擇顏色…", null, (s, e) => PickBackColor());
+        backColorMenu.DropDownItems.Add("還原預設（灰色）", null, (s, e) => SetCanvasBackColor(Color.Empty));
+        btnEditMenu.DropDownItems.Add(new ToolStripSeparator());
+        btnEditMenu.DropDownItems.Add(backColorMenu);
+        var canvasMenu = new ContextMenuStrip();
+        canvasMenu.Items.Add("畫面背景色：選擇顏色…", null, (s, e) => PickBackColor());
+        canvasMenu.Items.Add("畫面背景色：還原預設（灰色）", null, (s, e) => SetCanvasBackColor(Color.Empty));
+        canvas.MouseUp += (s, e) =>
+        {
+            if (e.Button == MouseButtons.Right) canvasMenu.Show(canvas, e.Location);
+        };
 
         // ---- 連線列 ----
         btnConnect.Click += (s, e) => ChooseConnection();
@@ -380,6 +396,7 @@ public partial class DesignerForm : Form
         box.DragFinished += (s, e) => { dragStarts = null; propertyGrid.Refresh(); ApplyCanvasSize(); };
         box.Resized += (s, e) => { propertyGrid.Refresh(); ApplyCanvasSize(); };
         canvas.Controls.Add(box);
+        if (box is FieldBox) box.RefreshFromModel();       // 加進畫面後才知道底色，標籤文字顏色要重算
         return box;
     }
 
@@ -388,8 +405,20 @@ public partial class DesignerForm : Form
     private void AddToolboxItem(string kind, Point location)
     {
         if (kind == "Button") AddButton(location);
-        else if (kind == "ComboBox") AddComboField(location);
+        else if (kind == "ComboBox") AddKindField(location, InputKind.下拉選單);
+        else if (kind == "DatePicker") AddKindField(location, InputKind.日期選擇);
+        else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
+        else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
     }
+
+    /// <summary>工具箱元件的名稱、加入後的提示、輸入框預設寬度（加入下拉選單、日期選擇、勾選框、選項按鈕共用）</summary>
+    internal static (string Name, string Tip, int MinWidth) KindInfo(InputKind kind) => kind switch
+    {
+        InputKind.日期選擇 => ("日期選擇", "文字、數字欄位存日期時，在屬性面板設定「日期格式」（沒填 = yyyyMMdd）", 150),
+        InputKind.勾選框 => ("勾選框", "非 bit 欄位請在屬性面板設定「勾選時的值」「取消時的值」", 30),
+        InputKind.選項按鈕 => ("選項按鈕", "在屬性面板設定「固定選項」或「選項 SQL」；選項多時請加大輸入框寬度或高度", 240),
+        _ => ("下拉選單", "在屬性面板設定「固定選項」或「選項 SQL」", 0),
+    };
 
     /// <summary>加入按鈕；文字、動作在右邊屬性面板設定</summary>
     private void AddButton(Point location)
@@ -401,12 +430,13 @@ public partial class DesignerForm : Form
         UpdateStatus("已加入按鈕：在右邊屬性面板設定「文字」和「動作」");
     }
 
-    /// <summary>加入下拉選單：先選要對應單頭的哪個欄位，再把那個欄位設成下拉選單</summary>
-    private void AddComboField(Point location)
+    /// <summary>加入下拉選單、日期選擇、勾選框、選項按鈕：先選要對應單頭的哪個欄位，再把那個欄位設成對應的輸入方式</summary>
+    private void AddKindField(Point location, InputKind kind)
     {
+        var (name, tip, minWidth) = KindInfo(kind);
         if (def.TableName == null)
         {
-            MessageBox.Show("請先把單頭資料表的欄位拖到畫面上（決定單頭），再加入下拉選單。", "提醒");
+            MessageBox.Show($"請先把單頭資料表的欄位拖到畫面上（決定單頭），再加入{name}。", "提醒");
             return;
         }
         var columns = (defTableColumns.Count > 0 ? defTableColumns : GetColumnsCached(def.TableSchema, def.TableName) ?? new List<ColumnInfo>())
@@ -414,18 +444,19 @@ public partial class DesignerForm : Form
             .ToList();
         if (columns.Count == 0)
         {
-            MessageBox.Show("單頭資料表的欄位都已經放在畫面上了。要改成下拉選單，請點選該欄位，在屬性面板把「輸入方式」改成「下拉選單」。", "提醒");
+            MessageBox.Show($"單頭資料表的欄位都已經放在畫面上了。要改成{name}，請點選該欄位，在屬性面板把「輸入方式」改成「{name}」。", "提醒");
             return;
         }
-        using var dlg = new ColumnPickDialog($"下拉選單：{def.TableName}", columns);
+        using var dlg = new ColumnPickDialog($"{name}：{def.TableName}", columns);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         AddField(new ColumnDragData { Schema = def.TableSchema, Table = def.TableName, Column = dlg.SelectedColumn }, location);
         var field = def.Fields.LastOrDefault(f => f.Column == dlg.SelectedColumn.Name);
         if (field == null) return;
-        field.InputType = InputKind.下拉選單;
+        field.InputType = kind;
+        field.Width = Math.Max(field.Width, minWidth);
         canvas.Controls.OfType<FieldBox>().First(b => b.Field == field).RefreshFromModel();
         propertyGrid.Refresh();
-        UpdateStatus("已加入下拉選單：在右邊屬性面板設定「固定選項」或「選項 SQL」");
+        UpdateStatus($"已加入{name}：{tip}");
     }
 
     // ================= 單身 Grid =================
@@ -491,7 +522,7 @@ public partial class DesignerForm : Form
     /// 1. 同名欄位，例如 單號 = 單號；
     /// 2. 找不到同名時，用鼎新的命名規則：兩碼表代號 + 三碼流水號，例如 SFCTA.TA001 = SFCTB.TB001
     /// </summary>
-    private static string GuessLinks(List<ColumnInfo> masterColumns, List<ColumnInfo> detailColumns)
+    internal static string GuessLinks(List<ColumnInfo> masterColumns, List<ColumnInfo> detailColumns)
     {
         var masterKeys = masterColumns.Where(c => c.IsPrimaryKey).Select(c => c.Name).ToList();
         var candidates = masterKeys.Count > 0 ? masterKeys : masterColumns.Select(c => c.Name).ToList();
@@ -522,7 +553,7 @@ public partial class DesignerForm : Form
         }
         var masterColumns = def.Fields.Select(f => f.Column)
             .Concat(defTableColumns.Select(c => c.Name)).Distinct().ToList();
-        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns);
+        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         box.RefreshFromModel();
         propertyGrid.Refresh();
@@ -610,12 +641,32 @@ public partial class DesignerForm : Form
     }
 
     /// <summary>畫面大小至少要容納所有欄位</summary>
+    /// <summary>用顏色挑選器改畫面底色</summary>
+    private void PickBackColor()
+    {
+        using var dlg = new ColorDialog { Color = ColorText.BackOrDefault(def.BackColor), FullOpen = true };
+        if (dlg.ShowDialog(this) == DialogResult.OK) SetCanvasBackColor(dlg.Color);
+    }
+
+    private void SetCanvasBackColor(Color color)
+    {
+        def.BackColor = color;
+        ApplyCanvasSize();
+        propertyGrid.Refresh();                            // 屬性面板的「背景色」跟著更新
+    }
+
     private void ApplyCanvasSize()
     {
         Size min = MinCanvasSize();
         def.Width = Math.Max(def.Width, min.Width);
         def.Height = Math.Max(def.Height, min.Height);
         canvas.Size = new Size(def.Width, def.Height);
+        Color back = ColorText.BackOrDefault(def.BackColor);
+        if (canvas.BackColor != back)
+        {
+            canvas.BackColor = back;
+            foreach (var box in canvas.Controls.OfType<FieldBox>()) box.RefreshFromModel();   // 標籤顏色跟著底色
+        }
         LayoutDockedGrids();
         canvas.Invalidate();                               // 重畫右下角的拖曳格紋
     }

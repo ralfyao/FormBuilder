@@ -6,13 +6,15 @@ namespace FormBuilder;
 /// </summary>
 public class GridBox : DesignBox
 {
-    private const int TitleHeight = 24;
     private const int HeaderHeight = 24;
     private const int RowHeight = 22;
     private const int MinWidth = 200;
     private const int MinHeight = 100;
 
     public GridDefinition GridDef { get; }
+
+    // 設計畫面上不畫標題列（執行時本來就沒有）；資料表、關聯欄位等說明改成滑鼠移上去才顯示
+    private readonly ToolTip tip = new();
 
     public GridBox(GridDefinition grid)
     {
@@ -39,6 +41,9 @@ public class GridBox : DesignBox
     public override void RefreshFromModel()
     {
         SetBounds(GridDef.X, GridDef.Y, Math.Max(GridDef.Width, MinWidth), Math.Max(GridDef.Height, MinHeight));
+        tip.SetToolTip(this, GridDef.IsMasterList
+            ? $"單頭清單：{GridDef.Title ?? GridDef.TableName}（查詢結果，點選一列切換單頭）{Environment.NewLine}點一下設定欄位"
+            : $"單身：{GridDef.Title ?? GridDef.TableName}（{(string.IsNullOrWhiteSpace(GridDef.LinkText) ? "未設定關聯欄位" : "關聯：" + GridDef.LinkText)}）{Environment.NewLine}點一下設定欄位");
         Invalidate();
     }
 
@@ -75,23 +80,13 @@ public class GridBox : DesignBox
         var g = e.Graphics;
         g.Clear(SystemColors.Window);
 
-        // 標題列：單身資料表與關聯欄位
-        var titleRect = new Rectangle(0, 0, Width, TitleHeight);
-        using (var titleBrush = new SolidBrush(IsSelected ? Color.LightSkyBlue : SystemColors.ControlLight))
-            g.FillRectangle(titleBrush, titleRect);
-        string title = GridDef.IsMasterList
-            ? $"單頭清單：{GridDef.Title ?? GridDef.TableName}（查詢結果，點選一列切換單頭）　點一下設定欄位"
-            : $"單身：{GridDef.Title ?? GridDef.TableName}（{(string.IsNullOrWhiteSpace(GridDef.LinkText) ? "未設定關聯欄位" : "關聯：" + GridDef.LinkText)}）　點一下設定欄位";
-        TextRenderer.DrawText(g, title,
-            Font, Rectangle.Inflate(titleRect, -6, 0), SystemColors.ControlText, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-
         // 欄位標題
         int x = 0;
-        var headerRect = new Rectangle(0, TitleHeight, Width, HeaderHeight);
+        var headerRect = new Rectangle(0, 0, Width, HeaderHeight);
         g.FillRectangle(SystemBrushes.Control, headerRect);
         foreach (var c in GridDef.Columns.Where(c => c.Visible))
         {
-            var cell = new Rectangle(x, TitleHeight, c.Width, HeaderHeight);
+            var cell = new Rectangle(x, 0, c.Width, HeaderHeight);
             g.DrawRectangle(SystemPens.ControlDark, cell);
             TextRenderer.DrawText(g, c.Header, Font, Rectangle.Inflate(cell, -3, 0), SystemColors.ControlText,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -100,10 +95,15 @@ public class GridBox : DesignBox
         }
 
         // 空白資料列的格線
-        for (int y = TitleHeight + HeaderHeight + RowHeight; y < Height; y += RowHeight)
+        for (int y = HeaderHeight + RowHeight; y < Height; y += RowHeight)
             g.DrawLine(SystemPens.ControlLight, 0, y, Width, y);
 
-        g.DrawRectangle(IsSelected ? Pens.DodgerBlue : SystemPens.ControlDark, 0, 0, Width - 1, Height - 1);
+        // 選取時用較粗的藍框標示（沒有標題列可以變色了）
+        if (IsSelected)
+            using (var pen = new Pen(Color.DodgerBlue, 3))
+                g.DrawRectangle(pen, 1, 1, Width - 3, Height - 3);
+        else
+            g.DrawRectangle(SystemPens.ControlDark, 0, 0, Width - 1, Height - 1);
         if (IsDocked)
         {
             // 停靠時在上邊緣中央畫兩條短橫線，提示可以往上拉

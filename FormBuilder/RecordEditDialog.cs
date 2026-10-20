@@ -14,9 +14,11 @@ public partial class RecordEditDialog : Form
 
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
     public RecordEditDialog(string title, List<FieldDefinition> editFields, Func<string, object> currentValue, Size? bodySize = null,
-                            string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null)
+                            string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
+                            List<EditListDefinition> lists = null, Color backColor = default)
     {
         InitializeComponent();
+        body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
         fields = editFields;
         Text = title;
         btnOk.Click += (s, e) => Accept();
@@ -27,7 +29,7 @@ public partial class RecordEditDialog : Form
         {
             InputHelper.SetValue(input, currentValue(f.Column));
             // 只顯示的欄位（主鍵、自動編號、關聯欄位等）不能改
-            if (f.NoEntry)
+            if (f.NoEntry || f.IsReadOnly)
             {
                 if (input is TextBox tb) tb.ReadOnly = true;
                 else input.Enabled = false;
@@ -58,9 +60,18 @@ public partial class RecordEditDialog : Form
             };
             body.Controls.Add(button);
         }
+        // 後台在編輯視窗版面放的明細清單（唯讀，依這筆的關聯欄位值列出明細）
+        foreach (var l in lists ?? new List<EditListDefinition>())
+        {
+            var view = new EditListView(l, connectionString);
+            body.Controls.Add(view.Grid);
+            view.Reload(currentValue);
+        }
         var content = bodySize ?? InputHelper.ContentSize(fields, 360);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
-        content = new Size(Math.Max(content.Width, buttonExtent.Width), Math.Max(content.Height, buttonExtent.Height));
+        var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());
+        content = new Size(Math.Max(content.Width, Math.Max(buttonExtent.Width, listExtent.Width)),
+                           Math.Max(content.Height, Math.Max(buttonExtent.Height, listExtent.Height)));
 
         // 視窗大小照版面；超過螢幕可用範圍時縮到螢幕內，欄位區可以捲動
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;

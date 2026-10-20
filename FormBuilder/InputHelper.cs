@@ -1,6 +1,37 @@
+using System.Globalization;
 using Microsoft.Data.SqlClient;
 
 namespace FormBuilder;
+
+/// <summary>選項按鈕群組：每個選項一個 RadioButton，一次只能選一個；值是選項的「值」</summary>
+public class RadioGroup : FlowLayoutPanel
+{
+    private readonly List<(RadioButton Button, string Value)> options = new();
+
+    public RadioGroup(IEnumerable<ComboItem> items)
+    {
+        AutoScroll = true;
+        WrapContents = true;
+        BackColor = Color.Transparent;
+        foreach (var item in items)
+        {
+            var radio = new RadioButton { Text = item.Text, AutoSize = true, Margin = new Padding(0, 3, 14, 3) };
+            options.Add((radio, item.Value.Trim()));
+            Controls.Add(radio);
+        }
+    }
+
+    /// <summary>目前選的選項的值；沒選 = null。設定時找不到對應的值就全部不選</summary>
+    public string SelectedValue
+    {
+        get => options.FirstOrDefault(o => o.Button.Checked).Value;
+        set
+        {
+            foreach (var (button, optionValue) in options)
+                button.Checked = value != null && optionValue == value;
+        }
+    }
+}
 
 /// <summary>下拉選單的一個選項：存進資料庫的值，以及顯示的文字</summary>
 public record ComboItem(string Value, string Text)
@@ -14,21 +45,53 @@ public static class InputHelper
     /// <param name="connectionString">下拉選單有「選項 SQL」時用來讀選項</param>
     public static Control CreateInput(FieldDefinition f, string connectionString = null)
     {
-        if (f.InputType == InputKind.下拉選單)
-            return CreateCombo(f, connectionString);
+        switch (f.InputType)
+        {
+            case InputKind.下拉選單:
+                return CreateCombo(f, connectionString);
+            case InputKind.選項按鈕:
+                return new RadioGroup(BuildItems(f, connectionString, withBlank: false));
+            case InputKind.勾選框:
+                return CreateCheckBox(f);
+            case InputKind.日期選擇:
+                return CreateDatePicker(f);
+        }
         if (TypeHelper.IsBool(f.DataType))
             return new CheckBox();
         if (TypeHelper.IsDate(f.DataType))
-            return new DateTimePicker
-            {
-                Format = DateTimePickerFormat.Custom,
-                CustomFormat = f.DataType == "date" ? "yyyy/MM/dd" : "yyyy/MM/dd HH:mm:ss",
-                ShowCheckBox = f.IsNullable,              // 允許 NULL 時，取消勾選代表沒有日期
-            };
+            return CreateDatePicker(f);
         var tb = new TextBox { PlaceholderText = f.Placeholder ?? "" };
         if (TypeHelper.IsString(f.DataType) && f.MaxLength > 0) tb.MaxLength = f.MaxLength;
         if (TypeHelper.IsNumber(f.DataType)) tb.TextAlign = HorizontalAlignment.Right;
         return tb;
+    }
+
+    /// <summary>勾選框打勾 / 沒打勾要存進非 bit 欄位的值</summary>
+    private sealed record CheckValues(string Checked, string Unchecked);
+
+    private static CheckBox CreateCheckBox(FieldDefinition f) => new()
+    {
+        Tag = new CheckValues(string.IsNullOrEmpty(f.CheckedValue) ? "1" : f.CheckedValue, f.UncheckedValue ?? "0"),
+    };
+
+    private const string DefaultDateFormat = "yyyyMMdd";
+
+    /// <summary>
+    /// 日期選擇。date、datetime 欄位直接用日期；文字、數字欄位依「日期格式」轉成文字存取（Tag 放格式），
+    /// 文字、數字欄位可以是空的，所以一定有「沒有日期」的勾選框
+    /// </summary>
+    private static DateTimePicker CreateDatePicker(FieldDefinition f)
+    {
+        bool nativeDate = TypeHelper.IsDate(f.DataType);
+        string textFormat = string.IsNullOrWhiteSpace(f.DateFormat) ? DefaultDateFormat : f.DateFormat.Trim();
+        bool hasTime = nativeDate ? f.DataType != "date" : textFormat.Contains('H') || textFormat.Contains('h') || textFormat.Contains("mm");
+        return new DateTimePicker
+        {
+            Format = DateTimePickerFormat.Custom,
+            CustomFormat = hasTime ? "yyyy/MM/dd HH:mm:ss" : "yyyy/MM/dd",
+            ShowCheckBox = nativeDate ? f.IsNullable : true,       // 取消勾選代表沒有日期
+            Tag = nativeDate ? null : textFormat,
+        };
     }
 
     /// <summary>
@@ -38,8 +101,15 @@ public static class InputHelper
     private static ComboBox CreateCombo(FieldDefinition f, string connectionString)
     {
         var cb = new ComboBox { DropDownStyle = f.AllowFreeText ? ComboBoxStyle.DropDown : ComboBoxStyle.DropDownList };
+        cb.Items.AddRange(BuildItems(f, connectionString, withBlank: f.IsNullable || f.AllowFreeText).ToArray());
+        return cb;
+    }
+
+    /// <summary>選項 = 固定選項 + 選項 SQL 查出來的（下拉選單、選項按鈕共用）；withBlank = 最上面加空白選項</summary>
+    private static List<ComboItem> BuildItems(FieldDefinition f, string connectionString, bool withBlank)
+    {
         var items = new List<ComboItem>();
-        if (f.IsNullable || f.AllowFreeText) items.Add(new ComboItem("", ""));
+        if (withBlank) items.Add(new ComboItem("", ""));
         items.AddRange(ParseItems(f.Items));
         if (!string.IsNullOrWhiteSpace(f.ItemsSql) && !string.IsNullOrWhiteSpace(connectionString))
         {
@@ -62,8 +132,7 @@ public static class InputHelper
                 items.Add(new ComboItem("", "（選項 SQL 錯誤：" + ex.Message + "）"));
             }
         }
-        cb.Items.AddRange(items.ToArray());
-        return cb;
+        return items;
     }
 
     /// <summary>解析固定選項：逗號或換行分隔，「值=顯示」或只有值</summary>
@@ -84,10 +153,22 @@ public static class InputHelper
         switch (c)
         {
             case CheckBox cb:
-                return cb.Checked;
+                // bit 欄位直接存 true / false；其他欄位存「勾選時的值」「取消時的值」，再依欄位型別轉換
+                if (TypeHelper.IsBool(f.DataType) || cb.Tag is not CheckValues values) return cb.Checked;
+                text = cb.Checked ? values.Checked : values.Unchecked;
+                break;
             case DateTimePicker dtp:
-                if (dtp.ShowCheckBox && !dtp.Checked) return DBNull.Value;
-                return f.DataType == "date" ? dtp.Value.Date : dtp.Value;
+                if (TypeHelper.IsDate(f.DataType))
+                {
+                    if (dtp.ShowCheckBox && !dtp.Checked) return DBNull.Value;
+                    return f.DataType == "date" ? dtp.Value.Date : dtp.Value;
+                }
+                // 文字、數字欄位：依日期格式轉成文字；沒有日期 = 空白（可 NULL 的文字欄位存 NULL）
+                text = dtp.ShowCheckBox && !dtp.Checked ? "" : dtp.Value.ToString(dtp.Tag as string ?? DefaultDateFormat, CultureInfo.InvariantCulture);
+                break;
+            case RadioGroup radios:
+                text = radios.SelectedValue ?? "";
+                break;
             case ComboBox combo:
                 // 選了選項就用選項的值；可自行輸入時沒選選項就用打的文字
                 text = combo.SelectedItem is ComboItem item ? item.Value
@@ -118,19 +199,39 @@ public static class InputHelper
         switch (c)
         {
             case CheckBox cb:
-                cb.Checked = !isNull && Convert.ToBoolean(value);
+                if (isNull) cb.Checked = false;
+                else if (value is bool flag) cb.Checked = flag;
+                else if (cb.Tag is CheckValues values)
+                    cb.Checked = Convert.ToString(value).Trim().Equals(values.Checked.Trim(), StringComparison.OrdinalIgnoreCase);
+                else cb.Checked = Convert.ToBoolean(value);
                 break;
             case DateTimePicker dtp:
-                if (isNull)
+            {
+                // 文字、數字欄位存的是格式化的日期文字（Tag 放格式）：解析失敗或空白都當成沒有日期
+                DateTime? date = null;
+                if (!isNull && dtp.Tag is string format)
+                {
+                    if (DateTime.TryParseExact(Convert.ToString(value).Trim(), format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+                        date = parsed;
+                }
+                else if (!isNull)
+                {
+                    date = Convert.ToDateTime(value);
+                }
+                if (date == null)
                 {
                     if (dtp.ShowCheckBox) dtp.Checked = false;
                     dtp.Value = DateTime.Today;
                 }
                 else
                 {
-                    dtp.Value = Convert.ToDateTime(value);
+                    dtp.Value = date.Value;
                     if (dtp.ShowCheckBox) dtp.Checked = true;
                 }
+                break;
+            }
+            case RadioGroup radios:
+                radios.SelectedValue = isNull ? null : (value is bool b2 ? (b2 ? "1" : "0") : Convert.ToString(value)).Trim();
                 break;
             case ComboBox combo:
             {
@@ -167,7 +268,13 @@ public static class InputHelper
         AllowFreeText = c.EditAllowFreeText,
         X = c.EditX,
         Y = c.EditY,
+        DateFormat = c.EditDateFormat,
+        NumberRule = c.EditNumberRule,
+        IsReadOnly = c.EditReadOnly,
+        CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
+        UncheckedValue = c.EditUncheckedValue ?? "0",
         Width = c.EditWidth > 0 ? c.EditWidth : Math.Clamp(c.Width, 120, 400),
+        Height = c.EditHeight > 0 ? c.EditHeight : FieldDefinition.DefaultHeight,
         NoEntry = readOnly,
     };
 
@@ -178,6 +285,7 @@ public static class InputHelper
     public static Dictionary<FieldDefinition, Control> LayoutFields(Control body, IEnumerable<FieldDefinition> fields, string connectionString = null)
     {
         var inputs = new Dictionary<FieldDefinition, Control>();
+        Color labelColor = ColorText.LabelColor(body.BackColor);       // 底色深時標籤用白字
         foreach (var f in fields)
         {
             body.Controls.Add(new Label
@@ -185,10 +293,12 @@ public static class InputHelper
                 Text = f.Label,
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
+                ForeColor = labelColor,
                 Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
             });
             Control input = CreateInput(f, connectionString);
-            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26));   // 圓角外觀
+            if (input is RadioGroup) input.ForeColor = labelColor;
+            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
         return inputs;
@@ -201,7 +311,7 @@ public static class InputHelper
         foreach (var f in fields)
         {
             w = Math.Max(w, f.X + f.LabelWidth + 4 + Math.Max(f.Width, 30) + 30);
-            h = Math.Max(h, f.Y + 26 + 20);
+            h = Math.Max(h, f.Y + Math.Max(f.Height, FieldDefinition.DefaultHeight) + 20);
         }
         return new Size(w, h);
     }

@@ -30,6 +30,18 @@ public class FormDefinition
     [Category("畫面"), DisplayName("高度")]
     public int Height { get; set; } = 500;
 
+    // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設的灰色
+    [Browsable(false)]
+    public string BackColorHtml { get; set; }
+
+    [JsonIgnore, Category("畫面"), DisplayName("背景色"), DefaultValue(typeof(Color), ""),
+     Description("畫面（設計畫面與執行畫面）的底色；沒設定（Empty）就用預設的灰色。在屬性上按右鍵選「重設」可以還原。欄位標籤會依底色深淺自動用黑字或白字")]
+    public Color BackColor
+    {
+        get => ColorText.Parse(BackColorHtml);
+        set => BackColorHtml = ColorText.Format(value);
+    }
+
     [Category("資料"), DisplayName("連線字串"), ReadOnly(true)]
     public string ConnectionString { get; set; }
 
@@ -85,6 +97,25 @@ public class FormDefinition
     public static FormDefinition FromJson(string json) => JsonSerializer.Deserialize<FormDefinition>(json, JsonOptions);
 }
 
+/// <summary>顏色與文字互轉（定義檔存文字）；沒設定 = Color.Empty，代表用預設的底色</summary>
+public static class ColorText
+{
+    public static Color Parse(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return Color.Empty;
+        try { return ColorTranslator.FromHtml(text); }
+        catch { return Color.Empty; }
+    }
+
+    public static string Format(Color color) => color.IsEmpty ? null : ColorTranslator.ToHtml(color);
+
+    /// <summary>畫面底色：有設定用設定的，沒有就用預設的控制項灰色</summary>
+    public static Color BackOrDefault(Color color) => color.IsEmpty ? SystemColors.Control : color;
+
+    /// <summary>標籤文字顏色：底色太深用白字，太淺用黑字</summary>
+    public static Color LabelColor(Color back) => ButtonLook.Contrast(BackOrDefault(back));
+}
+
 /// <summary>畫面上的一個欄位：對應資料表的一個欄位</summary>
 public class FieldDefinition
 {
@@ -118,17 +149,39 @@ public class FieldDefinition
     [Category("畫面"), DisplayName("輸入框寬度")]
     public int Width { get; set; } = 160;
 
+    [Category("畫面"), DisplayName("輸入框高度"),
+     Description("預設 26；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。設計畫面上拖欄位的下邊緣也可以調整")]
+    public int Height { get; set; } = DefaultHeight;
+
+    public const int DefaultHeight = 26;
+
     [Category("畫面"), DisplayName("標籤寬度"), Description("輸入框左邊標籤區的寬度；設計畫面上拖欄位的左邊緣也可以調整")]
     public int LabelWidth { get; set; } = FieldBox.DefaultLabelWidth;
 
     [Category("畫面"), DisplayName("提示文字 (Placeholder)"), Description("輸入框空白時顯示的灰色提示文字（文字、數字欄位才有）")]
     public string Placeholder { get; set; }
 
-    [Category("下拉選單"), DisplayName("輸入方式"), Description("自動：依資料型別用文字框、勾選框或日期；下拉選單：從選項中挑選")]
+    [Category("輸入方式"), DisplayName("輸入方式"),
+     Description("自動：依資料型別用文字框、勾選框或日期；下拉選單、選項按鈕：從選項中挑選；日期選擇：日期挑選器；勾選框：打勾 / 不打勾")]
     public InputKind InputType { get; set; } = InputKind.自動;
 
+    [Category("編號"), DisplayName("編號規則"),
+     Description("新增時自動產生編號（可再手動修改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期；"
+               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
+    public string NumberRule { get; set; }
+
+    [Category("日期選擇"), DisplayName("日期格式"),
+     Description("文字、數字欄位用日期選擇時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
+    public string DateFormat { get; set; }
+
+    [Category("勾選框"), DisplayName("勾選時的值"), Description("非 bit 欄位用勾選框時，打勾存進資料庫的值，預設 1；例如 Y")]
+    public string CheckedValue { get; set; } = "1";
+
+    [Category("勾選框"), DisplayName("取消時的值"), Description("非 bit 欄位用勾選框時，沒打勾存進資料庫的值，預設 0；例如 N")]
+    public string UncheckedValue { get; set; } = "0";
+
     [Category("下拉選單"), DisplayName("固定選項"),
-     Description("用逗號或換行分隔；值和顯示文字不同時寫「值=顯示」，例如：Y=是,N=否"),
+     Description("下拉選單、選項按鈕的選項，用逗號或換行分隔；值和顯示文字不同時寫「值=顯示」，例如：Y=是,N=否"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string Items { get; set; }
 
@@ -142,6 +195,10 @@ public class FieldDefinition
 
     [Category("畫面"), DisplayName("只顯示（NOENTRY）"), Description("使用者不能輸入，存檔時也不會寫回資料庫")]
     public bool NoEntry { get; set; }
+
+    [Category("畫面"), DisplayName("唯讀"),
+     Description("新增、修改時使用者不能改這個欄位，但值照樣存進資料庫（例如自動編號、帶入的預設值）；查詢時仍然可以輸入條件。跟「只顯示」的差別是：唯讀的值會存檔")]
+    public bool IsReadOnly { get; set; }
 }
 
 /// <summary>
@@ -182,9 +239,13 @@ public class GridDefinition
     [Category("畫面"), DisplayName("高度")]
     public int Height { get; set; } = 200;
 
-    /// <summary>單身資料表的全部欄位（Visible 決定是否顯示在 Grid 上）</summary>
+    /// <summary>單身資料表的全部欄位（Visible 決定是否顯示在 Grid 上）；JOIN 帶進來的欄位也在這裡（JoinAlias 不是空的）</summary>
     [Browsable(false)]
     public List<GridColumnDefinition> Columns { get; set; } = new();
+
+    /// <summary>JOIN 的其他資料表（帶進唯讀欄位，例如用品號帶出品名）</summary>
+    [Browsable(false)]
+    public List<GridJoinDefinition> Joins { get; set; } = new();
 
     [Browsable(false), JsonIgnore]
     public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
@@ -210,6 +271,21 @@ public class GridDefinition
     /// <summary>編輯視窗上的按鈕（版面設計器從工具箱拖進來的）</summary>
     [Browsable(false)]
     public List<ButtonDefinition> EditButtons { get; set; } = new();
+
+    /// <summary>編輯視窗的底色（版面設計器的「背景色」）；空白 = 預設的灰色</summary>
+    [Browsable(false)]
+    public string EditBackColorHtml { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public Color EditBackColor
+    {
+        get => ColorText.Parse(EditBackColorHtml);
+        set => EditBackColorHtml = ColorText.Format(value);
+    }
+
+    /// <summary>編輯視窗上的明細清單（版面設計器從「資料表」頁籤拖進來的）</summary>
+    [Browsable(false)]
+    public List<EditListDefinition> EditLists { get; set; } = new();
 
     /// <summary>
     /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」。
@@ -254,12 +330,113 @@ public class GridDefinition
 
     /// <summary>解析關聯欄位文字，回傳（單頭欄位, 單身欄位）清單；格式不對的片段略過</summary>
     [Browsable(false), JsonIgnore]
-    public List<(string Master, string Detail)> Links =>
-        (LinkText ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    public List<(string Master, string Detail)> Links => ParseLinks(LinkText);
+
+    /// <summary>解析「單頭欄位=單身欄位, ...」文字；格式不對的片段略過</summary>
+    public static List<(string Master, string Detail)> ParseLinks(string text) =>
+        (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(pair => pair.Split('=', StringSplitOptions.TrimEntries))
             .Where(p => p.Length == 2 && p[0] != "" && p[1] != "")
             .Select(p => (p[0], p[1]))
             .ToList();
+}
+
+/// <summary>Grid 的一個 JOIN：用本身資料表的欄位對應關聯資料表的欄位（LEFT JOIN，沒對到的列照樣顯示，欄位空白）</summary>
+public class GridJoinDefinition
+{
+    /// <summary>SQL 裡的別名（J1、J2…），欄位的 JoinAlias 指向它</summary>
+    public string Alias { get; set; }
+    public string TableSchema { get; set; }
+    public string TableName { get; set; }
+
+    /// <summary>關聯條件：本身欄位=關聯資料表欄位，多組用逗號分隔（Master = 本身欄位，Detail = 關聯資料表欄位）</summary>
+    public string LinkText { get; set; } = "";
+
+    [JsonIgnore]
+    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+
+    [JsonIgnore]
+    public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
+
+    public GridJoinDefinition Clone() => (GridJoinDefinition)MemberwiseClone();
+}
+
+/// <summary>
+/// 組 Grid 的 SELECT（單身、編輯視窗明細清單共用）：本身資料表固定用別名 T0，
+/// JOIN 的資料表用各自的別名，JOIN 帶進來的欄位用 AS 取顯示用的欄位名稱
+/// </summary>
+public static class GridSql
+{
+    public const string BaseAlias = "T0";
+
+    /// <summary>本身資料表的欄位（加上別名，避免跟 JOIN 的資料表欄位同名時不明確）</summary>
+    public static string Base(string column) => $"[{BaseAlias}].{SqlName.Quote(column)}";
+
+    private static string Expr(GridColumnDefinition c) =>
+        c.IsJoin ? $"{SqlName.Quote(c.JoinAlias)}.{SqlName.Quote(c.SourceColumn)} AS {SqlName.Quote(c.Column)}" : Base(c.Column);
+
+    /// <summary>FROM 子句：只 JOIN 有欄位被選到的資料表</summary>
+    public static string From(string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns)
+    {
+        var used = columns.Where(c => c.IsJoin).Select(c => c.JoinAlias).ToHashSet();
+        var sql = new System.Text.StringBuilder($"{fullTableName} AS [{BaseAlias}]");
+        foreach (var j in joins.Where(j => used.Contains(j.Alias)))
+            sql.Append($" LEFT JOIN {j.FullTableName} AS {SqlName.Quote(j.Alias)} ON "
+                     + string.Join(" AND ", j.Links.Select(l => $"{Base(l.Master)} = {SqlName.Quote(j.Alias)}.{SqlName.Quote(l.Detail)}")));
+        return sql.ToString();
+    }
+
+    /// <summary>SELECT [TOP n] 欄位 FROM 資料表 [LEFT JOIN ...]（還沒有 WHERE、ORDER BY）</summary>
+    public static string Select(string fullTableName, IList<GridColumnDefinition> columns, IEnumerable<GridJoinDefinition> joins, int? top = null) =>
+        $"SELECT {(top.HasValue ? $"TOP {top} " : "")}{string.Join(", ", columns.Select(Expr))} FROM {From(fullTableName, joins, columns)}";
+}
+
+/// <summary>
+/// 編輯視窗上的明細清單：對應另一個資料表，依關聯欄位（編輯視窗欄位 = 明細欄位）只列出目前這筆的明細，唯讀顯示
+/// </summary>
+public class EditListDefinition
+{
+    [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
+    public string TableSchema { get; set; }
+
+    [Category("資料"), DisplayName("資料表"), ReadOnly(true)]
+    public string TableName { get; set; }
+
+    [Category("資料"), DisplayName("關聯欄位"), Description("編輯視窗欄位=明細欄位，多組用逗號分隔，例如：廠商編號=廠商編號。點一下清單可以用視窗設定")]
+    public string LinkText { get; set; } = "";
+
+    [Category("畫面"), DisplayName("標題")]
+    public string Title { get; set; }
+
+    [Category("畫面"), DisplayName("X")]
+    public int X { get; set; }
+
+    [Category("畫面"), DisplayName("Y")]
+    public int Y { get; set; }
+
+    [Category("畫面"), DisplayName("寬度")]
+    public int Width { get; set; } = 400;
+
+    [Category("畫面"), DisplayName("高度")]
+    public int Height { get; set; } = 150;
+
+    /// <summary>明細資料表的全部欄位（Visible 決定是否顯示在清單上）；JOIN 帶進來的欄位也在這裡</summary>
+    [Browsable(false)]
+    public List<GridColumnDefinition> Columns { get; set; } = new();
+
+    /// <summary>JOIN 的其他資料表</summary>
+    [Browsable(false)]
+    public List<GridJoinDefinition> Joins { get; set; } = new();
+
+    [Browsable(false), JsonIgnore]
+    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+
+    [Browsable(false), JsonIgnore]
+    public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
+
+    /// <summary>複製一份（版面設計器先改複本，按「確定」才寫回）</summary>
+    public EditListDefinition Clone() =>
+        JsonSerializer.Deserialize<EditListDefinition>(JsonSerializer.Serialize(this));
 }
 
 /// <summary>欄位的輸入方式</summary>
@@ -269,6 +446,12 @@ public enum InputKind
     自動,
     /// <summary>下拉選單（ComboBox）</summary>
     下拉選單,
+    /// <summary>日期選擇（DateTimePicker）：文字、數字欄位存日期時，依「日期格式」轉換</summary>
+    日期選擇,
+    /// <summary>勾選框（CheckBox）：非 bit 欄位用「勾選時的值」「取消時的值」轉換</summary>
+    勾選框,
+    /// <summary>選項按鈕（RadioButton）：選項同下拉選單的固定選項 / 選項 SQL，一次只能選一個</summary>
+    選項按鈕,
 }
 
 /// <summary>按鈕按下去要做的事</summary>
@@ -308,6 +491,44 @@ public class ButtonDefinition
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string TargetForm { get; set; }
 
+    // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
+    [Browsable(false)]
+    public string BackColorHtml { get; set; }
+
+    [Browsable(false)]
+    public string ForeColorHtml { get; set; }
+
+    [JsonIgnore, Category("外觀"), DisplayName("背景色"), DefaultValue(typeof(Color), ""),
+     Description("按鈕的底色；沒設定（Empty）就用預設的白底。在屬性上按右鍵選「重設」可以還原")]
+    public Color BackColor
+    {
+        get => ParseColor(BackColorHtml);
+        set => BackColorHtml = value.IsEmpty ? null : ColorTranslator.ToHtml(value);
+    }
+
+    [JsonIgnore, Category("外觀"), DisplayName("文字顏色"), DefaultValue(typeof(Color), ""),
+     Description("按鈕文字與圖示的顏色；沒設定（Empty）時，有背景色會自動選黑或白，沒有背景色用預設的黑字")]
+    public Color ForeColor
+    {
+        get => ParseColor(ForeColorHtml);
+        set => ForeColorHtml = value.IsEmpty ? null : ColorTranslator.ToHtml(value);
+    }
+
+    [Category("外觀"), DisplayName("圖示"), Description("文字左邊的圖示（Segoe 圖示字型）；文字留空就只顯示圖示")]
+    public ButtonIcon Icon { get; set; }
+
+    [Category("外觀"), DisplayName("圖片檔"),
+     Description("自己的圖示檔（png、jpg、bmp、ico），有設定時優先於上面的圖示；建議用完整路徑"),
+     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string IconFile { get; set; }
+
+    private static Color ParseColor(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return Color.Empty;
+        try { return ColorTranslator.FromHtml(html); }
+        catch { return Color.Empty; }
+    }
+
     [Category("畫面"), DisplayName("X")]
     public int X { get; set; }
 
@@ -322,6 +543,12 @@ public class ButtonDefinition
 
     /// <summary>複製一份（版面設計器先改複本，按「確定」才寫回）</summary>
     public ButtonDefinition Clone() => (ButtonDefinition)MemberwiseClone();
+}
+
+/// <summary>按鈕可選的圖示（用 Windows 內建的 Segoe 圖示字型，不用另外準備圖檔）</summary>
+public enum ButtonIcon
+{
+    無, 儲存, 搜尋, 新增, 刪除, 編輯, 列印, 重新整理, 匯出, 確定, 取消, 首筆, 上筆, 下筆, 末筆, 設定, 資訊,
 }
 
 /// <summary>從工具箱拖曳元件時帶的資料</summary>
@@ -354,6 +581,14 @@ public class GridColumnDefinition
     /// <summary>只顯示，不能輸入，也不寫回資料庫</summary>
     public bool NoEntry { get; set; }
 
+    /// <summary>JOIN 帶進來的欄位：這個欄位來自哪一個 JOIN（GridJoinDefinition.Alias）；null = 本身資料表的欄位</summary>
+    public string JoinAlias { get; set; }
+    /// <summary>JOIN 帶進來的欄位在關聯資料表裡的原始欄位名稱（Column 是顯示用的欄位名稱，不重複）</summary>
+    public string SourceColumn { get; set; }
+
+    [JsonIgnore]
+    public bool IsJoin => !string.IsNullOrEmpty(JoinAlias);
+
     // ---- 雙擊 Grid 開啟的編輯視窗版面 ----
     /// <summary>編輯視窗是否顯示這個欄位；null = 跟 Grid 的「顯示」一樣</summary>
     public bool? EditVisible { get; set; }
@@ -361,6 +596,8 @@ public class GridColumnDefinition
     public int EditY { get; set; }
     /// <summary>編輯視窗的輸入框寬度；0 = 依 Grid 欄寬自動決定</summary>
     public int EditWidth { get; set; }
+    /// <summary>編輯視窗的輸入框高度；0 = 預設高度</summary>
+    public int EditHeight { get; set; }
     /// <summary>編輯視窗的欄位標籤；null = 用 Grid 欄位標題</summary>
     public string EditLabel { get; set; }
     /// <summary>編輯視窗的標籤寬度；0 = 預設寬度</summary>
@@ -370,6 +607,14 @@ public class GridColumnDefinition
     public string EditItems { get; set; }
     public string EditItemsSql { get; set; }
     public bool EditAllowFreeText { get; set; }
+    /// <summary>編輯視窗的日期選擇格式、勾選框的值（同 FieldDefinition）</summary>
+    public string EditDateFormat { get; set; }
+    /// <summary>編輯視窗新增時的自動編號規則（同 FieldDefinition.NumberRule）</summary>
+    public string EditNumberRule { get; set; }
+    /// <summary>編輯視窗欄位是否唯讀（同 FieldDefinition.IsReadOnly）</summary>
+    public bool EditReadOnly { get; set; }
+    public string EditCheckedValue { get; set; }
+    public string EditUncheckedValue { get; set; }
     /// <summary>編輯視窗輸入框的提示文字（Placeholder）</summary>
     public string EditPlaceholder { get; set; }
 }

@@ -5,6 +5,8 @@ namespace FormBuilder;
 /// <summary>單筆編輯視窗要用到的操作，由執行畫面提供（資料、主鍵、存檔都在執行畫面那邊）</summary>
 public interface IRecordNavigator
 {
+    /// <summary>單頭資料表（含 Schema），自動編號要到這張表查最大流水號</summary>
+    string FullTableName { get; }
     int Count { get; }
     int Current { get; }
     /// <summary>目前這筆；沒有資料時是 null</summary>
@@ -37,6 +39,8 @@ public partial class RecordNavigatorDialog : Form
 
     /// <summary>後台在編輯視窗版面放的按鈕</summary>
     private readonly List<(ButtonDefinition Def, Button Control)> customButtons = new();
+    /// <summary>後台在編輯視窗版面放的明細清單</summary>
+    private readonly List<EditListView> listViews = new();
     private readonly string connectionString;
     private readonly string sourcePath;
     /// <summary>生效欄位；null = 不使用生效 / 取消生效</summary>
@@ -45,9 +49,10 @@ public partial class RecordNavigatorDialog : Form
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
     public RecordNavigatorDialog(IRecordNavigator navigator, string title, List<FieldDefinition> editFields, Size? bodySize = null,
                                  string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
-                                 string effectiveColumn = null)
+                                 string effectiveColumn = null, List<EditListDefinition> lists = null, Color backColor = default)
     {
         InitializeComponent();
+        body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
         nav = navigator;
         this.connectionString = connectionString;
         this.sourcePath = sourcePath;
@@ -79,9 +84,18 @@ public partial class RecordNavigatorDialog : Form
             customButtons.Add((b, button));
             body.Controls.Add(button);
         }
+        // 後台在編輯視窗版面放的明細清單（唯讀，顯示目前這筆的明細）
+        foreach (var l in lists ?? new List<EditListDefinition>())
+        {
+            var view = new EditListView(l, connectionString);
+            listViews.Add(view);
+            body.Controls.Add(view.Grid);
+        }
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
-        content = new Size(Math.Max(content.Width, buttonExtent.Width), Math.Max(content.Height, buttonExtent.Height));
+        var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());
+        content = new Size(Math.Max(content.Width, Math.Max(buttonExtent.Width, listExtent.Width)),
+                           Math.Max(content.Height, Math.Max(buttonExtent.Height, listExtent.Height)));
 
         // 視窗大小照版面；超過螢幕可用範圍時縮到螢幕內，欄位區可以捲動
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
@@ -125,6 +139,14 @@ public partial class RecordNavigatorDialog : Form
         DataRow row = nav.CurrentRow;
         foreach (var f in fields)
             InputHelper.SetValue(inputs[f], row != null && row.Table.Columns.Contains(f.Column) ? row[f.Column] : null);
+        ReloadLists(row);
+    }
+
+    /// <summary>依目前這筆的欄位值重新載入明細清單；row = null（沒有資料、新增中）時清單是空的</summary>
+    private void ReloadLists(DataRow row)
+    {
+        foreach (var view in listViews)
+            view.Reload(col => row != null && row.Table.Columns.Contains(col) ? row[col] : null);
     }
 
     private void SetMode(EditMode newMode)
@@ -151,8 +173,8 @@ public partial class RecordNavigatorDialog : Form
             // 新增：只顯示 / 自動編號以外都能輸入；修改：主鍵也不能改
             bool editable = mode switch
             {
-                EditMode.Insert => !f.NoEntry,
-                EditMode.Modify => !f.NoEntry && !f.IsKey,
+                EditMode.Insert => !f.NoEntry && !f.IsReadOnly,
+                EditMode.Modify => !f.NoEntry && !f.IsKey && !f.IsReadOnly,
                 _ => false,
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
@@ -305,6 +327,8 @@ public partial class RecordNavigatorDialog : Form
     private void BeginInsert()
     {
         foreach (var f in fields) InputHelper.SetValue(inputs[f], null);
+        ReloadLists(null);
+        NumberRule.FillInputs(inputs, connectionString, nav.FullTableName);     // 有編號規則的欄位自動帶入下一個編號
         SetMode(EditMode.Insert);
     }
 

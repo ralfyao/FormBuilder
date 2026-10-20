@@ -14,7 +14,12 @@ public partial class EditLayoutDialog : Form
     private readonly Dictionary<GridColumnDefinition, FieldBox> placed = new();
     /// <summary>版面上的按鈕（編輯的是複本，確定時才寫回）</summary>
     private readonly List<ButtonBox> buttonBoxes = new();
+    /// <summary>版面上的明細清單（編輯的是複本，確定時才寫回）</summary>
+    private readonly List<EditListBox> listBoxes = new();
     private readonly List<DesignBox> selection = new();
+    /// <summary>「資料表」頁籤要用的連線字串；沒有連線時不能加明細清單</summary>
+    private readonly string connectionString;
+    private List<(string Schema, string Name)> allTables;
     private Dictionary<DesignBox, Point> dragStarts;
 
     /// <summary>編輯視窗欄位區的大小（拖版面的右邊、下邊、右下角調整）</summary>
@@ -28,10 +33,21 @@ public partial class EditLayoutDialog : Form
     /// <summary>生效欄位（按「確定」才寫回 grid）</summary>
     private string effectiveColumn;
 
-    public EditLayoutDialog(GridDefinition gridDefinition)
+    /// <summary>編輯視窗底色（Color.Empty = 預設灰色；按「確定」才寫回 grid）</summary>
+    private Color backColor;
+
+    private void SetBackColor(Color color)
+    {
+        backColor = color;
+        canvas.BackColor = ColorText.BackOrDefault(color);
+        foreach (var box in canvas.Controls.OfType<FieldBox>()) box.RefreshFromModel();       // 標籤顏色跟著底色
+    }
+
+    public EditLayoutDialog(GridDefinition gridDefinition, string connectionString = null)
     {
         InitializeComponent();
         grid = gridDefinition;
+        this.connectionString = connectionString;
         Text = $"編輯視窗版面：{grid.Title ?? grid.TableName}";
 
         // ---- 版面上方：編輯視窗工具列的「生效 / 取消生效」要用哪個欄位 ----
@@ -49,6 +65,14 @@ public partial class EditLayoutDialog : Form
         };
         UpdateEffectiveButton();
 
+        // ---- 版面上方：編輯視窗的底色 ----
+        miPickBackColor.Click += (s, e) =>
+        {
+            using var dlg = new ColorDialog { Color = ColorText.BackOrDefault(backColor), FullOpen = true };
+            if (dlg.ShowDialog(this) == DialogResult.OK) SetBackColor(dlg.Color);
+        };
+        miResetBackColor.Click += (s, e) => SetBackColor(Color.Empty);
+
         // ---- 左邊「欄位」頁籤：拖到版面或雙擊加入 ----
         lstAvailable.DisplayMember = nameof(GridColumnDefinition.Header);
         lstAvailable.MouseDown += (s, e) =>
@@ -64,9 +88,27 @@ public partial class EditLayoutDialog : Form
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
+        // ---- 左邊「資料表」頁籤：拖到版面或雙擊，加入依關聯欄位列出明細的清單 ----
+        tabs.SelectedIndexChanged += (s, e) =>
+        {
+            if (tabs.SelectedTab == tabTables) LoadTables();
+        };
+        txtTableFilter.TextChanged += (s, e) => FillTableList();
+        lstTables.MouseDown += (s, e) =>
+        {
+            int i = lstTables.IndexFromPoint(e.Location);
+            if (e.Button == MouseButtons.Left && e.Clicks == 1 && i >= 0 && lstTables.Items[i] is TableItem t)
+                lstTables.DoDragDrop(new TableDragData { Schema = t.Schema, Table = t.Name }, DragDropEffects.Copy);
+        };
+        lstTables.DoubleClick += (s, e) =>
+        {
+            if (lstTables.SelectedItem is TableItem t) AddListFromTable(t.Schema, t.Name, NextFreePoint());
+        };
+
         // ---- 中間：版面 ----
         canvas.DragEnter += (s, e) =>
             e.Effect = e.Data.GetDataPresent(typeof(GridColumnDefinition)) || e.Data.GetDataPresent(typeof(ToolboxDragData))
+                    || e.Data.GetDataPresent(typeof(TableDragData))
                 ? DragDropEffects.Copy : DragDropEffects.None;
         canvas.DragDrop += (s, e) =>
         {
@@ -74,6 +116,7 @@ public partial class EditLayoutDialog : Form
             var location = new Point(Snap(p.X), Snap(p.Y));
             if (e.Data.GetData(typeof(GridColumnDefinition)) is GridColumnDefinition c) PlaceColumn(c, location);
             else if (e.Data.GetData(typeof(ToolboxDragData)) is ToolboxDragData tool) AddToolboxItem(tool.Kind, location);
+            else if (e.Data.GetData(typeof(TableDragData)) is TableDragData table) AddListFromTable(table.Schema, table.Table, location);
         };
         // 拖版面邊緣調整大小；拖出外框會自動捲動，按住不放就持續延伸
         canvasResizer = new CanvasResizer(canvas, canvasHost, () => formSize, size => { formSize = size; UpdateCanvasSize(); });
@@ -99,9 +142,12 @@ public partial class EditLayoutDialog : Form
         btnOk.Click += (s, e) => Apply();
 
         // 目前的版面（還沒設計過就先排成一欄）
+        backColor = grid.EditBackColor;
+        canvas.BackColor = ColorText.BackOrDefault(backColor);                 // 先設底色，欄位標籤才會依底色決定文字顏色
         grid.EnsureEditLayout();
         foreach (var c in grid.EditColumns) PlaceColumn(c, new Point(c.EditX, c.EditY), select: false);
         foreach (var b in grid.EditButtons) AddButtonBox(b.Clone(), select: false);
+        foreach (var l in grid.EditLists) AddListBox(l.Clone(), select: false);
         // 設計過大小就用設計的，沒有就依欄位自動決定
         formSize = grid.EditFormSize ?? InputHelper.ContentSize(placed.Values.Select(b => b.Field), 500);
         RefreshAvailable();
@@ -119,9 +165,11 @@ public partial class EditLayoutDialog : Form
     {
         public List<PlacedField> Fields { get; set; } = new();
         public List<ButtonDefinition> Buttons { get; set; } = new();
+        public List<EditListDefinition> Lists { get; set; } = new();
         public int Width { get; set; }
         public int Height { get; set; }
         public string EffectiveColumn { get; set; }
+        public string BackColorHtml { get; set; }
     }
 
     private sealed class PlacedField
@@ -134,9 +182,11 @@ public partial class EditLayoutDialog : Form
     {
         Fields = placed.Select(p => new PlacedField { Column = p.Key.Column, Field = p.Value.Field }).ToList(),
         Buttons = buttonBoxes.Select(b => b.ButtonDef).ToList(),
+        Lists = listBoxes.Select(b => b.ListDef).ToList(),
         Width = formSize.Width,
         Height = formSize.Height,
         EffectiveColumn = effectiveColumn,
+        BackColorHtml = ColorText.Format(backColor),
     });
 
     private void RestoreLayout(string json)
@@ -146,6 +196,7 @@ public partial class EditLayoutDialog : Form
         canvas.Controls.Clear();
         placed.Clear();
         buttonBoxes.Clear();
+        listBoxes.Clear();
         foreach (var p in state.Fields)
         {
             var column = grid.Columns.FirstOrDefault(c => c.Column == p.Column);
@@ -155,9 +206,11 @@ public partial class EditLayoutDialog : Form
             AttachBox(box);
         }
         foreach (var b in state.Buttons) AddButtonBox(b, select: false);
+        foreach (var l in state.Lists ?? new List<EditListDefinition>()) AddListBox(l, select: false);
         formSize = new Size(state.Width, state.Height);
         effectiveColumn = state.EffectiveColumn;
         UpdateEffectiveButton();
+        SetBackColor(ColorText.Parse(state.BackColorHtml));
         RefreshAvailable();
         SetSelection(Array.Empty<DesignBox>());
         UpdateCanvasSize();
@@ -195,11 +248,17 @@ public partial class EditLayoutDialog : Form
             Items = c.EditItems,
             ItemsSql = c.EditItemsSql,
             AllowFreeText = c.EditAllowFreeText,
+            DateFormat = c.EditDateFormat,
+            NumberRule = c.EditNumberRule,
+            IsReadOnly = c.EditReadOnly,
+            CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
+            UncheckedValue = c.EditUncheckedValue ?? "0",
             IsKey = c.IsKey,
             NoEntry = c.NoEntry || c.IsIdentity,
             X = location.X,
             Y = location.Y,
             Width = c.EditWidth > 0 ? c.EditWidth : Math.Clamp(c.Width, 120, 400),
+            Height = c.EditHeight > 0 ? c.EditHeight : FieldDefinition.DefaultHeight,
         };
         var box = new FieldBox(field);
         placed[c] = box;
@@ -216,6 +275,7 @@ public partial class EditLayoutDialog : Form
         box.DragFinished += (s, e) => { dragStarts = null; UpdateCanvasSize(); };
         box.Resized += (s, e) => UpdateCanvasSize();
         canvas.Controls.Add(box);
+        if (box is FieldBox) box.RefreshFromModel();       // 加進版面後才知道底色，標籤文字顏色要重算
     }
 
     // ================= 工具箱 =================
@@ -223,7 +283,10 @@ public partial class EditLayoutDialog : Form
     private void AddToolboxItem(string kind, Point location)
     {
         if (kind == "Button") AddButtonBox(new ButtonDefinition { X = location.X, Y = location.Y });
-        else if (kind == "ComboBox") AddComboField(location);
+        else if (kind == "ComboBox") AddKindField(location, InputKind.下拉選單);
+        else if (kind == "DatePicker") AddKindField(location, InputKind.日期選擇);
+        else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
+        else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
     }
 
     private void AddButtonBox(ButtonDefinition button, bool select = true)
@@ -235,24 +298,157 @@ public partial class EditLayoutDialog : Form
         if (select) SetSelection(new[] { box });
     }
 
-    /// <summary>下拉選單：從還沒放上版面的欄位選一個，放上去並設成下拉選單</summary>
-    private void AddComboField(Point location)
+    // ================= 明細清單（資料表頁籤） =================
+
+    private sealed record TableItem(string Schema, string Name)
     {
+        public override string ToString() => $"{Schema}.{Name}";
+    }
+
+    /// <summary>第一次切到「資料表」頁籤時才讀資料庫的資料表清單</summary>
+    private void LoadTables()
+    {
+        if (allTables != null) return;
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            lblTablesHint.Text = "還沒有資料庫連線，請回主畫面先連線，再開啟編輯視窗版面。";
+            allTables = new List<(string, string)>();
+            return;
+        }
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            allTables = SchemaReader.GetTables(connectionString);
+        }
+        catch (Exception ex)
+        {
+            allTables = null;                                // 下次切過來再試一次
+            MessageBox.Show("讀取資料表清單失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+        FillTableList();
+    }
+
+    private void FillTableList()
+    {
+        if (allTables == null) return;
+        string keyword = txtTableFilter.Text.Trim();
+        lstTables.BeginUpdate();
+        lstTables.Items.Clear();
+        foreach (var t in allTables.Where(t => keyword == "" || t.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+            lstTables.Items.Add(new TableItem(t.Schema, t.Name));
+        lstTables.EndUpdate();
+    }
+
+    /// <summary>把整個資料表放到版面上變成明細清單：預設列出全部欄位，並自動推測關聯欄位</summary>
+    private void AddListFromTable(string schema, string table, Point location)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("沒有資料庫連線，不能加入明細清單。請先在主畫面連線。", "提醒");
+            return;
+        }
+        List<ColumnInfo> columns;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            columns = SchemaReader.GetColumns(connectionString, schema, table);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("讀取欄位失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+        var masterColumns = grid.Columns.Select(c => new ColumnInfo { Name = c.Column, IsPrimaryKey = c.IsKey }).ToList();
+        var list = new EditListDefinition
+        {
+            TableSchema = schema,
+            TableName = table,
+            Title = table,
+            LinkText = DesignerForm.GuessLinks(masterColumns, columns),
+            X = location.X,
+            Y = location.Y,
+            Width = Math.Max(300, formSize.Width - location.X - 10),
+            Height = 150,
+            Columns = columns.Select(c => new GridColumnDefinition
+            {
+                Column = c.Name,
+                DataType = c.DataType,
+                MaxLength = c.MaxLength,
+                IsNullable = c.IsNullable,
+                IsIdentity = c.IsIdentity,
+                IsKey = c.IsPrimaryKey,
+                Header = string.IsNullOrWhiteSpace(c.Description) ? c.Name : c.Description,
+                Width = Math.Clamp(TypeHelper.SuggestWidth(c), 60, 200),
+            }).ToList(),
+        };
+        AddListBox(list);
+        if (list.Links.Count == 0) MessageBox.Show("推測不出關聯欄位，請點一下清單設定（編輯視窗欄位=明細欄位）。", "提醒");
+    }
+
+    private void AddListBox(EditListDefinition list, bool select = true)
+    {
+        var box = new EditListBox(list);
+        listBoxes.Add(box);
+        AttachBox(box);
+        box.Clicked += (s, e) =>
+        {
+            if (ModifierKeys.HasFlag(Keys.Control) || selection.Count != 1 || selection[0] != box) return;
+            EditListColumns(box);
+        };
+        UpdateCanvasSize();
+        if (select) SetSelection(new[] { box });
+    }
+
+    /// <summary>點一下清單：設定關聯欄位、要顯示的欄位、標題與寬度（沿用單身欄位設定視窗）</summary>
+    private void EditListColumns(EditListBox box)
+    {
+        var l = box.ListDef;
+        var temp = new GridDefinition
+        {
+            TableSchema = l.TableSchema,
+            TableName = l.TableName,
+            LinkText = l.LinkText,
+            Columns = l.Columns,
+            Joins = l.Joins,
+        };
+        using var dlg = new GridColumnsDialog(temp, grid.Columns.Where(c => !c.IsJoin).Select(c => c.Column).ToList(), connectionString, forEditList: true);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        l.LinkText = temp.LinkText;
+        l.Joins = temp.Joins;
+        box.RefreshFromModel();
+        propertyGrid.Refresh();
+    }
+
+    /// <summary>下拉選單、日期選擇、勾選框、選項按鈕：從還沒放上版面的欄位選一個，放上去並設成對應的輸入方式</summary>
+    private void AddKindField(Point location, InputKind kind)
+    {
+        var (name, tip, minWidth) = DesignerForm.KindInfo(kind);
         var available = grid.Columns.Where(c => !placed.ContainsKey(c)).ToList();
         if (available.Count == 0)
         {
-            MessageBox.Show("欄位都已經放在版面上了。要改成下拉選單，請點選該欄位，在屬性面板把「輸入方式」改成「下拉選單」。", "提醒");
+            MessageBox.Show($"欄位都已經放在版面上了。要改成{name}，請點選該欄位，在屬性面板把「輸入方式」改成「{name}」。", "提醒");
             return;
         }
         var infos = available.Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, Description = c.Header }).ToList();
-        using var dlg = new ColumnPickDialog($"下拉選單：{grid.TableName}", infos);
+        using var dlg = new ColumnPickDialog($"{name}：{grid.TableName}", infos);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var column = available.First(c => c.Column == dlg.SelectedColumn.Name);
         PlaceColumn(column, location);
         var box = placed[column];
-        box.Field.InputType = InputKind.下拉選單;
+        box.Field.InputType = kind;
+        box.Field.Width = Math.Max(box.Field.Width, minWidth);
         box.RefreshFromModel();
-        SetSelection(new[] { box });                      // 屬性面板接著設定固定選項或選項 SQL
+        SetSelection(new[] { box });                      // 屬性面板接著設定選項、日期格式或勾選值
+        lblHint.Text = $"  已加入{name}：{tip}";
     }
 
     private void RemoveSelected()
@@ -261,6 +457,7 @@ public partial class EditLayoutDialog : Form
         {
             if (box is FieldBox fb) placed.Remove(placed.First(p => p.Value == fb).Key);
             if (box is ButtonBox bb) buttonBoxes.Remove(bb);
+            if (box is EditListBox lb) listBoxes.Remove(lb);
             canvas.Controls.Remove(box);
             box.Dispose();
         }
@@ -281,7 +478,7 @@ public partial class EditLayoutDialog : Form
     private Point NextFreePoint()
     {
         if (placed.Count == 0) return new Point(10, 12);
-        return new Point(10, placed.Values.Max(b => b.Field.Y) + 32);
+        return new Point(10, placed.Values.Max(b => b.Field.Y + Math.Max(32, b.Field.Height + 6)));
     }
 
     /// <summary>版面上的欄位依目前上下、左右順序重新排成一欄</summary>
@@ -293,7 +490,7 @@ public partial class EditLayoutDialog : Form
             box.Field.X = 10;
             box.Field.Y = y;
             box.RefreshFromModel();
-            y += 32;
+            y += Math.Max(32, box.Field.Height + 6);
         }
         UpdateCanvasSize();
     }
@@ -305,7 +502,7 @@ public partial class EditLayoutDialog : Form
         formSize = new Size(Math.Max(formSize.Width, min.Width), Math.Max(formSize.Height, min.Height));
         canvas.Size = formSize;
         canvas.Invalidate();
-        lblHint.Text = $"  版面 {formSize.Width} × {formSize.Height}，{placed.Count} 個欄位、{buttonBoxes.Count} 個按鈕；拖版面邊緣調整大小，圈選或 Ctrl 點選後按 Delete 刪除";
+        lblHint.Text = $"  版面 {formSize.Width} × {formSize.Height}，{placed.Count} 個欄位、{buttonBoxes.Count} 個按鈕、{listBoxes.Count} 個明細清單；拖版面邊緣調整大小，圈選或 Ctrl 點選後按 Delete 刪除";
     }
 
     /// <summary>版面最小要容納所有欄位，且不小於 300 × 150</summary>
@@ -420,6 +617,7 @@ public partial class EditLayoutDialog : Form
                 c.EditX = box.Field.X;
                 c.EditY = box.Field.Y;
                 c.EditWidth = box.Field.Width;
+                c.EditHeight = box.Field.Height == FieldDefinition.DefaultHeight ? 0 : box.Field.Height;
                 // 標籤跟 Grid 標題一樣就不另存，之後改 Grid 標題時編輯視窗會跟著變
                 c.EditLabel = box.Field.Label == c.Header ? null : box.Field.Label;
                 c.EditPlaceholder = string.IsNullOrEmpty(box.Field.Placeholder) ? null : box.Field.Placeholder;
@@ -428,6 +626,11 @@ public partial class EditLayoutDialog : Form
                 c.EditItems = box.Field.Items;
                 c.EditItemsSql = box.Field.ItemsSql;
                 c.EditAllowFreeText = box.Field.AllowFreeText;
+                c.EditDateFormat = string.IsNullOrWhiteSpace(box.Field.DateFormat) ? null : box.Field.DateFormat.Trim();
+                c.EditNumberRule = string.IsNullOrWhiteSpace(box.Field.NumberRule) ? null : box.Field.NumberRule.Trim();
+                c.EditReadOnly = box.Field.IsReadOnly;
+                c.EditCheckedValue = box.Field.CheckedValue == "1" ? null : box.Field.CheckedValue;
+                c.EditUncheckedValue = box.Field.UncheckedValue == "0" ? null : box.Field.UncheckedValue;
             }
             else
             {
@@ -435,10 +638,12 @@ public partial class EditLayoutDialog : Form
             }
         }
         grid.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
+        grid.EditLists = listBoxes.Select(b => b.ListDef).ToList();
         grid.HasEditLayout = true;
         grid.EditFormWidth = formSize.Width;
         grid.EditFormHeight = formSize.Height;
         grid.EffectiveColumn = string.IsNullOrEmpty(effectiveColumn) ? null : effectiveColumn;
+        grid.EditBackColor = backColor;
         DialogResult = DialogResult.OK;
     }
 }
@@ -464,10 +669,30 @@ public class EditFieldView
     [DisplayName("輸入框寬度")]
     public int Width { get => field.Width; set => field.Width = Math.Max(30, value); }
 
-    [DisplayName("輸入方式"), Description("自動：依資料型別用文字框、勾選框或日期；下拉選單：從選項中挑選")]
+    [DisplayName("輸入框高度"), Description("預設 26；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。拖欄位的下邊緣也可以調整")]
+    public int Height { get => field.Height; set => field.Height = Math.Max(FieldDefinition.DefaultHeight, value); }
+
+    [DisplayName("輸入方式"), Description("自動：依資料型別用文字框、勾選框或日期；下拉選單、選項按鈕：從選項中挑選；日期選擇：日期挑選器；勾選框：打勾 / 不打勾")]
     public InputKind InputType { get => field.InputType; set => field.InputType = value; }
 
-    [DisplayName("固定選項"), Description("下拉選單的選項，用逗號或換行分隔；值和顯示文字不同時寫「值=顯示」，例如：Y=是,N=否"),
+    [DisplayName("唯讀"), Description("新增、修改時使用者不能改這個欄位，但值照樣存進資料庫（例如自動編號、預設值）。想連存檔都不要，請在 Grid 欄位設定勾「只顯示」")]
+    public bool IsReadOnly { get => field.IsReadOnly; set => field.IsReadOnly = value; }
+
+    [DisplayName("編號規則"),
+     Description("新增時自動產生編號（可再手動修改；設成唯讀就不能改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期；"
+               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
+    public string NumberRule { get => field.NumberRule; set => field.NumberRule = value; }
+
+    [DisplayName("日期格式"), Description("日期選擇用在文字、數字欄位時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
+    public string DateFormat { get => field.DateFormat; set => field.DateFormat = value; }
+
+    [DisplayName("勾選時的值"), Description("非 bit 欄位用勾選框時，打勾存進資料庫的值，預設 1；例如 Y")]
+    public string CheckedValue { get => field.CheckedValue; set => field.CheckedValue = value; }
+
+    [DisplayName("取消時的值"), Description("非 bit 欄位用勾選框時，沒打勾存進資料庫的值，預設 0；例如 N")]
+    public string UncheckedValue { get => field.UncheckedValue; set => field.UncheckedValue = value; }
+
+    [DisplayName("固定選項"), Description("下拉選單、選項按鈕的選項，用逗號或換行分隔；值和顯示文字不同時寫「值=顯示」，例如：Y=是,N=否"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string Items { get => field.Items; set => field.Items = value; }
 

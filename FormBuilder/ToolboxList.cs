@@ -3,7 +3,7 @@ namespace FormBuilder;
 /// <summary>工具箱清單（像 Visual Studio 的工具箱）：按住拖到畫面上加入，或雙擊加入</summary>
 public class ToolboxList : ListBox
 {
-    /// <summary>雙擊某個元件時觸發，參數是元件種類（Button / ComboBox）</summary>
+    /// <summary>雙擊某個元件時觸發，參數是元件種類（Button / ComboBox / DatePicker / CheckBox / RadioButton）</summary>
     public event Action<string> ItemActivated;
 
     public ToolboxList()
@@ -12,6 +12,9 @@ public class ToolboxList : ListBox
         IntegralHeight = false;
         Items.Add(new Entry("Button", "按鈕 (Button)"));
         Items.Add(new Entry("ComboBox", "下拉選單 (ComboBox)"));
+        Items.Add(new Entry("DatePicker", "日期選擇 (DatePicker)"));
+        Items.Add(new Entry("CheckBox", "勾選框 (CheckBox)"));
+        Items.Add(new Entry("RadioButton", "選項按鈕 (RadioButton)"));
         MouseDown += (s, e) =>
         {
             int i = IndexFromPoint(e.Location);
