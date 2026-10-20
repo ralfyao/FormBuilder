@@ -16,6 +16,8 @@ public interface IRecordNavigator
     bool Refresh();
     bool Insert(Dictionary<string, object> values);
     bool Update(Dictionary<string, object> values);
+    /// <summary>只改目前這筆的一個欄位（生效 / 取消生效），成功時顯示 doneMessage</summary>
+    bool UpdateColumn(string column, object value, string doneMessage);
     bool Delete();
 }
 
@@ -37,15 +39,19 @@ public partial class RecordNavigatorDialog : Form
     private readonly List<(ButtonDefinition Def, Button Control)> customButtons = new();
     private readonly string connectionString;
     private readonly string sourcePath;
+    /// <summary>生效欄位；null = 不使用生效 / 取消生效</summary>
+    private readonly string effectiveColumn;
 
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
     public RecordNavigatorDialog(IRecordNavigator navigator, string title, List<FieldDefinition> editFields, Size? bodySize = null,
-                                 string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null)
+                                 string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
+                                 string effectiveColumn = null)
     {
         InitializeComponent();
         nav = navigator;
         this.connectionString = connectionString;
         this.sourcePath = sourcePath;
+        this.effectiveColumn = string.IsNullOrWhiteSpace(effectiveColumn) ? null : effectiveColumn;
         baseTitle = title;
         fields = editFields;
 
@@ -60,6 +66,9 @@ public partial class RecordNavigatorDialog : Form
         btnOk.Click += (s, e) => Accept();
         btnCancel.Click += (s, e) => CancelEdit();
         btnClose.Click += (s, e) => Close();
+        btnEffective.Click += (s, e) => SetEffective(true);
+        btnUneffective.Click += (s, e) => SetEffective(false);
+        btnPrint.Click += (s, e) => PrintRecord();
 
         // 欄位照後台「編輯視窗版面」設計的位置擺放（依定義動態產生到 body）
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
@@ -77,7 +86,11 @@ public partial class RecordNavigatorDialog : Form
         // 視窗大小照版面；超過螢幕可用範圍時縮到螢幕內，欄位區可以捲動
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         int chromeHeight = toolStrip.PreferredSize.Height + bottom.Height;
-        ClientSize = new Size(Math.Min(Math.Max(content.Width, 560), screen.Width - 40),
+        // 視窗至少要放得下整條工具列，「列印」等按鈕才不會被擠到溢位選單（生效 / 取消生效同時只顯示一個）
+        btnEffective.Visible = this.effectiveColumn != null;
+        btnUneffective.Visible = false;
+        int toolbarWidth = toolStrip.PreferredSize.Width + (btnUneffective.Width - btnEffective.Width) + 8;
+        ClientSize = new Size(Math.Min(Math.Max(Math.Max(content.Width, 560), toolbarWidth), screen.Width - 40),
                               Math.Min(content.Height + chromeHeight, screen.Height - 80));
 
         ShowRecord();
@@ -125,6 +138,12 @@ public partial class RecordNavigatorDialog : Form
         btnNext.Enabled = btnLast.Enabled = browsing && hasRow && nav.Current < nav.Count - 1;
         btnOk.Enabled = btnCancel.Enabled = !browsing;
         btnClose.Enabled = browsing;
+        // 生效的資料顯示「取消生效」，未生效的顯示「生效」；列印要生效才能按（沒指定生效欄位時有資料就能印）
+        bool effective = hasRow && IsEffective(nav.CurrentRow);
+        btnEffective.Visible = effectiveColumn != null && !effective;
+        btnUneffective.Visible = effectiveColumn != null && effective;
+        btnEffective.Enabled = btnUneffective.Enabled = browsing && hasRow && nav.CanModify;
+        btnPrint.Enabled = browsing && hasRow && (effectiveColumn == null || effective);
         AcceptButton = browsing ? null : btnOk;          // 輸入中按 Enter = 確定
 
         foreach (var f in fields)
@@ -203,6 +222,73 @@ public partial class RecordNavigatorDialog : Form
                 }
                 break;
             case ButtonAction.開啟畫面: ButtonRunner.OpenForm(b, sourcePath, this); break;
+        }
+    }
+
+    // ================= 生效 / 取消生效 / 列印 =================
+
+    private bool IsEffective(DataRow row) =>
+        effectiveColumn != null && row.Table.Columns.Contains(effectiveColumn) && GridDefinition.IsEffectiveValue(row[effectiveColumn]);
+
+    /// <summary>生效 → 生效欄位改成 1；取消生效 → 改成 0</summary>
+    private void SetEffective(bool effective)
+    {
+        if (effectiveColumn == null || nav.CurrentRow == null) return;
+        if (nav.UpdateColumn(effectiveColumn, effective ? 1 : 0, effective ? "已生效。" : "已取消生效。"))
+        {
+            ShowRecord();
+            SetMode(EditMode.Browse);
+        }
+    }
+
+    /// <summary>列印目前這筆：視窗上每個欄位印成「標籤：值」</summary>
+    private void PrintRecord()
+    {
+        DataRow row = nav.CurrentRow;
+        if (row == null) return;
+        var lines = fields.Select(f => (f.Label, Value: inputs[f] switch
+        {
+            CheckBox cb => cb.Checked ? "是" : "否",
+            Control c => c.Text,
+        })).ToList();
+
+        using var doc = new System.Drawing.Printing.PrintDocument { DocumentName = baseTitle };
+        int next = 0;
+        doc.BeginPrint += (s, e) => next = 0;
+        doc.PrintPage += (s, e) =>
+        {
+            using var titleFont = new Font(Font.FontFamily, 14, FontStyle.Bold);
+            using var font = new Font(Font.FontFamily, 10);
+            var area = e.MarginBounds;
+            float y = area.Top;
+            e.Graphics.DrawString(baseTitle, titleFont, Brushes.Black, area.Left, y);
+            y += titleFont.GetHeight(e.Graphics) * 1.8f;
+            float labelWidth = lines.Count == 0 ? 0 : lines.Max(l => e.Graphics.MeasureString(l.Label, font).Width) + 16;
+            float lineHeight = font.GetHeight(e.Graphics) * 1.5f;
+            while (next < lines.Count && y + lineHeight <= area.Bottom)
+            {
+                e.Graphics.DrawString(lines[next].Label, font, Brushes.Black, area.Left, y);
+                e.Graphics.DrawString(lines[next].Value, font, Brushes.Black,
+                                      new RectangleF(area.Left + labelWidth, y, area.Width - labelWidth, lineHeight));
+                y += lineHeight;
+                next++;
+            }
+            e.HasMorePages = next < lines.Count;
+        };
+        // 預覽列印要有印表機才能排版：沒有預設印表機時先讓使用者挑一台
+        if (!doc.PrinterSettings.IsValid)
+        {
+            using var pick = new PrintDialog { Document = doc, UseEXDialog = true };
+            if (pick.ShowDialog(this) != DialogResult.OK) return;
+        }
+        try
+        {
+            using var preview = new PrintPreviewDialog { Document = doc, Width = 900, Height = 700, Text = "列印：" + baseTitle };
+            preview.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("列印失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 

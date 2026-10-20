@@ -207,6 +207,23 @@ public class GridDefinition
     [Browsable(false)]
     public List<ButtonDefinition> EditButtons { get; set; } = new();
 
+    /// <summary>
+    /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」。
+    /// 空白 = 不使用（不顯示生效 / 取消生效）
+    /// </summary>
+    [Browsable(false)]
+    public string EffectiveColumn { get; set; }
+
+    /// <summary>欄位值算不算「生效」：1、True、Y</summary>
+    public static bool IsEffectiveValue(object value) => value switch
+    {
+        null or DBNull => false,
+        bool b => b,
+        string s => s.Trim() is "1" or "Y" or "y" || s.Trim().Equals("true", StringComparison.OrdinalIgnoreCase),
+        IConvertible c => c.ToDecimal(null) == 1,
+        _ => false,
+    };
+
     /// <summary>雙擊 Grid 開啟的編輯視窗要顯示的欄位</summary>
     [Browsable(false), JsonIgnore]
     public List<GridColumnDefinition> EditColumns => Columns.Where(c => c.EditVisible ?? c.Visible).ToList();

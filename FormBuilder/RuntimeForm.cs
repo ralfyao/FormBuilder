@@ -535,7 +535,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>修改目前這筆單頭（key = 欄位名稱，不含主鍵）；成功後重讀並顯示</summary>
-    private bool UpdateValues(Dictionary<string, object> values)
+    private bool UpdateValues(Dictionary<string, object> values, string doneMessage = "修改完成。")
     {
         if (values.Count == 0)
         {
@@ -560,7 +560,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RefreshCurrentRow();
             ShowCurrent();
             SetMode(Mode.Browse);
-            MessageBox.Show("修改完成。", "修改");
+            MessageBox.Show(doneMessage, Text);
             return true;
         }
         catch (Exception ex)
@@ -697,7 +697,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void ShowCurrent()
     {
-        if (HasCurrent)
+        // 有單頭清單時，欄位只當查詢條件：點選清單不帶入，查詢完也清空（資料看清單、編輯用雙擊的編輯視窗）
+        if (HasCurrent && listGrid == null)
             // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
             foreach (var f in def.Fields)
                 SetValue(f, results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
@@ -930,7 +931,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 主鍵：清單欄位的主鍵設定，加上單頭欄位裡勾了主鍵的
         var keyColumns = def.MasterKeys.Select(k => k.Column).ToList();
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
-        using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath);
+        using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
+                                                 listDef.EffectiveColumn);
         dlg.ShowDialog(this);
     }
 
@@ -949,6 +951,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
     bool IRecordNavigator.Insert(Dictionary<string, object> values) => InsertValues(values);
     bool IRecordNavigator.Update(Dictionary<string, object> values) => UpdateValues(values);
+    bool IRecordNavigator.UpdateColumn(string column, object value, string doneMessage) =>
+        UpdateValues(new Dictionary<string, object> { [column] = value }, doneMessage);
     bool IRecordNavigator.Delete() => DeleteRecord();
 
     /// <summary>
