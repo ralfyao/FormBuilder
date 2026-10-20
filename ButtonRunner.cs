@@ -7,7 +7,7 @@ namespace FormBuilder;
 public static class ButtonRunner
 {
     public static Button CreateControl(ButtonDefinition b) =>
-        new() { Text = b.Text, Bounds = new Rectangle(b.X, b.Y, Math.Max(b.Width, 40), Math.Max(b.Height, 20)) };
+        new RoundButton { Text = b.Text, Bounds = new Rectangle(b.X, b.Y, Math.Max(b.Width, 40), Math.Max(b.Height, 20)) };
 
     /// <summary>有設定確認訊息就先詢問；回傳 true = 可以執行</summary>
     public static bool Confirm(ButtonDefinition b) =>
