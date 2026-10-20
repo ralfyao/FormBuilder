@@ -33,10 +33,7 @@ public static class ButtonRunner
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tran;
             cmd.CommandText = b.Sql;
-            // @@ROWCOUNT 這類系統函數不當成參數
-            var names = Regex.Matches(b.Sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
-                             .Distinct(StringComparer.OrdinalIgnoreCase);
-            foreach (string name in names)
+            foreach (string name in ParameterNames(b.Sql))
                 cmd.Parameters.AddWithValue("@" + name, valueOf(name) ?? DBNull.Value);
             int rows = cmd.ExecuteNonQuery();
             tran.Commit();
@@ -54,6 +51,11 @@ public static class ButtonRunner
             return false;
         }
     }
+
+    /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數不算）</summary>
+    public static IEnumerable<string> ParameterNames(string sql) =>
+        Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
+             .Distinct(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案</summary>
     public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner)

@@ -258,6 +258,8 @@ public enum ButtonAction
     執行SQL,
     /// <summary>開啟另一個畫面定義檔</summary>
     開啟畫面,
+    /// <summary>用自訂 SELECT 查詢：@欄位名稱 帶入畫面輸入框的值，結果顯示在單頭（清單）</summary>
+    自訂查詢,
 }
 
 /// <summary>畫面上的按鈕（類似 Visual Studio 從工具箱拖進來的 Button）</summary>
@@ -267,14 +269,16 @@ public class ButtonDefinition
     public string Text { get; set; } = "按鈕";
 
     [Category("按鈕"), DisplayName("動作"),
-     Description("內建動作跟工具列的按鈕一樣；執行SQL 要填下方的 SQL；開啟畫面 要填畫面定義檔")]
+     Description("內建動作跟工具列的按鈕一樣；執行SQL、自訂查詢 要填下方的 SQL；開啟畫面 要填畫面定義檔")]
     public ButtonAction Action { get; set; } = ButtonAction.查詢;
 
     [Category("按鈕"), DisplayName("執行前確認訊息"), Description("有填才會先詢問使用者，按「是」才執行，例如：確定要停用這個客戶嗎？")]
     public string Confirm { get; set; }
 
     [Category("執行SQL"), DisplayName("SQL"),
-     Description("動作 = 執行SQL 時執行（同一個交易）。@欄位名稱 會帶入目前這筆的值，例如：UPDATE C客戶設定 SET 停用 = 1 WHERE 識別 = @識別"),
+     Description("執行SQL：同一個交易執行，@欄位名稱 帶入目前這筆的值，例如 UPDATE C客戶設定 SET 停用 = 1 WHERE 識別 = @識別。"
+               + "自訂查詢：按一下輸入條件、再按一下（或確定）查詢，@欄位名稱 帶入輸入框的值（文字沒填 = 空字串），"
+               + "例如 SELECT * FROM B廠商設定 WHERE 廠商名稱 LIKE '%' + @廠商名稱 + '%'"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string Sql { get; set; }
 

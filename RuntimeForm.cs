@@ -32,6 +32,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private bool syncingList;                  // 程式在同步選取列時，不要觸發「切換單頭」
     /// <summary>後台設計的按鈕，以及對應的控制項</summary>
     private readonly List<(ButtonDefinition Def, Button Control)> customButtons = new();
+    /// <summary>查詢模式是由哪個「自訂查詢」按鈕開始的；null = 內建查詢</summary>
+    private ButtonDefinition customQuery;
 
     public RuntimeForm(FormDefinition definition)
     {
@@ -143,6 +145,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void SetMode(Mode newMode)
     {
         mode = newMode;
+        if (mode != Mode.Query) customQuery = null;
         bool browsing = mode == Mode.Browse;
         btnQuery.Enabled = browsing;
         btnInsert.Enabled = browsing;
@@ -183,6 +186,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         lblMode.Text = mode switch
         {
+            Mode.Query when customQuery != null => $"查詢：輸入條件後，再按一次「{customQuery.Text}」、「確定」或 Enter 開始查詢，Esc 取消",
             Mode.Query => "查詢：輸入條件（文字可用 * 或 ? 萬用字元），按「確定」或 Enter 開始查詢，Esc 取消",
             Mode.Insert => "新增：輸入資料後按「確定」存檔，Esc 取消",
             Mode.Modify => "修改：改完後按「確定」存檔，Esc 取消",
@@ -197,11 +201,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     // ================= 按鈕動作 =================
 
-    private void BeginQuery()
+    private void BeginQuery(ButtonDefinition custom = null)
     {
         ClearInputs();
         ClearDetail();
         SetMode(Mode.Query);
+        customQuery = custom;
+        SetMode(Mode.Query);                               // 再設一次，更新狀態列與按鈕
     }
 
     private void BeginInsert()
@@ -236,6 +242,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         switch (mode)
         {
+            case Mode.Query when customQuery != null: RunCustomQuery(customQuery); break;
             case Mode.Query: RunQuery(); break;
             case Mode.Insert: InsertRecord(); break;
             case Mode.Modify: UpdateRecord(); break;
@@ -279,6 +286,42 @@ public partial class RuntimeForm : Form, IRecordNavigator
         cmd.CommandText = $"SELECT TOP 5000 {SelectColumns()} FROM {def.FullTableName}"
                         + (where != "" ? " WHERE " + where : "")
                         + " ORDER BY " + string.Join(", ", orderColumns.Select(SqlName.Quote));
+        LoadResults(cmd);
+    }
+
+    /// <summary>
+    /// 自訂查詢：執行按鈕設定的 SELECT，@欄位名稱 帶入畫面輸入框的值
+    /// （文字欄位沒填 = 空字串，LIKE '%' + @x + '%' 才會查全部；其他型別沒填 = NULL）
+    /// </summary>
+    private void RunCustomQuery(ButtonDefinition b)
+    {
+        if (string.IsNullOrWhiteSpace(b.Sql))
+        {
+            MessageBox.Show($"按鈕「{b.Text}」還沒有設定 SQL。", "提醒");
+            return;
+        }
+        using var cmd = new SqlCommand(b.Sql);
+        try
+        {
+            foreach (string name in ButtonRunner.ParameterNames(b.Sql))
+            {
+                var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                object value = field != null ? GetValue(field) : DBNull.Value;
+                if (value == DBNull.Value && field != null && TypeHelper.IsString(field.DataType)) value = "";
+                cmd.Parameters.AddWithValue("@" + name, value);
+            }
+        }
+        catch (FormatException ex)
+        {
+            MessageBox.Show(ex.Message, "提醒");
+            return;
+        }
+        LoadResults(cmd);
+    }
+
+    /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆</summary>
+    private void LoadResults(SqlCommand cmd)
+    {
         var table = new DataTable();
         try
         {
@@ -368,15 +411,22 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.取消 => btnCancel.Enabled,
         ButtonAction.單身 => btnDetail.Enabled,
         ButtonAction.離開 => btnExit.Enabled,
+        ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
         _ => mode == Mode.Browse,
     };
 
     private void RunButton(ButtonDefinition b)
     {
-        if (!ButtonRunner.Confirm(b)) return;
+        // 自訂查詢的第一下只是進入輸入條件，不用確認
+        bool startingQuery = b.Action == ButtonAction.自訂查詢 && !(mode == Mode.Query && customQuery == b);
+        if (!startingQuery && !ButtonRunner.Confirm(b)) return;
         switch (b.Action)
         {
             case ButtonAction.查詢: BeginQuery(); break;
+            case ButtonAction.自訂查詢:
+                if (mode == Mode.Query && customQuery == b) RunCustomQuery(b);   // 第二下：查詢
+                else BeginQuery(b);                                             // 第一下：輸入條件
+                break;
             case ButtonAction.新增: BeginInsert(); break;
             case ButtonAction.修改: BeginModify(); break;
             case ButtonAction.刪除: DeleteRecord(); break;
@@ -648,7 +698,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void ShowCurrent()
     {
         if (HasCurrent)
-            foreach (var f in def.Fields) SetValue(f, results.Rows[current][f.Column]);
+            // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
+            foreach (var f in def.Fields)
+                SetValue(f, results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
         else
             ClearInputs();
         LoadDetail();
