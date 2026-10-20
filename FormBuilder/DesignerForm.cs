@@ -107,15 +107,30 @@ public partial class DesignerForm : Form
 
         SetConnection(null);
         NewForm();
+
+        // Ctrl+Z 復原、Ctrl+Y 取消復原：記錄整個畫面定義的快照
+        history = new UndoHistory(this, () => def.ToJson(), RestoreSnapshot);
     }
 
+    private UndoHistory history;
+
     /// <summary>
-    /// Delete：刪除選取的欄位；Ctrl+A：全選畫面上的欄位。
+    /// Delete：刪除選取的欄位；Ctrl+A：全選畫面上的欄位；Ctrl+Z：復原；Ctrl+Y（或 Ctrl+Shift+Z）：取消復原。
     /// 正在篩選框或屬性面板打字時不攔截，讓按鍵照常作用在文字上
     /// </summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         bool typing = txtTableFilter.Focused || propertyGrid.ContainsFocus || columnGrid.ContainsFocus;
+        if (!UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.Z))
+        {
+            UpdateStatus(history.Undo() ? "已復原上一個動作（Ctrl+Y 取消復原）" : "沒有可以復原的動作");
+            return true;
+        }
+        if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z)))
+        {
+            UpdateStatus(history.Redo() ? "已取消復原（重做）" : "沒有可以重做的動作");
+            return true;
+        }
         if (!typing && keyData == Keys.Delete && selection.Count > 0)
         {
             RemoveSelectedField();
@@ -715,11 +730,40 @@ public partial class DesignerForm : Form
         def = new FormDefinition { ConnectionString = connectionString };
         defTableColumns = new List<ColumnInfo>();
         currentFilePath = null;
-        foreach (var box in canvas.Controls.OfType<DesignBox>().ToList()) box.Dispose();
-        canvas.Controls.Clear();
+        ClearCanvas();
         SelectBox(null);
         ApplyCanvasSize();
         UpdateStatus();
+        history?.Reset();
+    }
+
+    private void ClearCanvas()
+    {
+        foreach (var box in canvas.Controls.OfType<DesignBox>().ToList()) box.Dispose();
+        canvas.Controls.Clear();
+    }
+
+    /// <summary>把畫面上的元件依定義重新建立（開啟檔案、復原 / 取消復原）</summary>
+    private void BuildCanvas()
+    {
+        foreach (var f in def.Fields) AddBox(f);
+        foreach (var g in def.Grids) AddGridBox(g);
+        foreach (var b in def.Buttons) AttachBox(new ButtonBox(b));
+        SelectBox(null);
+        ApplyCanvasSize();
+    }
+
+    /// <summary>復原 / 取消復原：把畫面定義換成快照的內容，重建畫面上的元件</summary>
+    private void RestoreSnapshot(string json)
+    {
+        var restored = FormDefinition.FromJson(json);
+        restored.SourcePath = def.SourcePath;
+        bool tableChanged = !string.Equals(restored.TableName, def.TableName, StringComparison.OrdinalIgnoreCase)
+                         || !string.Equals(restored.TableSchema, def.TableSchema, StringComparison.OrdinalIgnoreCase);
+        ClearCanvas();
+        def = restored;
+        BuildCanvas();
+        if (tableChanged) ReloadDefTableColumns();
     }
 
     private void OpenForm()
@@ -732,12 +776,9 @@ public partial class DesignerForm : Form
             def = FormDefinition.Load(dlg.FileName);
             currentFilePath = dlg.FileName;
             if (!string.IsNullOrWhiteSpace(def.ConnectionString)) SetConnection(def.ConnectionString);
-            foreach (var f in def.Fields) AddBox(f);
-            foreach (var g in def.Grids) AddGridBox(g);
-            foreach (var b in def.Buttons) AttachBox(new ButtonBox(b));
-            SelectBox(null);
-            ApplyCanvasSize();
+            BuildCanvas();
             ReloadDefTableColumns();
+            history.Reset();
             UpdateStatus("已開啟 " + Path.GetFileName(currentFilePath));
         }
         catch (Exception ex)

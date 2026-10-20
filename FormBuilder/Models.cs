@@ -77,8 +77,12 @@ public class FormDefinition
 
     public void Save(string path)
     {
-        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
+        File.WriteAllText(path, ToJson());
     }
+
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
+    public static FormDefinition FromJson(string json) => JsonSerializer.Deserialize<FormDefinition>(json, JsonOptions);
 }
 
 /// <summary>畫面上的一個欄位：對應資料表的一個欄位</summary>
