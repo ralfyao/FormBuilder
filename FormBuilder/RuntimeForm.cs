@@ -66,9 +66,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
             });
             Control input = CreateInput(f);
-            input.SetBounds(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26);
+            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26));   // 圓角外觀
             inputs[f] = input;
-            body.Controls.Add(input);
         }
 
         // 後台從工具箱拖進來的按鈕

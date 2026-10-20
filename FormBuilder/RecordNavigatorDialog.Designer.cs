@@ -44,9 +44,9 @@ namespace FormBuilder
             this.btnPrint = new System.Windows.Forms.ToolStripButton();
             this.bottom = new System.Windows.Forms.Panel();
             this.lblPosition = new System.Windows.Forms.Label();
-            this.btnOk = new System.Windows.Forms.Button();
-            this.btnCancel = new System.Windows.Forms.Button();
-            this.btnClose = new System.Windows.Forms.Button();
+            this.btnOk = new FormBuilder.RoundButton();
+            this.btnCancel = new FormBuilder.RoundButton();
+            this.btnClose = new FormBuilder.RoundButton();
             this.toolStrip.SuspendLayout();
             this.bottom.SuspendLayout();
             this.SuspendLayout();
@@ -251,8 +251,8 @@ namespace FormBuilder
         private System.Windows.Forms.ToolStripButton btnPrint;
         private System.Windows.Forms.Panel bottom;
         private System.Windows.Forms.Label lblPosition;
-        private System.Windows.Forms.Button btnOk;
-        private System.Windows.Forms.Button btnCancel;
-        private System.Windows.Forms.Button btnClose;
+        private FormBuilder.RoundButton btnOk;
+        private FormBuilder.RoundButton btnCancel;
+        private FormBuilder.RoundButton btnClose;
     }
 }

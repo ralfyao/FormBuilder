@@ -13,7 +13,7 @@ public class FieldBox : DesignBox
     public FieldDefinition Field { get; }
 
     private readonly Label caption = new() { TextAlign = ContentAlignment.MiddleRight, AutoEllipsis = true };
-    private readonly Label input = new() { BorderStyle = BorderStyle.FixedSingle, BackColor = SystemColors.Window, ForeColor = SystemColors.GrayText, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
+    private readonly RoundedInputPreview input = new();     // 圓角輸入框示意（跟執行時一樣）
     private int pressX, pressLabelWidth;
 
     public FieldBox(FieldDefinition field)

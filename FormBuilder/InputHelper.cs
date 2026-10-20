@@ -188,9 +188,8 @@ public static class InputHelper
                 Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
             });
             Control input = CreateInput(f, connectionString);
-            input.SetBounds(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26);
+            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26));   // 圓角外觀
             inputs[f] = input;
-            body.Controls.Add(input);
         }
         return inputs;
     }

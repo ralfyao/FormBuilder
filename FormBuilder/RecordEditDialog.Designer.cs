@@ -30,8 +30,8 @@ namespace FormBuilder
         {
             this.body = new System.Windows.Forms.Panel();
             this.bottom = new System.Windows.Forms.Panel();
-            this.btnOk = new System.Windows.Forms.Button();
-            this.btnCancel = new System.Windows.Forms.Button();
+            this.btnOk = new FormBuilder.RoundButton();
+            this.btnCancel = new FormBuilder.RoundButton();
             this.bottom.SuspendLayout();
             this.SuspendLayout();
             //
@@ -95,7 +95,7 @@ namespace FormBuilder
         /// <summary>欄位區：欄位與按鈕依定義動態產生到這裡</summary>
         private System.Windows.Forms.Panel body;
         private System.Windows.Forms.Panel bottom;
-        private System.Windows.Forms.Button btnOk;
-        private System.Windows.Forms.Button btnCancel;
+        private FormBuilder.RoundButton btnOk;
+        private FormBuilder.RoundButton btnCancel;
     }
 }
