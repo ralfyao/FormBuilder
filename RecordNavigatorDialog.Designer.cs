@@ -38,6 +38,10 @@ namespace FormBuilder
             this.btnPrevious = new System.Windows.Forms.ToolStripButton();
             this.btnNext = new System.Windows.Forms.ToolStripButton();
             this.btnLast = new System.Windows.Forms.ToolStripButton();
+            this.sepEffective = new System.Windows.Forms.ToolStripSeparator();
+            this.btnEffective = new System.Windows.Forms.ToolStripButton();
+            this.btnUneffective = new System.Windows.Forms.ToolStripButton();
+            this.btnPrint = new System.Windows.Forms.ToolStripButton();
             this.bottom = new System.Windows.Forms.Panel();
             this.lblPosition = new System.Windows.Forms.Label();
             this.btnOk = new System.Windows.Forms.Button();
@@ -67,7 +71,11 @@ namespace FormBuilder
             this.btnFirst,
             this.btnPrevious,
             this.btnNext,
-            this.btnLast});
+            this.btnLast,
+            this.sepEffective,
+            this.btnEffective,
+            this.btnUneffective,
+            this.btnPrint});
             this.toolStrip.Location = new System.Drawing.Point(0, 0);
             this.toolStrip.Name = "toolStrip";
             this.toolStrip.Padding = new System.Windows.Forms.Padding(4);
@@ -133,6 +141,34 @@ namespace FormBuilder
             this.btnLast.Name = "btnLast";
             this.btnLast.Size = new System.Drawing.Size(64, 28);
             this.btnLast.Text = "末筆";
+            //
+            // sepEffective
+            //
+            this.sepEffective.Name = "sepEffective";
+            //
+            // btnEffective
+            //
+            this.btnEffective.AutoSize = false;
+            this.btnEffective.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnEffective.Name = "btnEffective";
+            this.btnEffective.Size = new System.Drawing.Size(64, 28);
+            this.btnEffective.Text = "生效";
+            //
+            // btnUneffective
+            //
+            this.btnUneffective.AutoSize = false;
+            this.btnUneffective.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnUneffective.Name = "btnUneffective";
+            this.btnUneffective.Size = new System.Drawing.Size(72, 28);
+            this.btnUneffective.Text = "取消生效";
+            //
+            // btnPrint
+            //
+            this.btnPrint.AutoSize = false;
+            this.btnPrint.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnPrint.Name = "btnPrint";
+            this.btnPrint.Size = new System.Drawing.Size(64, 28);
+            this.btnPrint.Text = "列印";
             //
             // bottom
             //
@@ -209,6 +245,10 @@ namespace FormBuilder
         private System.Windows.Forms.ToolStripButton btnPrevious;
         private System.Windows.Forms.ToolStripButton btnNext;
         private System.Windows.Forms.ToolStripButton btnLast;
+        private System.Windows.Forms.ToolStripSeparator sepEffective;
+        private System.Windows.Forms.ToolStripButton btnEffective;
+        private System.Windows.Forms.ToolStripButton btnUneffective;
+        private System.Windows.Forms.ToolStripButton btnPrint;
         private System.Windows.Forms.Panel bottom;
         private System.Windows.Forms.Label lblPosition;
         private System.Windows.Forms.Button btnOk;

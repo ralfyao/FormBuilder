@@ -32,6 +32,10 @@ namespace FormBuilder
             this.canvasHost = new System.Windows.Forms.Panel();
             this.canvas = new System.Windows.Forms.Panel();
             this.alignBar = new System.Windows.Forms.ToolStrip();
+            this.effectBar = new System.Windows.Forms.ToolStrip();
+            this.lblEffectCaption = new System.Windows.Forms.ToolStripLabel();
+            this.btnEffectiveColumn = new System.Windows.Forms.ToolStripDropDownButton();
+            this.lblPrintHint = new System.Windows.Forms.ToolStripLabel();
             this.left = new System.Windows.Forms.Panel();
             this.tabs = new System.Windows.Forms.TabControl();
             this.tabColumns = new System.Windows.Forms.TabPage();
@@ -63,6 +67,7 @@ namespace FormBuilder
             //
             this.center.Controls.Add(this.canvasHost);
             this.center.Controls.Add(this.alignBar);
+            this.center.Controls.Add(this.effectBar);
             this.center.Dock = System.Windows.Forms.DockStyle.Fill;
             this.center.Location = new System.Drawing.Point(220, 0);
             this.center.Name = "center";
@@ -97,6 +102,36 @@ namespace FormBuilder
             this.alignBar.Name = "alignBar";
             this.alignBar.Size = new System.Drawing.Size(564, 25);
             this.alignBar.TabIndex = 1;
+            //
+            // effectBar
+            //
+            this.effectBar.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
+            this.effectBar.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.lblEffectCaption,
+            this.btnEffectiveColumn,
+            this.lblPrintHint});
+            this.effectBar.Location = new System.Drawing.Point(0, 0);
+            this.effectBar.Name = "effectBar";
+            this.effectBar.Size = new System.Drawing.Size(564, 25);
+            this.effectBar.TabIndex = 2;
+            //
+            // lblEffectCaption
+            //
+            this.lblEffectCaption.Name = "lblEffectCaption";
+            this.lblEffectCaption.Text = "生效 / 取消生效：";
+            //
+            // btnEffectiveColumn
+            //
+            this.btnEffectiveColumn.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnEffectiveColumn.Name = "btnEffectiveColumn";
+            this.btnEffectiveColumn.Text = "（不使用）";
+            this.btnEffectiveColumn.ToolTipText = "指定哪個欄位是生效欄位：執行時「生效」改成 1、「取消生效」改成 0";
+            //
+            // lblPrintHint
+            //
+            this.lblPrintHint.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblPrintHint.Name = "lblPrintHint";
+            this.lblPrintHint.Text = "（列印：生效的資料才能按）";
             //
             // left
             //
@@ -278,6 +313,10 @@ namespace FormBuilder
         private System.Windows.Forms.Panel canvasHost;
         private System.Windows.Forms.Panel canvas;
         private System.Windows.Forms.ToolStrip alignBar;
+        private System.Windows.Forms.ToolStrip effectBar;
+        private System.Windows.Forms.ToolStripLabel lblEffectCaption;
+        private System.Windows.Forms.ToolStripDropDownButton btnEffectiveColumn;
+        private System.Windows.Forms.ToolStripLabel lblPrintHint;
         private System.Windows.Forms.Panel left;
         private System.Windows.Forms.TabControl tabs;
         private System.Windows.Forms.TabPage tabColumns;

@@ -26,11 +26,29 @@ public partial class EditLayoutDialog : Form
     private Point bandStart;
     private Rectangle bandScreenRect;
 
+    /// <summary>生效欄位（按「確定」才寫回 grid）</summary>
+    private string effectiveColumn;
+
     public EditLayoutDialog(GridDefinition gridDefinition)
     {
         InitializeComponent();
         grid = gridDefinition;
         Text = $"編輯視窗版面：{grid.Title ?? grid.TableName}";
+
+        // ---- 版面上方：編輯視窗工具列的「生效 / 取消生效」要用哪個欄位 ----
+        effectiveColumn = grid.EffectiveColumn;
+        var noneItem = new ToolStripMenuItem("（不使用）") { Tag = null };
+        btnEffectiveColumn.DropDownItems.Add(noneItem);
+        btnEffectiveColumn.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var c in grid.Columns)
+            btnEffectiveColumn.DropDownItems.Add(new ToolStripMenuItem(ColumnText(c)) { Tag = c.Column });
+        btnEffectiveColumn.DropDownItemClicked += (s, e) =>
+        {
+            if (e.ClickedItem is not ToolStripMenuItem item) return;
+            effectiveColumn = item.Tag as string;
+            UpdateEffectiveButton();
+        };
+        UpdateEffectiveButton();
 
         // ---- 左邊「欄位」頁籤：拖到版面或雙擊加入 ----
         lstAvailable.DisplayMember = nameof(GridColumnDefinition.Header);
@@ -328,6 +346,17 @@ public partial class EditLayoutDialog : Form
 
     // ================= 確定 =================
 
+    private static string ColumnText(GridColumnDefinition c) =>
+        c.Header == c.Column ? $"{c.Column}（{c.DataType}）" : $"{c.Header}：{c.Column}（{c.DataType}）";
+
+    private void UpdateEffectiveButton()
+    {
+        var column = grid.Columns.FirstOrDefault(c => c.Column.Equals(effectiveColumn ?? "", StringComparison.OrdinalIgnoreCase));
+        btnEffectiveColumn.Text = column != null ? ColumnText(column) : "（不使用）";
+        foreach (var item in btnEffectiveColumn.DropDownItems.OfType<ToolStripMenuItem>())
+            item.Checked = string.Equals(item.Tag as string, column?.Column, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void Apply()
     {
         if (placed.Count == 0)
@@ -361,6 +390,7 @@ public partial class EditLayoutDialog : Form
         grid.HasEditLayout = true;
         grid.EditFormWidth = formSize.Width;
         grid.EditFormHeight = formSize.Height;
+        grid.EffectiveColumn = string.IsNullOrEmpty(effectiveColumn) ? null : effectiveColumn;
         DialogResult = DialogResult.OK;
     }
 }
