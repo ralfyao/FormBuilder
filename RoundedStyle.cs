@@ -11,6 +11,9 @@ public static class RoundedStyle
 {
     public const int Radius = 10;
 
+    /// <summary>輸入框外框高度超過這個值，文字框改成多行輸入</summary>
+    public const int TallThreshold = 32;
+
     public static readonly Color BorderColor = Color.FromArgb(160, 160, 160);
     public static readonly Color FocusColor = Color.FromArgb(0, 120, 215);
 
@@ -67,6 +70,15 @@ public static class RoundedStyle
     {
         switch (input)
         {
+            case TextBox tb when frame.Height > TallThreshold:
+                // 拉高的文字框：改成多行輸入，填滿整個圓角框（Enter 換行）
+                tb.BorderStyle = BorderStyle.None;
+                tb.Multiline = true;
+                tb.AcceptsReturn = true;
+                tb.WordWrap = true;
+                tb.ScrollBars = ScrollBars.Vertical;
+                tb.SetBounds(frame.X + 8, frame.Y + 6, frame.Width - 16, frame.Height - 12);
+                break;
             case TextBox tb:
                 tb.BorderStyle = BorderStyle.None;
                 tb.SetBounds(frame.X + 8, 0, frame.Width - 16, 0, BoundsSpecified.X | BoundsSpecified.Width);
@@ -135,10 +147,103 @@ public static class RoundedStyle
     }
 }
 
+/// <summary>按鈕的自訂外觀：背景色、文字顏色、圖示（內建圖示字型或圖片檔）；都沒設定就是預設外觀</summary>
+public sealed class ButtonLook
+{
+    public Color BackColor { get; init; }
+    public Color ForeColor { get; init; }
+    public ButtonIcon Icon { get; init; }
+    public string IconFile { get; init; }
+
+    public static ButtonLook From(ButtonDefinition b) => new()
+    {
+        BackColor = b.BackColor,
+        ForeColor = b.ForeColor,
+        Icon = b.Icon,
+        IconFile = b.IconFile,
+    };
+
+    // Segoe MDL2 Assets / Segoe Fluent Icons 的字元（Windows 10、11 內建）
+    private static readonly Dictionary<ButtonIcon, string> Glyphs = new()
+    {
+        [ButtonIcon.儲存] = "", [ButtonIcon.搜尋] = "", [ButtonIcon.新增] = "", [ButtonIcon.刪除] = "",
+        [ButtonIcon.編輯] = "", [ButtonIcon.列印] = "", [ButtonIcon.重新整理] = "", [ButtonIcon.匯出] = "",
+        [ButtonIcon.確定] = "", [ButtonIcon.取消] = "", [ButtonIcon.首筆] = "", [ButtonIcon.上筆] = "",
+        [ButtonIcon.下筆] = "", [ButtonIcon.末筆] = "", [ButtonIcon.設定] = "", [ButtonIcon.資訊] = "",
+    };
+
+    private static string iconFontName;
+    private static readonly Dictionary<string, Image> images = new();
+
+    /// <summary>系統有裝的圖示字型名稱；兩種都沒有（舊系統）就是 null，圖示不顯示</summary>
+    private static string IconFontName
+    {
+        get
+        {
+            if (iconFontName == null)
+            {
+                var names = FontFamily.Families.Select(f => f.Name).ToHashSet();
+                iconFontName = names.Contains("Segoe MDL2 Assets") ? "Segoe MDL2 Assets"
+                             : names.Contains("Segoe Fluent Icons") ? "Segoe Fluent Icons" : "";
+            }
+            return iconFontName == "" ? null : iconFontName;
+        }
+    }
+
+    public string Glyph => IconFile == null && Glyphs.TryGetValue(Icon, out var g) && IconFontName != null ? g : null;
+
+    /// <summary>圖片檔（讀過的快取起來；檔案不存在或讀不了就沒有圖示）</summary>
+    public Image Image
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(IconFile)) return null;
+            if (images.TryGetValue(IconFile, out var cached)) return cached;
+            Image img = null;
+            try
+            {
+                if (File.Exists(IconFile))
+                {
+                    if (Path.GetExtension(IconFile).Equals(".ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var icon = new Icon(IconFile);
+                        img = icon.ToBitmap();
+                    }
+                    else
+                    {
+                        using var ms = new MemoryStream(File.ReadAllBytes(IconFile));     // 不鎖住檔案
+                        using var raw = Image.FromStream(ms);
+                        img = new Bitmap(raw);
+                    }
+                }
+            }
+            catch (Exception) { }
+            images[IconFile] = img;
+            return img;
+        }
+    }
+
+    public bool HasIcon => Glyph != null || Image != null;
+
+    public static Font CreateIconFont(int pixelSize) => new(IconFontName ?? "Segoe UI", pixelSize, FontStyle.Regular, GraphicsUnit.Pixel);
+
+    /// <summary>底色太深用白字，太淺用黑字</summary>
+    public static Color Contrast(Color back) =>
+        (back.R * 299 + back.G * 587 + back.B * 114) / 1000 < 140 ? Color.White : Color.Black;
+}
+
 /// <summary>圓角按鈕：整個自己畫（滑鼠移過、按下、停用、取得焦點有不同外觀）</summary>
 public class RoundButton : Button
 {
     private bool hover, pressed;
+    private ButtonLook look;
+
+    /// <summary>後台設計的自訂外觀（背景色、文字顏色、圖示）；null = 預設</summary>
+    public ButtonLook Look
+    {
+        get => look;
+        set { look = value; Invalidate(); }
+    }
 
     public RoundButton()
     {
@@ -158,22 +263,59 @@ public class RoundButton : Button
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(RoundedStyle.BackgroundOf(Parent));   // 圓角外面補上父控制項的底色
-        Draw(e.Graphics, ClientRectangle, Text, Font, Enabled, hover, pressed, Focused, ForeColor);
+        Draw(e.Graphics, ClientRectangle, Text, Font, Enabled, hover, pressed, Focused, ForeColor, look);
     }
 
     /// <summary>畫圓角按鈕（設計畫面的按鈕示意也用這個，外觀才會一致）</summary>
-    public static void Draw(Graphics g, Rectangle rect, string text, Font font, bool enabled, bool hover, bool pressed, bool focused, Color foreColor)
+    public static void Draw(Graphics g, Rectangle rect, string text, Font font, bool enabled, bool hover, bool pressed, bool focused, Color foreColor,
+                            ButtonLook look = null)
     {
+        Color back = look?.BackColor ?? Color.Empty;
+        bool custom = !back.IsEmpty;
         Color fill = !enabled ? Color.FromArgb(244, 244, 244)
+                   : custom ? (pressed ? ControlPaint.Dark(back, 0.1f) : hover ? ControlPaint.Light(back, 0.2f) : back)
                    : pressed ? Color.FromArgb(204, 228, 247)
                    : hover ? Color.FromArgb(229, 241, 251)
                    : Color.FromArgb(253, 253, 253);
         Color border = !enabled ? Color.FromArgb(204, 204, 204)
+                     : custom ? (focused ? RoundedStyle.FocusColor : ControlPaint.Dark(back, 0.15f))
                      : hover || pressed || focused ? RoundedStyle.FocusColor
                      : Color.FromArgb(173, 173, 173);
         RoundedStyle.DrawBox(g, rect, fill, border);
-        TextRenderer.DrawText(g, text, font, rect, enabled ? foreColor : SystemColors.GrayText,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+
+        Color textColor = !enabled ? SystemColors.GrayText
+                        : look != null && !look.ForeColor.IsEmpty ? look.ForeColor
+                        : custom ? ButtonLook.Contrast(back)
+                        : foreColor;
+        var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;
+        if (look == null || !look.HasIcon)
+        {
+            TextRenderer.DrawText(g, text, font, rect, textColor, flags | TextFormatFlags.HorizontalCenter);
+            return;
+        }
+
+        // 圖示 + 文字：整組置中；沒有文字就只畫圖示
+        const int pad = 6, gap = 6;
+        int iconSize = Math.Clamp(rect.Height - 12, 12, 28);
+        bool hasText = !string.IsNullOrEmpty(text);
+        int textWidth = hasText ? TextRenderer.MeasureText(g, text, font, new Size(int.MaxValue, rect.Height), TextFormatFlags.NoPadding).Width : 0;
+        int total = iconSize + (hasText ? gap + textWidth : 0);
+        int x = Math.Max(rect.X + pad, rect.X + (rect.Width - total) / 2);
+        var iconRect = new Rectangle(x, rect.Y + (rect.Height - iconSize) / 2, iconSize, iconSize);
+        if (look.Image is { } image)
+        {
+            g.DrawImage(image, iconRect);
+        }
+        else if (look.Glyph is { } glyph)
+        {
+            using var iconFont = ButtonLook.CreateIconFont(iconSize - 2);
+            TextRenderer.DrawText(g, glyph, iconFont, iconRect, textColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+        if (hasText)
+        {
+            int textX = iconRect.Right + gap;
+            TextRenderer.DrawText(g, text, font, new Rectangle(textX, rect.Y, Math.Max(0, rect.Right - pad - textX), rect.Height), textColor, flags | TextFormatFlags.Left);
+        }
     }
 }
 
@@ -192,8 +334,11 @@ public class RoundedInputPreview : Label
     protected override void OnPaint(PaintEventArgs e)
     {
         RoundedStyle.DrawBox(e.Graphics, ClientRectangle, SystemColors.Window, RoundedStyle.BorderColor);
-        var textRect = Rectangle.Inflate(ClientRectangle, -8, 0);
+        // 拉高的輸入框跟執行時一樣是多行輸入：文字從左上角開始，可以換行
+        bool tall = Height > RoundedStyle.TallThreshold;
+        var textRect = tall ? Rectangle.Inflate(ClientRectangle, -8, -6) : Rectangle.Inflate(ClientRectangle, -8, 0);
         TextRenderer.DrawText(e.Graphics, Text, Font, textRect, ForeColor,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+            tall ? TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak
+                 : TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
     }
 }

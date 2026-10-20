@@ -49,27 +49,39 @@ public class FieldBox : DesignBox
     {
         int labelWidth = Math.Clamp(Field.LabelWidth, 0, MaxLabelWidth);
         caption.Text = Field.Label;
+        caption.ForeColor = ColorText.LabelColor(Parent?.BackColor ?? Color.Empty);     // 畫面底色深時標籤改白字
         caption.SetBounds(0, 2, labelWidth, 22);
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
         input.Text = (string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
-                   + (Field.IsKey ? " [鍵]" : "") + (Field.NoEntry ? " [只顯示]" : "")
-                   + (Field.InputType == InputKind.下拉選單 ? "  ▼" : "");
-        input.SetBounds(labelWidth + 4, 0, Math.Max(Field.Width, MinInputWidth), 26);
-        Size = new Size(labelWidth + 4 + input.Width + 2, 28);
+                   + (Field.IsKey ? " [鍵]" : "") + (Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")
+                   + Field.InputType switch
+                   {
+                       InputKind.下拉選單 => "  ▼",
+                       InputKind.日期選擇 => "  [日期]",
+                       InputKind.勾選框 => "  ☑",
+                       InputKind.選項按鈕 => "  ◉ ○",
+                       _ => "",
+                   };
+        input.SetBounds(labelWidth + 4, 0, Math.Max(Field.Width, MinInputWidth), InputHeight);
+        Size = new Size(labelWidth + 4 + input.Width + 2, InputHeight + 2);
         Location = new Point(Field.X, Field.Y);
     }
 
+    private int InputHeight => Math.Max(Field.Height, FieldDefinition.DefaultHeight);
+
     protected override Size ResizableSize
     {
-        get => new(Field.Width, 0);
+        get => new(Field.Width, InputHeight);
         set
         {
             Field.Width = Math.Max(MinInputWidth, value.Width);
+            Field.Height = Math.Max(FieldDefinition.DefaultHeight, value.Height);
             RefreshFromModel();
         }
     }
 
-    protected override (bool Right, bool Bottom) HitResize(Point local) => (local.X >= Width - ResizeEdge, false);
+    // 拖右邊緣調整寬度、下邊緣調整高度（下拉選單、日期的高度固定，拉高只會讓輸入框外框變高）
+    protected override (bool Right, bool Bottom) HitResize(Point local) => (local.X >= Width - ResizeEdge, local.Y >= Height - ResizeEdge);
 
     // ---- 拖左邊緣：標籤變寬 / 變窄，輸入框留在原位 ----
     protected override bool HitLeftResize(Point local) => local.X <= ResizeEdge;

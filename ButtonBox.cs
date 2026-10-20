@@ -48,7 +48,7 @@ public class ButtonBox : DesignBox
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        RoundButton.Draw(e.Graphics, ClientRectangle, ButtonDef.Text, Font, true, false, false, false, ForeColor);   // 跟執行時一樣的圓角按鈕
+        RoundButton.Draw(e.Graphics, ClientRectangle, ButtonDef.Text, Font, true, false, false, false, ForeColor, ButtonLook.From(ButtonDef));   // 跟執行時一樣的圓角按鈕
         if (IsSelected)
             using (var pen = new Pen(Color.DodgerBlue, 2))
                 e.Graphics.DrawRectangle(pen, 1, 1, Width - 2, Height - 2);

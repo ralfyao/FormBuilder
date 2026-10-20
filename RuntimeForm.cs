@@ -56,6 +56,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnExit.Click += (s, e) => Close();
 
         // 欄位、按鈕、Grid 依畫面定義動態產生到 body（body 在 Designer.cs）
+        body.BackColor = ColorText.BackOrDefault(def.BackColor);             // 後台設定的畫面底色
+        Color labelColor = ColorText.LabelColor(def.BackColor);              // 底色深時標籤用白字
         foreach (var f in def.Fields)
         {
             body.Controls.Add(new Label
@@ -63,10 +65,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Text = f.Label,
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
+                ForeColor = labelColor,
                 Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
             });
             Control input = CreateInput(f);
-            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), 26));   // 圓角外觀
+            if (input is RadioGroup) input.ForeColor = labelColor;
+            RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
 
@@ -171,12 +175,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         foreach (var f in def.Fields)
         {
-            // 查詢時每個欄位都能下條件；新增、修改時 NOENTRY 與自動編號不能輸入，修改時主鍵也不能改
+            // 查詢時每個欄位都能下條件；新增、修改時 NOENTRY、唯讀與自動編號不能輸入（唯讀的值照樣存檔），修改時主鍵也不能改
             bool editable = mode switch
             {
                 Mode.Query => true,
-                Mode.Insert => !f.NoEntry && !f.IsIdentity,
-                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey,
+                Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly,
+                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly,
                 _ => false,
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
@@ -213,6 +217,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         ClearInputs();
         ClearDetail();
+        NumberRule.FillInputs(inputs, def.ConnectionString, def.FullTableName);   // 有編號規則的欄位自動帶入下一個編號
         SetMode(Mode.Insert);
     }
 
@@ -377,11 +382,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             else if (c is DateTimePicker dtp && dtp.ShowCheckBox && dtp.Checked)
             {
-                where.Add($"CAST({col} AS date) = @q{i}");
-                cmd.Parameters.AddWithValue($"@q{i}", dtp.Value.Date);
+                if (TypeHelper.IsDate(f.DataType))
+                {
+                    where.Add($"CAST({col} AS date) = @q{i}");
+                    cmd.Parameters.AddWithValue($"@q{i}", dtp.Value.Date);
+                }
+                else
+                {
+                    // 文字、數字欄位存的是日期格式文字（例如 yyyyMMdd），直接用同樣格式的文字比對
+                    where.Add($"{col} = @q{i}");
+                    cmd.Parameters.AddWithValue($"@q{i}", InputHelper.GetValue(f, c));
+                }
                 i++;
             }
-            else if (c is ComboBox && InputHelper.GetValue(f, c) is var comboValue && comboValue != DBNull.Value
+            else if ((c is ComboBox || c is RadioGroup) && InputHelper.GetValue(f, c) is var comboValue && comboValue != DBNull.Value
                      && !(comboValue is string cs && cs == ""))
             {
                 // 下拉選單有選值就當條件（選空白 = 不限）
@@ -763,11 +777,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 using var conn = new SqlConnection(def.ConnectionString);
                 conn.Open();
                 using var cmd = conn.CreateCommand();
-                string where = AddDetailCondition(cmd);
-                var orderColumns = gridDef.KeyColumns.Count > 0 ? gridDef.KeyColumns : gridDef.Columns.Take(1).ToList();
-                cmd.CommandText = $"SELECT TOP 5000 {string.Join(", ", gridDef.Columns.Select(c => SqlName.Quote(c.Column)))} FROM {gridDef.FullTableName}"
+                string where = AddDetailCondition(cmd, GridSql.BaseAlias);          // 有 JOIN 時，本身的欄位要加別名
+                var orderColumns = gridDef.KeyColumns.Count > 0 ? gridDef.KeyColumns : gridDef.Columns.Where(c => !c.IsJoin).Take(1).ToList();
+                cmd.CommandText = GridSql.Select(gridDef.FullTableName, gridDef.Columns, gridDef.Joins, 5000)
                                 + (where != "" ? " WHERE " + where : "")
-                                + " ORDER BY " + string.Join(", ", orderColumns.Select(c => SqlName.Quote(c.Column)));
+                                + " ORDER BY " + string.Join(", ", orderColumns.Select(c => GridSql.Base(c.Column)));
                 new SqlDataAdapter(cmd).Fill(table);
             }
             catch (Exception ex)
@@ -788,13 +802,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 @m0、@m1…；沒有關聯欄位時回傳空字串</summary>
-    private string AddDetailCondition(SqlCommand cmd)
+    private string AddDetailCondition(SqlCommand cmd, string tableAlias = null)
     {
         var conditions = new List<string>();
         int i = 0;
         foreach (var (master, detail) in gridDef.Links)
         {
-            conditions.Add($"{SqlName.Quote(detail)} = @m{i}");
+            conditions.Add($"{(tableAlias != null ? $"[{tableAlias}]." : "")}{SqlName.Quote(detail)} = @m{i}");
             cmd.Parameters.AddWithValue($"@m{i}", results.Rows[current][master]);
             i++;
         }
@@ -931,11 +945,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var keyColumns = def.MasterKeys.Select(k => k.Column).ToList();
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
         using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
-                                                 listDef.EffectiveColumn);
+                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor);
         dlg.ShowDialog(this);
     }
 
     // ---- 給單筆編輯視窗呼叫（IRecordNavigator）----
+    string IRecordNavigator.FullTableName => def.FullTableName;
     int IRecordNavigator.Count => results.Rows.Count;
     int IRecordNavigator.Current => current;
     DataRow IRecordNavigator.CurrentRow => HasCurrent ? results.Rows[current] : null;
@@ -978,7 +993,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column) || (c.IsKey && !keyEditable)))
             .ToList();
         using var dlg = new RecordEditDialog($"{(inDetailMode ? "編輯" : "修改")}明細：{gridDef.Title ?? gridDef.TableName}", fields, col => row[col],
-                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath);
+                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Values.Count == 0) return;
 
         if (inDetailMode)

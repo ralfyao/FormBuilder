@@ -28,6 +28,7 @@ namespace FormBuilder
         /// </summary>
         private void InitializeComponent()
         {
+            this.components = new System.ComponentModel.Container();
             this.columnGroup = new System.Windows.Forms.GroupBox();
             this.dgvColumns = new System.Windows.Forms.DataGridView();
             this.colVisible = new System.Windows.Forms.DataGridViewCheckBoxColumn();
@@ -37,12 +38,18 @@ namespace FormBuilder
             this.colWidth = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colIsKey = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.colNoEntry = new System.Windows.Forms.DataGridViewCheckBoxColumn();
+            this.colSource = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.ctxJoin = new System.Windows.Forms.ContextMenuStrip(this.components);
+            this.miRemoveJoin = new System.Windows.Forms.ToolStripMenuItem();
             this.linkGroup = new System.Windows.Forms.GroupBox();
             this.dgvLinks = new System.Windows.Forms.DataGridView();
             this.colMaster = new System.Windows.Forms.DataGridViewComboBoxColumn();
             this.colDetail = new System.Windows.Forms.DataGridViewComboBoxColumn();
             this.bottom = new System.Windows.Forms.Panel();
             this.btnLayout = new System.Windows.Forms.Button();
+            this.btnJoin = new System.Windows.Forms.Button();
+            this.btnUp = new System.Windows.Forms.Button();
+            this.btnDown = new System.Windows.Forms.Button();
             this.btnNone = new System.Windows.Forms.Button();
             this.btnAll = new System.Windows.Forms.Button();
             this.btnOk = new System.Windows.Forms.Button();
@@ -78,7 +85,8 @@ namespace FormBuilder
             this.colHeader,
             this.colWidth,
             this.colIsKey,
-            this.colNoEntry});
+            this.colNoEntry,
+            this.colSource});
             this.dgvColumns.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dgvColumns.Name = "dgvColumns";
             this.dgvColumns.RowHeadersVisible = false;
@@ -135,6 +143,25 @@ namespace FormBuilder
             this.colNoEntry.Name = "colNoEntry";
             this.colNoEntry.Width = 60;
             //
+            // colSource
+            //
+            this.colSource.DataPropertyName = "Source";
+            this.colSource.HeaderText = "來源（JOIN）";
+            this.colSource.Name = "colSource";
+            this.colSource.ReadOnly = true;
+            this.colSource.Width = 200;
+            //
+            // ctxJoin
+            //
+            this.ctxJoin.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.miRemoveJoin});
+            this.ctxJoin.Name = "ctxJoin";
+            //
+            // miRemoveJoin
+            //
+            this.miRemoveJoin.Name = "miRemoveJoin";
+            this.miRemoveJoin.Text = "移除這個 JOIN（連同它帶進來的欄位）";
+            //
             // linkGroup
             //
             this.linkGroup.Controls.Add(this.dgvLinks);
@@ -177,6 +204,9 @@ namespace FormBuilder
             // bottom
             //
             this.bottom.Controls.Add(this.btnLayout);
+            this.bottom.Controls.Add(this.btnJoin);
+            this.bottom.Controls.Add(this.btnDown);
+            this.bottom.Controls.Add(this.btnUp);
             this.bottom.Controls.Add(this.btnNone);
             this.bottom.Controls.Add(this.btnAll);
             this.bottom.Controls.Add(this.btnOk);
@@ -195,6 +225,30 @@ namespace FormBuilder
             this.btnLayout.Size = new System.Drawing.Size(120, 26);
             this.btnLayout.TabIndex = 0;
             this.btnLayout.Text = "編輯視窗版面…";
+            //
+            // btnJoin
+            //
+            this.btnJoin.Dock = System.Windows.Forms.DockStyle.Left;
+            this.btnJoin.Name = "btnJoin";
+            this.btnJoin.Size = new System.Drawing.Size(140, 26);
+            this.btnJoin.TabIndex = 5;
+            this.btnJoin.Text = "JOIN 其他資料表…";
+            //
+            // btnUp
+            //
+            this.btnUp.Dock = System.Windows.Forms.DockStyle.Left;
+            this.btnUp.Name = "btnUp";
+            this.btnUp.Size = new System.Drawing.Size(70, 26);
+            this.btnUp.TabIndex = 6;
+            this.btnUp.Text = "▲ 上移";
+            //
+            // btnDown
+            //
+            this.btnDown.Dock = System.Windows.Forms.DockStyle.Left;
+            this.btnDown.Name = "btnDown";
+            this.btnDown.Size = new System.Drawing.Size(70, 26);
+            this.btnDown.TabIndex = 7;
+            this.btnDown.Text = "▼ 下移";
             //
             // btnNone
             //
@@ -247,6 +301,10 @@ namespace FormBuilder
             ((System.ComponentModel.ISupportInitialize)(this.dgvLinks)).EndInit();
             this.bottom.ResumeLayout(false);
             this.ResumeLayout(false);
+            this.columnGroup.PerformLayout();
+            this.linkGroup.PerformLayout();
+            this.bottom.PerformLayout();
+            this.PerformLayout();
         }
 
         #endregion
@@ -265,6 +323,12 @@ namespace FormBuilder
         private System.Windows.Forms.DataGridViewComboBoxColumn colMaster;
         private System.Windows.Forms.DataGridViewComboBoxColumn colDetail;
         private System.Windows.Forms.Panel bottom;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colSource;
+        private System.Windows.Forms.ContextMenuStrip ctxJoin;
+        private System.Windows.Forms.ToolStripMenuItem miRemoveJoin;
+        private System.Windows.Forms.Button btnJoin;
+        private System.Windows.Forms.Button btnUp;
+        private System.Windows.Forms.Button btnDown;
         private System.Windows.Forms.Button btnLayout;
         private System.Windows.Forms.Button btnNone;
         private System.Windows.Forms.Button btnAll;

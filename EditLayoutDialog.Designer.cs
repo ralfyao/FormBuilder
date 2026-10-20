@@ -36,6 +36,9 @@ namespace FormBuilder
             this.lblEffectCaption = new System.Windows.Forms.ToolStripLabel();
             this.btnEffectiveColumn = new System.Windows.Forms.ToolStripDropDownButton();
             this.lblPrintHint = new System.Windows.Forms.ToolStripLabel();
+            this.btnBackColor = new System.Windows.Forms.ToolStripDropDownButton();
+            this.miPickBackColor = new System.Windows.Forms.ToolStripMenuItem();
+            this.miResetBackColor = new System.Windows.Forms.ToolStripMenuItem();
             this.left = new System.Windows.Forms.Panel();
             this.tabs = new System.Windows.Forms.TabControl();
             this.tabColumns = new System.Windows.Forms.TabPage();
@@ -44,6 +47,10 @@ namespace FormBuilder
             this.tabToolbox = new System.Windows.Forms.TabPage();
             this.toolbox = new FormBuilder.ToolboxList();
             this.lblToolboxHint = new System.Windows.Forms.Label();
+            this.tabTables = new System.Windows.Forms.TabPage();
+            this.lstTables = new System.Windows.Forms.ListBox();
+            this.txtTableFilter = new System.Windows.Forms.TextBox();
+            this.lblTablesHint = new System.Windows.Forms.Label();
             this.right = new System.Windows.Forms.Panel();
             this.propertyGrid = new System.Windows.Forms.PropertyGrid();
             this.lblProps = new System.Windows.Forms.Label();
@@ -59,6 +66,7 @@ namespace FormBuilder
             this.tabs.SuspendLayout();
             this.tabColumns.SuspendLayout();
             this.tabToolbox.SuspendLayout();
+            this.tabTables.SuspendLayout();
             this.right.SuspendLayout();
             this.bottom.SuspendLayout();
             this.SuspendLayout();
@@ -109,7 +117,8 @@ namespace FormBuilder
             this.effectBar.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.lblEffectCaption,
             this.btnEffectiveColumn,
-            this.lblPrintHint});
+            this.lblPrintHint,
+            this.btnBackColor});
             this.effectBar.Location = new System.Drawing.Point(0, 0);
             this.effectBar.Name = "effectBar";
             this.effectBar.Size = new System.Drawing.Size(564, 25);
@@ -133,6 +142,26 @@ namespace FormBuilder
             this.lblPrintHint.Name = "lblPrintHint";
             this.lblPrintHint.Text = "（列印：生效的資料才能按）";
             //
+            // btnBackColor
+            //
+            this.btnBackColor.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnBackColor.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.miPickBackColor,
+            this.miResetBackColor});
+            this.btnBackColor.Name = "btnBackColor";
+            this.btnBackColor.Text = "背景色";
+            this.btnBackColor.ToolTipText = "編輯視窗的底色";
+            //
+            // miPickBackColor
+            //
+            this.miPickBackColor.Name = "miPickBackColor";
+            this.miPickBackColor.Text = "選擇顏色…";
+            //
+            // miResetBackColor
+            //
+            this.miResetBackColor.Name = "miResetBackColor";
+            this.miResetBackColor.Text = "還原預設（灰色）";
+            //
             // left
             //
             this.left.Controls.Add(this.tabs);
@@ -147,6 +176,7 @@ namespace FormBuilder
             //
             this.tabs.Controls.Add(this.tabColumns);
             this.tabs.Controls.Add(this.tabToolbox);
+            this.tabs.Controls.Add(this.tabTables);
             this.tabs.Dock = System.Windows.Forms.DockStyle.Fill;
             this.tabs.Location = new System.Drawing.Point(6, 6);
             this.tabs.Name = "tabs";
@@ -200,6 +230,38 @@ namespace FormBuilder
             this.lblToolboxHint.Size = new System.Drawing.Size(192, 22);
             this.lblToolboxHint.TabIndex = 1;
             this.lblToolboxHint.Text = "拖到右邊版面，或雙擊加入";
+            //
+            // tabTables
+            //
+            this.tabTables.Controls.Add(this.lstTables);
+            this.tabTables.Controls.Add(this.txtTableFilter);
+            this.tabTables.Controls.Add(this.lblTablesHint);
+            this.tabTables.Name = "tabTables";
+            this.tabTables.Padding = new System.Windows.Forms.Padding(4);
+            this.tabTables.TabIndex = 2;
+            this.tabTables.Text = "資料表";
+            //
+            // lstTables
+            //
+            this.lstTables.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lstTables.IntegralHeight = false;
+            this.lstTables.Name = "lstTables";
+            this.lstTables.TabIndex = 0;
+            //
+            // txtTableFilter
+            //
+            this.txtTableFilter.Dock = System.Windows.Forms.DockStyle.Top;
+            this.txtTableFilter.Name = "txtTableFilter";
+            this.txtTableFilter.PlaceholderText = "輸入關鍵字篩選資料表";
+            this.txtTableFilter.TabIndex = 1;
+            //
+            // lblTablesHint
+            //
+            this.lblTablesHint.Dock = System.Windows.Forms.DockStyle.Top;
+            this.lblTablesHint.Name = "lblTablesHint";
+            this.lblTablesHint.Size = new System.Drawing.Size(192, 36);
+            this.lblTablesHint.TabIndex = 2;
+            this.lblTablesHint.Text = "拖到右邊版面（或雙擊）加入明細清單，依關聯欄位列出目前這筆的明細";
             //
             // right
             //
@@ -302,6 +364,8 @@ namespace FormBuilder
             this.tabs.ResumeLayout(false);
             this.tabColumns.ResumeLayout(false);
             this.tabToolbox.ResumeLayout(false);
+            this.tabTables.ResumeLayout(false);
+            this.tabTables.PerformLayout();
             this.right.ResumeLayout(false);
             this.bottom.ResumeLayout(false);
             this.ResumeLayout(false);
@@ -317,6 +381,9 @@ namespace FormBuilder
         private System.Windows.Forms.ToolStripLabel lblEffectCaption;
         private System.Windows.Forms.ToolStripDropDownButton btnEffectiveColumn;
         private System.Windows.Forms.ToolStripLabel lblPrintHint;
+        private System.Windows.Forms.ToolStripDropDownButton btnBackColor;
+        private System.Windows.Forms.ToolStripMenuItem miPickBackColor;
+        private System.Windows.Forms.ToolStripMenuItem miResetBackColor;
         private System.Windows.Forms.Panel left;
         private System.Windows.Forms.TabControl tabs;
         private System.Windows.Forms.TabPage tabColumns;
@@ -325,6 +392,10 @@ namespace FormBuilder
         private System.Windows.Forms.TabPage tabToolbox;
         private FormBuilder.ToolboxList toolbox;
         private System.Windows.Forms.Label lblToolboxHint;
+        private System.Windows.Forms.TabPage tabTables;
+        private System.Windows.Forms.ListBox lstTables;
+        private System.Windows.Forms.TextBox txtTableFilter;
+        private System.Windows.Forms.Label lblTablesHint;
         private System.Windows.Forms.Panel right;
         private System.Windows.Forms.PropertyGrid propertyGrid;
         private System.Windows.Forms.Label lblProps;

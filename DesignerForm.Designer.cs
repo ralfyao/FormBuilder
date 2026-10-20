@@ -29,14 +29,16 @@ namespace FormBuilder
         private void InitializeComponent()
         {
             toolStrip = new ToolStrip();
-            btnNewForm = new ToolStripButton();
-            btnOpen = new ToolStripButton();
-            btnSave = new ToolStripButton();
-            btnSaveAs = new ToolStripButton();
+            btnFileMenu = new ToolStripDropDownButton();
+            btnNewForm = new ToolStripMenuItem();
+            btnOpen = new ToolStripMenuItem();
+            btnSave = new ToolStripMenuItem();
+            btnSaveAs = new ToolStripMenuItem();
             sepFile = new ToolStripSeparator();
-            btnRemove = new ToolStripButton();
-            btnAddAll = new ToolStripButton();
-            btnGridColumns = new ToolStripButton();
+            btnEditMenu = new ToolStripDropDownButton();
+            btnRemove = new ToolStripMenuItem();
+            btnAddAll = new ToolStripMenuItem();
+            btnGridColumns = new ToolStripMenuItem();
             sepEdit = new ToolStripSeparator();
             btnPreview = new ToolStripButton();
             sepAlign = new ToolStripSeparator();
@@ -87,7 +89,7 @@ namespace FormBuilder
             // toolStrip
             // 
             toolStrip.GripStyle = ToolStripGripStyle.Hidden;
-            toolStrip.Items.AddRange(new ToolStripItem[] { btnNewForm, btnOpen, btnSave, btnSaveAs, sepFile, btnRemove, btnAddAll, btnGridColumns, sepEdit, btnPreview, sepAlign });
+            toolStrip.Items.AddRange(new ToolStripItem[] { btnFileMenu, btnEditMenu, sepFile, btnPreview, sepAlign });
             toolStrip.Location = new Point(0, 0);
             toolStrip.Name = "toolStrip";
             toolStrip.Size = new Size(1384, 25);
@@ -95,30 +97,33 @@ namespace FormBuilder
             // 
             // btnNewForm
             // 
-            btnNewForm.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            btnFileMenu.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            btnFileMenu.DropDownItems.AddRange(new ToolStripItem[] { btnNewForm, btnOpen, btnSave, btnSaveAs });
+            btnFileMenu.Name = "btnFileMenu";
+            btnFileMenu.Text = "檔案";
+            //
+            // btnNewForm
+            //
             btnNewForm.Name = "btnNewForm";
-            btnNewForm.Size = new Size(59, 22);
+            btnNewForm.ShortcutKeys = Keys.Control | Keys.N;
             btnNewForm.Text = "開新畫面";
             // 
             // btnOpen
             // 
-            btnOpen.DisplayStyle = ToolStripItemDisplayStyle.Text;
             btnOpen.Name = "btnOpen";
-            btnOpen.Size = new Size(35, 22);
+            btnOpen.ShortcutKeys = Keys.Control | Keys.O;
             btnOpen.Text = "開啟";
             // 
             // btnSave
             // 
-            btnSave.DisplayStyle = ToolStripItemDisplayStyle.Text;
             btnSave.Name = "btnSave";
-            btnSave.Size = new Size(35, 22);
+            btnSave.ShortcutKeys = Keys.Control | Keys.S;
             btnSave.Text = "存檔";
             // 
             // btnSaveAs
             // 
-            btnSaveAs.DisplayStyle = ToolStripItemDisplayStyle.Text;
             btnSaveAs.Name = "btnSaveAs";
-            btnSaveAs.Size = new Size(59, 22);
+            btnSaveAs.ShortcutKeys = Keys.Control | Keys.Shift | Keys.S;
             btnSaveAs.Text = "另存新檔";
             // 
             // sepFile
@@ -128,29 +133,31 @@ namespace FormBuilder
             // 
             // btnRemove
             // 
-            btnRemove.DisplayStyle = ToolStripItemDisplayStyle.Text;
             btnRemove.Name = "btnRemove";
-            btnRemove.Size = new Size(83, 22);
+            btnRemove.ShortcutKeyDisplayString = "Delete";
             btnRemove.Text = "移除選取欄位";
-            // 
+            //
             // btnAddAll
-            // 
-            btnAddAll.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            //
             btnAddAll.Name = "btnAddAll";
-            btnAddAll.Size = new Size(83, 22);
             btnAddAll.Text = "加入全部欄位";
-            // 
+            //
             // btnGridColumns
-            // 
-            btnGridColumns.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            //
             btnGridColumns.Name = "btnGridColumns";
-            btnGridColumns.Size = new Size(83, 22);
             btnGridColumns.Text = "單身欄位設定";
-            // 
+            //
+            // btnEditMenu（水平 / 垂直 / 大小的對齊選單由 AlignHelper.AddAlignMenu 在執行時加入）
+            //
+            btnEditMenu.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            btnEditMenu.DropDownItems.AddRange(new ToolStripItem[] { btnRemove, btnAddAll, btnGridColumns, sepEdit });
+            btnEditMenu.Name = "btnEditMenu";
+            btnEditMenu.Text = "編輯";
+            //
             // sepEdit
-            // 
+            //
             sepEdit.Name = "sepEdit";
-            sepEdit.Size = new Size(6, 25);
+            sepEdit.Size = new Size(6, 6);
             // 
             // btnPreview
             // 
@@ -455,14 +462,16 @@ namespace FormBuilder
         #endregion
 
         private System.Windows.Forms.ToolStrip toolStrip;
-        private System.Windows.Forms.ToolStripButton btnNewForm;
-        private System.Windows.Forms.ToolStripButton btnOpen;
-        private System.Windows.Forms.ToolStripButton btnSave;
-        private System.Windows.Forms.ToolStripButton btnSaveAs;
+        private System.Windows.Forms.ToolStripDropDownButton btnFileMenu;
+        private System.Windows.Forms.ToolStripMenuItem btnNewForm;
+        private System.Windows.Forms.ToolStripMenuItem btnOpen;
+        private System.Windows.Forms.ToolStripMenuItem btnSave;
+        private System.Windows.Forms.ToolStripMenuItem btnSaveAs;
         private System.Windows.Forms.ToolStripSeparator sepFile;
-        private System.Windows.Forms.ToolStripButton btnRemove;
-        private System.Windows.Forms.ToolStripButton btnAddAll;
-        private System.Windows.Forms.ToolStripButton btnGridColumns;
+        private System.Windows.Forms.ToolStripDropDownButton btnEditMenu;
+        private System.Windows.Forms.ToolStripMenuItem btnRemove;
+        private System.Windows.Forms.ToolStripMenuItem btnAddAll;
+        private System.Windows.Forms.ToolStripMenuItem btnGridColumns;
         private System.Windows.Forms.ToolStripSeparator sepEdit;
         private System.Windows.Forms.ToolStripButton btnPreview;
         private System.Windows.Forms.ToolStripSeparator sepAlign;
