@@ -34,6 +34,15 @@ public partial class DesignerForm : Form
         btnOpen.Click += (s, e) => OpenForm();
         btnSave.Click += (s, e) => SaveForm(false);
         btnSaveAs.Click += (s, e) => SaveForm(true);
+        // 「檔案」選單：發布到系統資料庫（登入後才有）
+        var miPublish = new ToolStripMenuItem("發布到系統…") { Enabled = SysContext.Active, ToolTipText = "把這個畫面（和它用到的列印樣板）發布到系統資料庫，使用者才看得到" };
+        var miOpenPublished = new ToolStripMenuItem("開啟已發布的畫面…") { Enabled = SysContext.Active };
+        if (!SysContext.Active) miPublish.ToolTipText = miOpenPublished.ToolTipText = "從 ERP Studio 主選單（系統管理 → 畫面設計）開啟時才能用";
+        miPublish.Click += (s, e) => Publish();
+        miOpenPublished.Click += (s, e) => OpenPublished();
+        btnFileMenu.DropDownItems.Add(new ToolStripSeparator());
+        btnFileMenu.DropDownItems.Add(miOpenPublished);
+        btnFileMenu.DropDownItems.Add(miPublish);
         btnRemove.Click += (s, e) => RemoveSelectedField();
         btnAddAll.Click += (s, e) => AddAllColumns();
         btnGridColumns.Click += (s, e) => EditGridColumns(canvas.Controls.OfType<GridBox>().FirstOrDefault());
@@ -850,6 +859,76 @@ public partial class DesignerForm : Form
             ReloadDefTableColumns();
             history.Reset();
             UpdateStatus("已開啟 " + Path.GetFileName(currentFilePath));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("開啟失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    /// <summary>
+    /// 發布到系統：先存檔，再把畫面定義（代號 = 檔名）和按鈕用到的列印樣板寫進系統資料庫；
+    /// 「開啟畫面」按鈕指向的畫面要各自發布，還沒發布的會列出來提醒
+    /// </summary>
+    private void Publish()
+    {
+        if (!SysContext.Active) return;
+        SaveForm(false);
+        if (currentFilePath == null || !File.Exists(currentFilePath)) return;
+        string key = Path.GetFileNameWithoutExtension(currentFilePath);
+        string folder = Path.GetDirectoryName(currentFilePath);
+        try
+        {
+            var cs = SysContext.Connection;
+            int version = SysDb.Publish(cs, key, "form", def.Title, def.ToJson(), SysContext.User.UserId);
+            var buttons = def.Buttons.Concat(def.Grids.SelectMany(g => g.EditButtons)).ToList();
+            var notes = new List<string>();
+            foreach (var b in buttons.Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
+            {
+                string path = ButtonRunner.ResolvePath(b.PrintTemplate, folder);
+                if (File.Exists(path)) SysDb.Publish(cs, Path.GetFileName(path), "print", Path.GetFileName(path), File.ReadAllText(path), SysContext.User.UserId);
+                else notes.Add($"找不到列印樣板檔：{path}");
+            }
+            var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in buttons.Where(b => b.Action == ButtonAction.開啟畫面 && !string.IsNullOrWhiteSpace(b.TargetForm)))
+            {
+                string target = Path.GetFileNameWithoutExtension(b.TargetForm);
+                if (!published.Contains(target)) notes.Add($"按鈕「{b.Text}」要開啟的畫面「{target}」還沒發布");
+            }
+            Audit.Write(key, def.TableName, "發布", "FormKey=" + key, $"第 {version} 版");
+            UpdateStatus($"已發布「{def.Title}」（代號 {key}，第 {version} 版）");
+            MessageBox.Show($"已發布「{def.Title}」（代號 {key}，第 {version} 版）。" + Environment.NewLine
+                            + "第一次發布的畫面，請到「選單管理」放進選單，並在「使用者、角色與權限」設定哪些角色可以用。"
+                            + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes) : ""),
+                            "發布");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("發布失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    /// <summary>開啟已發布的畫面：從系統資料庫讀出來編輯，存檔時寫到預設的 Forms 資料夾（同檔名）</summary>
+    private void OpenPublished()
+    {
+        if (!SysContext.Active) return;
+        var list = SysDb.LoadPublished(SysContext.Connection, "form");
+        using var dlg = new PickListDialog("開啟已發布的畫面（勾一個）",
+            list.Select(p => new PickListDialog.Item(p.FormKey, $"{p.Title ?? p.FormKey}　［{p.FormKey}］第 {p.Version} 版　{p.PublishedBy} {p.PublishedAt:yyyy/MM/dd HH:mm}")));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        string key = dlg.PickedKeys[0];
+        try
+        {
+            NewForm();
+            def = FormDefinition.FromJson(SysDb.LoadContent(SysContext.Connection, key));
+            def.FormKey = key;
+            currentFilePath = Path.Combine(EnsureFolder(), key + ".json");
+            def.SourcePath = currentFilePath;
+            if (!string.IsNullOrWhiteSpace(def.ConnectionString)) SetConnection(def.ConnectionString, def.DatabaseType);
+            BuildCanvas();
+            ReloadDefTableColumns();
+            history.Reset();
+            UpdateStatus($"已開啟已發布的畫面 {key}（存檔會寫到 {currentFilePath}）");
         }
         catch (Exception ex)
         {

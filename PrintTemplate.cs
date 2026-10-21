@@ -289,23 +289,16 @@ public static class PrintRunner
     /// <summary>
     /// 預覽列印（預覽視窗上可以直接按列印）：records 每個元素提供一筆資料的主鍵值（name => value），每筆印一頁
     /// </summary>
-    public static void Preview(string templatePath, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner)
+    public static void Preview(PrintTemplate template, string title, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner)
     {
-        if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath))
-        {
-            MessageBox.Show("找不到列印樣板檔：" + templatePath + Environment.NewLine + "請先在設計畫面雙擊這個按鈕，設計並儲存列印樣板。", "列印");
-            return;
-        }
         if (records.Count == 0)
         {
             MessageBox.Show("請先選一筆要列印的資料。", "列印");
             return;
         }
-        PrintTemplate template;
         List<DataRow> rows;
         try
         {
-            template = PrintTemplate.Load(templatePath);
             rows = LoadRows(template, connectionString, records);
         }
         catch (Exception ex)
@@ -318,8 +311,9 @@ public static class PrintRunner
             MessageBox.Show("讀不到要列印的資料（可能已被刪除）。", "列印");
             return;
         }
-        using var doc = CreateDocument(template, rows, Path.GetFileNameWithoutExtension(templatePath));
-        ShowPreview(doc, owner, Path.GetFileNameWithoutExtension(templatePath));
+        Audit.Write(null, template.TableName, "列印", string.Join(" ; ", rows.Select(r => Audit.KeyText(template.KeyColumns.Select(k => new KeyValuePair<string, object>(k, r[k]))))), title);
+        using var doc = CreateDocument(template, rows, title);
+        ShowPreview(doc, owner, title);
     }
 
     /// <summary>依主鍵讀出每一筆要印的資料（含 JOIN 進來的欄位）</summary>

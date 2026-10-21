@@ -13,6 +13,10 @@ public interface IRecordNavigator
     DataRow CurrentRow { get; }
     /// <summary>有主鍵才能修改、刪除</summary>
     bool CanModify { get; }
+    /// <summary>有新增、刪除、列印權限（登入時依角色權限）</summary>
+    bool CanInsert { get; }
+    bool CanDelete { get; }
+    bool CanPrint { get; }
     void MoveTo(int index);
     /// <summary>重讀目前這筆；已被刪除時回傳 false</summary>
     bool Refresh();
@@ -156,8 +160,9 @@ public partial class RecordNavigatorDialog : Form
         mode = newMode;
         bool browsing = mode == EditMode.Browse;
         bool hasRow = nav.CurrentRow != null;
-        btnInsert.Enabled = browsing;
-        btnModify.Enabled = btnDelete.Enabled = browsing && hasRow && nav.CanModify;
+        btnInsert.Enabled = browsing && nav.CanInsert;
+        btnModify.Enabled = browsing && hasRow && nav.CanModify;
+        btnDelete.Enabled = browsing && hasRow && nav.CanDelete;
         btnFirst.Enabled = btnPrevious.Enabled = browsing && nav.Current > 0;
         btnNext.Enabled = btnLast.Enabled = browsing && hasRow && nav.Current < nav.Count - 1;
         btnOk.Enabled = btnCancel.Enabled = !browsing;
@@ -167,7 +172,7 @@ public partial class RecordNavigatorDialog : Form
         btnEffective.Visible = effectiveColumn != null && !effective;
         btnUneffective.Visible = effectiveColumn != null && effective;
         btnEffective.Enabled = btnUneffective.Enabled = browsing && hasRow && nav.CanModify;
-        btnPrint.Enabled = browsing && hasRow && (effectiveColumn == null || effective);
+        btnPrint.Enabled = browsing && hasRow && nav.CanPrint && (effectiveColumn == null || effective);
         AcceptButton = browsing ? null : btnOk;          // 輸入中按 Enter = 確定
 
         foreach (var f in fields)
@@ -213,8 +218,9 @@ public partial class RecordNavigatorDialog : Form
         ButtonAction.確定 => btnOk.Enabled,
         ButtonAction.取消 => btnCancel.Enabled,
         ButtonAction.離開 => btnClose.Enabled,
-        ButtonAction.執行SQL or ButtonAction.開啟畫面 => mode == EditMode.Browse,
-        ButtonAction.列印報表 => mode == EditMode.Browse && nav.CurrentRow != null,
+        ButtonAction.執行SQL => mode == EditMode.Browse && nav.CanModify,
+        ButtonAction.開啟畫面 => mode == EditMode.Browse,
+        ButtonAction.列印報表 => mode == EditMode.Browse && nav.CurrentRow != null && nav.CanPrint,
         _ => false,
     };
 

@@ -17,14 +17,14 @@ public static class ButtonRunner
     /// 執行按鈕設定的 SQL（同一個交易，失敗全部還原）。
     /// @欄位名稱 的值由 valueOf 提供（回傳 null = NULL；格式不對時丟 FormatException）
     /// </summary>
-    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf) =>
-        RunSql(b, connectionString, new[] { valueOf });
+    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf, string formKey = null) =>
+        RunSql(b, connectionString, new[] { valueOf }, formKey);
 
     /// <summary>
     /// 對多筆資料各執行一次按鈕設定的 SQL（清單多選時），全部在同一個交易裡，任何一筆失敗就全部還原；
     /// rows 的每一個元素提供那一筆的 @欄位名稱 值
     /// </summary>
-    public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows)
+    public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows, string formKey = null)
     {
         if (string.IsNullOrWhiteSpace(b.Sql))
         {
@@ -48,6 +48,7 @@ public static class ButtonRunner
                 affected += Math.Max(0, cmd.ExecuteNonQuery());
             }
             tran.Commit();
+            Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = b.Sql, 筆數 = rows.Count, 影響 = affected });
             MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
         }
@@ -108,16 +109,15 @@ public static class ButtonRunner
             MessageBox.Show($"按鈕「{b.Text}」還沒有設定要開啟的畫面定義檔。", "提醒");
             return;
         }
-        string path = b.TargetForm;
-        if (!Path.IsPathRooted(path))
-        {
-            string folder = sourcePath != null ? Path.GetDirectoryName(sourcePath) : FormDefinition.DefaultFolder;
-            path = Path.Combine(folder, path);
-            if (!File.Exists(path) && !path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) path += ".json";
-        }
         try
         {
-            var target = FormDefinition.Load(path);
+            // 登入時從系統資料庫讀已發布的畫面（看檔名），沒登入從檔案讀
+            var target = FormStore.LoadForm(b.TargetForm, FolderOf(sourcePath));
+            if (!SysContext.PermissionFor(target.FormKey).Open)
+            {
+                MessageBox.Show($"你沒有開啟「{target.Title}」的權限，請洽系統管理者。", "提醒");
+                return;
+            }
             var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, source) in ParsePairs(b.OpenParams))
                 parameters[name] = source.StartsWith('@') ? valueOf?.Invoke(source[1..]) ?? DBNull.Value : source;
@@ -167,7 +167,17 @@ public static class ButtonRunner
             MessageBox.Show($"按鈕「{b.Text}」還沒有設計列印樣板：請在設計畫面雙擊這個按鈕，設計好後儲存。", "列印");
             return;
         }
-        PrintRunner.Preview(ResolvePath(b.PrintTemplate, FolderOf(sourcePath)), connectionString, records, owner);
+        PrintTemplate template;
+        try
+        {
+            template = FormStore.LoadTemplate(b.PrintTemplate, FolderOf(sourcePath));     // 登入時從系統資料庫讀
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message + Environment.NewLine + "請先在設計畫面雙擊這個按鈕，設計並儲存列印樣板。", "列印");
+            return;
+        }
+        PrintRunner.Preview(template, Path.GetFileNameWithoutExtension(b.PrintTemplate).Replace(".print", ""), connectionString, records, owner);
     }
 
     /// <summary>按鈕所在範圍（算視窗大小用）</summary>

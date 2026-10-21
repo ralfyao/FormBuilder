@@ -129,10 +129,15 @@ public class FormDefinition
             .DistinctBy(k => k.Column, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    /// <summary>畫面代號（定義檔的檔名，不含副檔名）：權限、選單、稽核紀錄用；從系統資料庫讀的是發布時的代號</summary>
+    [Browsable(false), JsonIgnore]
+    public string FormKey { get; set; }
+
     public static FormDefinition Load(string path)
     {
         var def = JsonSerializer.Deserialize<FormDefinition>(File.ReadAllText(path), JsonOptions);
         def.SourcePath = Path.GetFullPath(path);
+        def.FormKey = Path.GetFileNameWithoutExtension(path);
         return def;
     }
 
