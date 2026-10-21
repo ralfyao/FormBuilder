@@ -44,7 +44,17 @@ public partial class MainMenuForm : Form
             }
         };
 
-        miDesigner.Click += (s, e) => new DesignerForm().Show();
+        miDesigner.Click += (s, e) => OpenDesigner();
+        // 管理者：選單上按右鍵 → 開啟 / 設計這個畫面
+        if (user.IsAdmin)
+        {
+            var nodeMenu = new ContextMenuStrip();
+            nodeMenu.Items.Add("開啟", null, (s, e) => OpenSelected());
+            nodeMenu.Items.Add("設計這個畫面", null, (s, e) => OpenDesigner());
+            nodeMenu.Opening += (s, e) => e.Cancel = treeMenu.SelectedNode?.Tag is not MenuNode { IsFolder: false };
+            treeMenu.NodeMouseClick += (s, e) => { if (e.Button == MouseButtons.Right) treeMenu.SelectedNode = e.Node; };
+            treeMenu.ContextMenuStrip = nodeMenu;
+        }
         miUsers.Click += (s, e) => { using var dlg = new UserAdminForm(); dlg.ShowDialog(this); };
         miMenuEditor.Click += (s, e) => { using var dlg = new MenuEditorForm(); if (dlg.ShowDialog(this) == DialogResult.OK) LoadMenu(); };
         miAudit.Click += (s, e) => new AuditLogForm().Show(this);
@@ -103,6 +113,28 @@ public partial class MainMenuForm : Form
         finally
         {
             treeMenu.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// 系統管理 → 畫面設計：選單上選的是畫面時，直接打開那個畫面的設計（讀本機上次編輯的 json，沒有就讀已發布的版本）；
+    /// 沒選畫面就開空白的設計器
+    /// </summary>
+    private void OpenDesigner()
+    {
+        var designer = new DesignerForm();
+        designer.Show();
+        if (treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false } node)
+        {
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                designer.OpenForEditing(node.FormKey);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
         }
     }
 

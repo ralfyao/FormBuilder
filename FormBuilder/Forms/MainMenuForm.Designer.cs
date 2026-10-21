@@ -83,7 +83,7 @@ namespace FormBuilder
             // miDesigner
             //
             this.miDesigner.Name = "miDesigner";
-            this.miDesigner.Text = "畫面設計（設計完用「檔案 → 發布到系統」）";
+            this.miDesigner.Text = "畫面設計（先選選單上的畫面就直接開啟它；設計完用「檔案 → 發布到系統」）";
             //
             // miUsers
             //
