@@ -355,6 +355,28 @@ public class GridDefinition
     [Browsable(false)]
     public string EditBackColorHtml { get; set; }
 
+    /// <summary>編輯視窗的字型、字型大小（版面設計器的「字型」）；空白 / 0 = 跟畫面一樣</summary>
+    [Browsable(false)]
+    public string EditFontName { get; set; }
+
+    [Browsable(false)]
+    public float EditFontSize { get; set; }
+
+    /// <summary>編輯視窗用的字型：有設定就用設定的，沒有就用 fallback（畫面的字型）</summary>
+    public Font EditFont(Font fallback)
+    {
+        if (string.IsNullOrWhiteSpace(EditFontName) && EditFontSize <= 0) return fallback;
+        try
+        {
+            var family = string.IsNullOrWhiteSpace(EditFontName) ? fallback.FontFamily : new FontFamily(EditFontName.Trim());
+            return new Font(family, EditFontSize > 0 ? Math.Clamp(EditFontSize, 6, 72) : fallback.Size, fallback.Style);
+        }
+        catch (ArgumentException)
+        {
+            return fallback;
+        }
+    }
+
     [Browsable(false), JsonIgnore]
     public Color EditBackColor
     {

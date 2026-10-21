@@ -43,11 +43,21 @@ public partial class EditLayoutDialog : Form
         foreach (var box in canvas.Controls.OfType<FieldBox>()) box.RefreshFromModel();       // 標籤顏色跟著底色
     }
 
-    public EditLayoutDialog(GridDefinition gridDefinition, string connectionString = null)
+    /// <summary>「檔案 → 儲存」：存檔整個畫面定義檔（由設計畫面提供）；null = 不能存檔</summary>
+    private readonly Action saveForm;
+    /// <summary>畫面的字型（編輯視窗沒設定字型時跟它一樣）</summary>
+    private readonly Font screenFont;
+    /// <summary>編輯視窗的字型設定（按「確定」或「儲存」才寫回 grid）</summary>
+    private string editFontName;
+    private float editFontSize;
+
+    public EditLayoutDialog(GridDefinition gridDefinition, string connectionString = null, Action saveForm = null, Font screenFont = null)
     {
         InitializeComponent();
         grid = gridDefinition;
         this.connectionString = connectionString;
+        this.saveForm = saveForm;
+        this.screenFont = screenFont ?? Font;
         Text = $"編輯視窗版面：{grid.Title ?? grid.TableName}";
 
         // ---- 版面上方：編輯視窗工具列的「生效 / 取消生效」要用哪個欄位 ----
@@ -126,8 +136,36 @@ public partial class EditLayoutDialog : Form
         canvas.Paint += (s, e) =>                          // 右下角畫出可拖曳的格紋
             ControlPaint.DrawSizeGrip(e.Graphics, canvas.BackColor, canvas.ClientSize.Width - 16, canvas.ClientSize.Height - 16, 16, 16);
 
-        // 版面上方的對齊工具列
-        AlignHelper.AddAlignButtons(alignBar, () => selection.ToList(), UpdateCanvasSize);
+        // ---- 檔案選單：儲存（寫回版面並存檔整個畫面定義檔）----
+        miSave.Enabled = miSaveClose.Enabled = saveForm != null;
+        if (saveForm == null) miSave.ToolTipText = miSaveClose.ToolTipText = "從設計畫面開啟時才能存檔";
+        miSave.Click += (s, e) => SaveLayout(close: false);
+        miSaveClose.Click += (s, e) => SaveLayout(close: true);
+
+        // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
+        miUndo.Click += (s, e) => history.Undo();
+        miRedo.Click += (s, e) => history.Redo();
+        miRemove.Click += (s, e) => RemoveSelected();
+        miArrange.Click += (s, e) => ArrangeAll();
+        AlignHelper.AddAlignMenu(btnEditMenu.DropDownItems, () => selection.ToList(), UpdateCanvasSize);
+
+        // ---- 字型：編輯視窗的字型與大小（沒設定 = 跟畫面一樣）----
+        editFontName = grid.EditFontName;
+        editFontSize = grid.EditFontSize;
+        miPickFont.Click += (s, e) =>
+        {
+            using var dlg = new FontDialog { Font = canvas.Font, ShowEffects = false, FontMustExist = true };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            editFontName = dlg.Font.FontFamily.Name;
+            editFontSize = (float)Math.Round(dlg.Font.SizeInPoints, 1);
+            ApplyEditFont();
+        };
+        miResetFont.Click += (s, e) =>
+        {
+            editFontName = null;
+            editFontSize = 0;
+            ApplyEditFont();
+        };
 
         // 右邊屬性面板：點選欄位後修改標籤、提示文字（placeholder）、寬度、位置
         propertyGrid.PropertyValueChanged += (s, e) =>
@@ -142,6 +180,8 @@ public partial class EditLayoutDialog : Form
         btnOk.Click += (s, e) => Apply();
 
         // 目前的版面（還沒設計過就先排成一欄）
+        canvas.Font = CurrentEditFont();                                       // 先設字型，欄位示意才會照字型排
+        UpdateFontButton();
         backColor = grid.EditBackColor;
         canvas.BackColor = ColorText.BackOrDefault(backColor);                 // 先設底色，欄位標籤才會依底色決定文字顏色
         grid.EnsureEditLayout();
@@ -604,12 +644,43 @@ public partial class EditLayoutDialog : Form
             item.Checked = string.Equals(item.Tag as string, column?.Column, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>編輯視窗目前的字型（設定的字型；沒設定就跟畫面一樣）</summary>
+    private Font CurrentEditFont() =>
+        new GridDefinition { EditFontName = editFontName, EditFontSize = editFontSize }.EditFont(screenFont);
+
+    private void ApplyEditFont()
+    {
+        canvas.Font = CurrentEditFont();
+        foreach (var box in canvas.Controls.OfType<DesignBox>()) box.RefreshFromModel();   // 欄位示意的標籤高度跟著字型
+        UpdateFontButton();
+        UpdateCanvasSize();
+    }
+
+    /// <summary>「字型」按鈕顯示目前的設定（沒設定時只顯示「字型」）</summary>
+    private void UpdateFontButton() =>
+        btnFont.Text = string.IsNullOrWhiteSpace(editFontName) && editFontSize <= 0 ? "字型" : $"字型：{canvas.Font.Name} {canvas.Font.SizeInPoints:0.#}";
+
+    /// <summary>檔案 → 儲存：版面寫回 Grid，再存檔整個畫面定義檔；close = 存完關閉視窗</summary>
+    private void SaveLayout(bool close)
+    {
+        if (saveForm == null || !WriteBack()) return;
+        saveForm();
+        if (close) DialogResult = DialogResult.OK;
+        else lblHint.Text = $"  已儲存（{DateTime.Now:HH:mm:ss}）";
+    }
+
     private void Apply()
+    {
+        if (WriteBack()) DialogResult = DialogResult.OK;
+    }
+
+    /// <summary>把目前的版面寫回 GridDefinition；版面上沒有欄位時不寫，回傳 false</summary>
+    private bool WriteBack()
     {
         if (placed.Count == 0)
         {
             MessageBox.Show("編輯視窗至少要有一個欄位。", "提醒");
-            return;
+            return false;
         }
         foreach (var c in grid.Columns)
         {
@@ -648,7 +719,9 @@ public partial class EditLayoutDialog : Form
         grid.EditFormHeight = formSize.Height;
         grid.EffectiveColumn = string.IsNullOrEmpty(effectiveColumn) ? null : effectiveColumn;
         grid.EditBackColor = backColor;
-        DialogResult = DialogResult.OK;
+        grid.EditFontName = string.IsNullOrWhiteSpace(editFontName) ? null : editFontName;
+        grid.EditFontSize = editFontSize;
+        return true;
     }
 }
 

@@ -558,7 +558,8 @@ public partial class DesignerForm : Form
         }
         var masterColumns = def.Fields.Select(f => f.Column)
             .Concat(defTableColumns.Select(c => c.Name)).Distinct().ToList();
-        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString);
+        // 版面設計器的「檔案 → 儲存」直接存這個畫面定義檔；畫面字型給版面設計器預覽用
+        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString, saveForm: () => SaveForm(false), screenFont: def.ScreenFont(Font));
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         box.RefreshFromModel();
         propertyGrid.Refresh();

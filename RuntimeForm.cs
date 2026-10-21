@@ -944,7 +944,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var keyColumns = def.MasterKeys.Select(k => k.Column).ToList();
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
         using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
-                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, body.Font);
+                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font));
         dlg.ShowDialog(this);
     }
 
@@ -992,7 +992,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column) || (c.IsKey && !keyEditable)))
             .ToList();
         using var dlg = new RecordEditDialog($"{(inDetailMode ? "編輯" : "修改")}明細：{gridDef.Title ?? gridDef.TableName}", fields, col => row[col],
-                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, body.Font);
+                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, gridDef.EditFont(body.Font));
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Values.Count == 0) return;
 
         if (inDetailMode)

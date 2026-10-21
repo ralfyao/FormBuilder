@@ -20,7 +20,10 @@ public partial class GridColumnsDialog : Form
 
     /// <param name="connectionString">「JOIN 其他資料表」、「編輯視窗版面」設計器的「資料表」頁籤要用的連線字串</param>
     /// <param name="forEditList">true = 設定編輯視窗上的明細清單（沒有「編輯視窗版面」按鈕）</param>
-    public GridColumnsDialog(GridDefinition gridDefinition, List<string> masterColumns, string connectionString = null, bool forEditList = false)
+    /// <param name="saveForm">編輯視窗版面設計器「檔案 → 儲存」要呼叫的存檔動作；null = 不能存檔</param>
+    /// <param name="screenFont">畫面的字型（編輯視窗沒設定字型時跟它一樣）</param>
+    public GridColumnsDialog(GridDefinition gridDefinition, List<string> masterColumns, string connectionString = null, bool forEditList = false,
+                             Action saveForm = null, Font screenFont = null)
     {
         InitializeComponent();
         grid = gridDefinition;
@@ -92,7 +95,7 @@ public partial class GridColumnsDialog : Form
         btnLayout.Click += (s, e) =>
         {
             // 版面設計器有自己的確定 / 取消，確定後版面就存在 Grid 上
-            using var layout = new EditLayoutDialog(grid, connectionString);
+            using var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont);
             layout.ShowDialog(this);
         };
         btnOk.Click += (s, e) => Apply();

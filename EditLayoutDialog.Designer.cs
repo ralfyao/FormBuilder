@@ -31,8 +31,21 @@ namespace FormBuilder
             this.center = new System.Windows.Forms.Panel();
             this.canvasHost = new System.Windows.Forms.Panel();
             this.canvas = new System.Windows.Forms.Panel();
-            this.alignBar = new System.Windows.Forms.ToolStrip();
             this.effectBar = new System.Windows.Forms.ToolStrip();
+            this.btnFileMenu = new System.Windows.Forms.ToolStripDropDownButton();
+            this.miSave = new System.Windows.Forms.ToolStripMenuItem();
+            this.miSaveClose = new System.Windows.Forms.ToolStripMenuItem();
+            this.btnEditMenu = new System.Windows.Forms.ToolStripDropDownButton();
+            this.miUndo = new System.Windows.Forms.ToolStripMenuItem();
+            this.miRedo = new System.Windows.Forms.ToolStripMenuItem();
+            this.miRemove = new System.Windows.Forms.ToolStripMenuItem();
+            this.miArrange = new System.Windows.Forms.ToolStripMenuItem();
+            this.sepEditAlign = new System.Windows.Forms.ToolStripSeparator();
+            this.sepMenus = new System.Windows.Forms.ToolStripSeparator();
+            this.btnFont = new System.Windows.Forms.ToolStripDropDownButton();
+            this.miPickFont = new System.Windows.Forms.ToolStripMenuItem();
+            this.miResetFont = new System.Windows.Forms.ToolStripMenuItem();
+            this.lblSnapHint = new System.Windows.Forms.ToolStripLabel();
             this.lblEffectCaption = new System.Windows.Forms.ToolStripLabel();
             this.btnEffectiveColumn = new System.Windows.Forms.ToolStripDropDownButton();
             this.lblPrintHint = new System.Windows.Forms.ToolStripLabel();
@@ -74,7 +87,6 @@ namespace FormBuilder
             // center
             //
             this.center.Controls.Add(this.canvasHost);
-            this.center.Controls.Add(this.alignBar);
             this.center.Controls.Add(this.effectBar);
             this.center.Dock = System.Windows.Forms.DockStyle.Fill;
             this.center.Location = new System.Drawing.Point(220, 0);
@@ -103,26 +115,113 @@ namespace FormBuilder
             this.canvas.Size = new System.Drawing.Size(500, 300);
             this.canvas.TabIndex = 0;
             //
-            // alignBar
-            //
-            this.alignBar.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
-            this.alignBar.Location = new System.Drawing.Point(0, 0);
-            this.alignBar.Name = "alignBar";
-            this.alignBar.Size = new System.Drawing.Size(564, 25);
-            this.alignBar.TabIndex = 1;
-            //
             // effectBar
             //
             this.effectBar.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this.effectBar.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.btnFileMenu,
+            this.btnEditMenu,
+            this.sepMenus,
             this.lblEffectCaption,
             this.btnEffectiveColumn,
             this.lblPrintHint,
-            this.btnBackColor});
+            this.btnBackColor,
+            this.btnFont,
+            this.lblSnapHint});
             this.effectBar.Location = new System.Drawing.Point(0, 0);
             this.effectBar.Name = "effectBar";
             this.effectBar.Size = new System.Drawing.Size(564, 25);
             this.effectBar.TabIndex = 2;
+            //
+            // btnFileMenu
+            //
+            this.btnFileMenu.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnFileMenu.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.miSave,
+            this.miSaveClose});
+            this.btnFileMenu.Name = "btnFileMenu";
+            this.btnFileMenu.Text = "檔案";
+            //
+            // miSave
+            //
+            this.miSave.Name = "miSave";
+            this.miSave.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.S;
+            this.miSave.Text = "儲存";
+            this.miSave.ToolTipText = "把目前的版面寫回，並存檔整個畫面定義檔（視窗不關閉）";
+            //
+            // miSaveClose
+            //
+            this.miSaveClose.Name = "miSaveClose";
+            this.miSaveClose.Text = "儲存並關閉";
+            //
+            // btnEditMenu（水平 / 垂直 / 大小的對齊選單由 AlignHelper.AddAlignMenu 在執行時加入）
+            //
+            this.btnEditMenu.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnEditMenu.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.miUndo,
+            this.miRedo,
+            this.miRemove,
+            this.miArrange,
+            this.sepEditAlign});
+            this.btnEditMenu.Name = "btnEditMenu";
+            this.btnEditMenu.Text = "編輯";
+            //
+            // miUndo
+            //
+            this.miUndo.Name = "miUndo";
+            this.miUndo.ShortcutKeyDisplayString = "Ctrl+Z";
+            this.miUndo.Text = "復原";
+            //
+            // miRedo
+            //
+            this.miRedo.Name = "miRedo";
+            this.miRedo.ShortcutKeyDisplayString = "Ctrl+Y";
+            this.miRedo.Text = "取消復原";
+            //
+            // miRemove
+            //
+            this.miRemove.Name = "miRemove";
+            this.miRemove.ShortcutKeyDisplayString = "Delete";
+            this.miRemove.Text = "刪除選取的元件";
+            //
+            // miArrange
+            //
+            this.miArrange.Name = "miArrange";
+            this.miArrange.Text = "重新排列成一欄";
+            //
+            // sepEditAlign
+            //
+            this.sepEditAlign.Name = "sepEditAlign";
+            //
+            // sepMenus
+            //
+            this.sepMenus.Name = "sepMenus";
+            //
+            // btnFont
+            //
+            this.btnFont.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.btnFont.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.miPickFont,
+            this.miResetFont});
+            this.btnFont.Name = "btnFont";
+            this.btnFont.Text = "字型";
+            this.btnFont.ToolTipText = "編輯視窗的字型與字型大小";
+            //
+            // miPickFont
+            //
+            this.miPickFont.Name = "miPickFont";
+            this.miPickFont.Text = "選擇字型…";
+            //
+            // miResetFont
+            //
+            this.miResetFont.Name = "miResetFont";
+            this.miResetFont.Text = "還原預設（跟畫面一樣）";
+            //
+            // lblSnapHint
+            //
+            this.lblSnapHint.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblSnapHint.Name = "lblSnapHint";
+            this.lblSnapHint.Text = "　拖曳時靠近其他欄位會自動貼齊（按住 Alt 不貼齊）";
             //
             // lblEffectCaption
             //
@@ -376,7 +475,20 @@ namespace FormBuilder
         private System.Windows.Forms.Panel center;
         private System.Windows.Forms.Panel canvasHost;
         private System.Windows.Forms.Panel canvas;
-        private System.Windows.Forms.ToolStrip alignBar;
+        private System.Windows.Forms.ToolStripDropDownButton btnFileMenu;
+        private System.Windows.Forms.ToolStripMenuItem miSave;
+        private System.Windows.Forms.ToolStripMenuItem miSaveClose;
+        private System.Windows.Forms.ToolStripDropDownButton btnEditMenu;
+        private System.Windows.Forms.ToolStripMenuItem miUndo;
+        private System.Windows.Forms.ToolStripMenuItem miRedo;
+        private System.Windows.Forms.ToolStripMenuItem miRemove;
+        private System.Windows.Forms.ToolStripMenuItem miArrange;
+        private System.Windows.Forms.ToolStripSeparator sepEditAlign;
+        private System.Windows.Forms.ToolStripSeparator sepMenus;
+        private System.Windows.Forms.ToolStripDropDownButton btnFont;
+        private System.Windows.Forms.ToolStripMenuItem miPickFont;
+        private System.Windows.Forms.ToolStripMenuItem miResetFont;
+        private System.Windows.Forms.ToolStripLabel lblSnapHint;
         private System.Windows.Forms.ToolStrip effectBar;
         private System.Windows.Forms.ToolStripLabel lblEffectCaption;
         private System.Windows.Forms.ToolStripDropDownButton btnEffectiveColumn;
