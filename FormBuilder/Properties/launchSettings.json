@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "ERP Studio（登入 → 主選單）": {
+      "commandName": "Project"
+    },
+    "畫面設計（開發用，不登入）": {
+      "commandName": "Project",
+      "commandLineArgs": "--designer"
+    }
+  }
+}

@@ -41,6 +41,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private readonly Dictionary<string, object> openParams;
     /// <summary>選取視窗模式下使用者選的那筆</summary>
     public DataRow PickedRow { get; private set; }
+    /// <summary>目前使用者對這個畫面的權限（沒登入 = 全開）</summary>
+    private FormPermission perm = FormPermission.All;
 
     public RuntimeForm(FormDefinition definition) : this(definition, null, false) { }
 
@@ -50,6 +52,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         this.pickMode = pickMode;
         openParams = parameters == null ? new(StringComparer.OrdinalIgnoreCase) : new(parameters, StringComparer.OrdinalIgnoreCase);
         def = definition;
+        perm = SysContext.PermissionFor(def.FormKey);                        // 登入時依角色權限；沒登入 = 全開
         Text = def.Title;
 
         // 工具列按鈕在 Designer.cs
@@ -213,10 +216,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (mode != Mode.Query) customQuery = null;
         bool browsing = mode == Mode.Browse;
         btnQuery.Enabled = browsing;
-        btnInsert.Enabled = browsing;
-        btnModify.Enabled = browsing && HasCurrent && HasKey;
-        btnDelete.Enabled = browsing && HasCurrent && HasKey;
-        btnDetail.Enabled = browsing && HasCurrent && gridDef != null;
+        // 權限：沒有新增 / 修改 / 刪除權限的按鈕不能按（單身輸入算修改）
+        btnInsert.Enabled = browsing && perm.Insert;
+        btnModify.Enabled = browsing && HasCurrent && HasKey && perm.Modify;
+        btnDelete.Enabled = browsing && HasCurrent && HasKey && perm.Delete;
+        btnDetail.Enabled = browsing && HasCurrent && gridDef != null && perm.Modify;
         if (listGrid != null) listGrid.Enabled = browsing;        // 輸入中不能切換單頭
         if (detailGrid != null)
         {
@@ -490,6 +494,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.單身 => btnDetail.Enabled,
         ButtonAction.離開 => btnExit.Enabled,
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
+        ButtonAction.執行SQL => mode == Mode.Browse && perm.Modify,
+        ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
         _ => mode == Mode.Browse,
     };
 
@@ -539,7 +545,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return openParams.TryGetValue(name, out var param) ? param : null;    // 別的畫面開啟時傳進來的參數
         };
         var valueOfs = rows.Count > 0 ? rows.Select(r => ValueOf(r)).ToList() : new List<Func<string, object>> { ValueOf(null) };
-        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs);
+        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey);
         // 資料可能被 SQL 改過，重讀執行過的那幾筆
         if (ok && HasKey && rows.Count > 0)
         {
@@ -618,6 +624,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             ShowCurrent();
             SetMode(Mode.Browse);
+            Audit.Write(def.FormKey, def.TableName, "新增", HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null,
+                        values.ToDictionary(v => v.Key, v => Audit.Format(v.Value)));
             MessageBox.Show("新增完成。", "新增");
             return true;
         }
@@ -646,6 +654,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         try
         {
+            // 稽核紀錄要記修改前的值
+            DataRow before = null;
+            if (HasCurrent)
+            {
+                var copy = results.Clone();
+                copy.ImportRow(results.Rows[current]);
+                before = copy.Rows[0];
+            }
+            string keyText = HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null;
             using var conn = Dialect.Open(def.ConnectionString);
             using var cmd = Dialect.CreateCommand(conn);
             var list = values.ToList();
@@ -658,6 +675,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 MessageBox.Show("找不到原本的資料，可能已被其他人刪除。", "修改");
                 return false;
             }
+            // 生效 / 取消生效也走這裡（doneMessage 是「已生效。」之類）
+            string action = doneMessage == "修改完成。" ? "修改" : doneMessage.TrimEnd('。').Replace("已", "");
+            Audit.Write(def.FormKey, def.TableName, action, keyText, Audit.Changes(before, values));
             RefreshCurrentRow();
             ShowCurrent();
             SetMode(Mode.Browse);
@@ -693,6 +713,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             cmd.CommandText = $"DELETE FROM {def.FullTableName} WHERE " + AddKeyCondition(cmd, CurrentKey());
             int rows = cmd.ExecuteNonQuery();
             tran.Commit();
+            Audit.Write(def.FormKey, def.TableName, "刪除", Audit.KeyText(CurrentKey()), withDetail ? "連同單身明細" : null);
             RemoveCurrentRow();
             MessageBox.Show(rows > 0 ? "已刪除。" : "找不到這筆資料，可能已被其他人刪除。", "刪除");
             return true;
@@ -977,6 +998,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 cmd.ExecuteNonQuery();
             }
             tran.Commit();
+            Audit.Write(def.FormKey, gridDef.TableName, "單身存檔", HasKey ? Audit.KeyText(CurrentKey()) : null, new
+            {
+                新增 = changed.Count(r => r.RowState == DataRowState.Added),
+                修改 = changed.Count(r => r.RowState == DataRowState.Modified),
+                刪除 = changed.Count(r => r.RowState == DataRowState.Deleted),
+            });
         }
         catch (Exception ex)
         {
@@ -1052,7 +1079,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
     int IRecordNavigator.Count => results.Rows.Count;
     int IRecordNavigator.Current => current;
     DataRow IRecordNavigator.CurrentRow => HasCurrent ? results.Rows[current] : null;
-    bool IRecordNavigator.CanModify => HasKey;
+    bool IRecordNavigator.CanModify => HasKey && perm.Modify;
+    bool IRecordNavigator.CanInsert => perm.Insert;
+    bool IRecordNavigator.CanDelete => HasKey && perm.Delete;
+    bool IRecordNavigator.CanPrint => perm.Print;
     void IRecordNavigator.MoveTo(int index) => MoveTo(index);
     bool IRecordNavigator.Refresh()
     {
@@ -1078,6 +1108,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         DataRow row = view.Row;
         bool inDetailMode = mode == Mode.Detail;
         if (!inDetailMode && mode != Mode.Browse) return;
+        if (!inDetailMode && !perm.Modify)
+        {
+            MessageBox.Show("你沒有修改這個畫面的權限。", "提醒");
+            return;
+        }
         var keys = gridDef.KeyColumns;
         if (!inDetailMode && keys.Count == 0)
         {
@@ -1119,7 +1154,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (cmd.ExecuteNonQuery() == 0)
                 MessageBox.Show("找不到原本的明細，可能已被其他人刪除。", "修改");
             else
+            {
+                Audit.Write(def.FormKey, gridDef.TableName, "修改明細",
+                            Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Column, row[k.Column]))), Audit.Changes(row, dlg.Values));
                 MessageBox.Show("明細修改完成。", "修改");
+            }
         }
         catch (Exception ex)
         {
@@ -1184,9 +1223,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             miDelete.Text = n > 1 ? $"刪除選取的 {n} 筆資料" : "刪除選取的資料";
             miEffective.Text = n > 1 ? $"選取的 {n} 筆生效" : "生效";
             miUneffective.Text = n > 1 ? $"選取的 {n} 筆取消生效" : "取消生效";
-            miDelete.Enabled = canEdit;
+            miDelete.Enabled = canEdit && perm.Delete;
             miEffective.Visible = miUneffective.Visible = effective;
-            miEffective.Enabled = miUneffective.Enabled = canEdit;
+            miEffective.Enabled = miUneffective.Enabled = canEdit && perm.Modify;
             miSelectAll.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
         };
         miDelete.Click += (s, e) => DeleteSelectedRows();
@@ -1204,7 +1243,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         };
         listGrid.KeyDown += (s, e) =>
         {
-            if (e.KeyCode == Keys.Delete && mode == Mode.Browse && HasKey)
+            if (e.KeyCode == Keys.Delete && mode == Mode.Browse && HasKey && perm.Delete)
             {
                 e.Handled = true;
                 DeleteSelectedRows();
@@ -1241,6 +1280,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 deleted += cmd.ExecuteNonQuery();
             }
             tran.Commit();
+            Audit.Write(def.FormKey, def.TableName, "刪除", string.Join(" ; ", rows.Select(r => Audit.KeyText(KeyOf(r)))), $"批次刪除 {rows.Count} 筆");
         }
         catch (Exception ex)
         {
@@ -1276,6 +1316,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 cmd.ExecuteNonQuery();
             }
             tran.Commit();
+            Audit.Write(def.FormKey, def.TableName, effective ? "生效" : "取消生效", string.Join(" ; ", rows.Select(r => Audit.KeyText(KeyOf(r)))), $"批次 {rows.Count} 筆");
         }
         catch (Exception ex)
         {

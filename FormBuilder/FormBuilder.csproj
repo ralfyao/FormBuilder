@@ -7,12 +7,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <RootNamespace>FormBuilder</RootNamespace>
+    <!-- 版本：發布新版前改這裡（installer\build-release.ps1 也可以用 -Version 指定），自動更新靠它比對新舊 -->
+    <Version>1.0.0</Version>
+    <Product>ERP Studio</Product>
+    <Company>YJF</Company>
+    <AssemblyTitle>ERP Studio</AssemblyTitle>
   </PropertyGroup>
+
+  <!-- 發布輸出、安裝程式腳本不是程式碼 -->
+  <ItemGroup>
+    <Compile Remove="release\**" />
+    <None Remove="release\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.400" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
 </Project>
