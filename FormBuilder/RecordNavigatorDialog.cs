@@ -214,6 +214,7 @@ public partial class RecordNavigatorDialog : Form
         ButtonAction.取消 => btnCancel.Enabled,
         ButtonAction.離開 => btnClose.Enabled,
         ButtonAction.執行SQL or ButtonAction.開啟畫面 => mode == EditMode.Browse,
+        ButtonAction.列印報表 => mode == EditMode.Browse && nav.CurrentRow != null,
         _ => false,
     };
 
@@ -247,6 +248,17 @@ public partial class RecordNavigatorDialog : Form
                     SetMode(EditMode.Browse);
                 }
                 break;
+            case ButtonAction.列印報表:
+            {
+                // 印目前這筆：欄位值先找視窗上的欄位，沒有就用目前這筆資料
+                DataRow current = nav.CurrentRow;
+                ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[]
+                {
+                    name => current != null && current.Table.Columns.Contains(name) ? current[name]
+                          : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null,
+                }, this);
+                break;
+            }
             case ButtonAction.開啟畫面:
                 // 傳入參數的 @欄位：先找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
                 ButtonRunner.OpenForm(b, sourcePath, this, name =>

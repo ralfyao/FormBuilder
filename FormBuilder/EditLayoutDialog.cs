@@ -318,6 +318,15 @@ public partial class EditLayoutDialog : Form
         box.Resized += (s, e) => UpdateCanvasSize();
         canvas.Controls.Add(box);
         if (box is FieldBox) box.RefreshFromModel();       // 加進版面後才知道底色，標籤文字顏色要重算
+        // 雙擊「列印報表」按鈕：開啟列印樣板設計（資料表、主鍵用這個 Grid 的）
+        if (box is ButtonBox bb)
+            bb.DoubleClick += (s, e) =>
+            {
+                if (bb.ButtonDef.Action != ButtonAction.列印報表) return;
+                if (PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                              grid.KeyColumns.Select(c => c.Column)))
+                    propertyGrid.Refresh();
+            };
     }
 
     // ================= 工具箱 =================

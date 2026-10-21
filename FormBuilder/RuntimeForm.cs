@@ -518,6 +518,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.離開: Close(); break;
             case ButtonAction.執行SQL: RunCustomSql(b); break;
             case ButtonAction.開啟畫面: OpenOtherForm(b); break;
+            case ButtonAction.列印報表: PrintReport(b); break;
         }
     }
 
@@ -545,6 +546,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RefreshRows(rows);
             SetMode(mode);
         }
+    }
+
+    /// <summary>列印報表：印目前這筆；清單選了多筆時每筆一頁</summary>
+    private void PrintReport(ButtonDefinition b)
+    {
+        var rows = SelectedRowIndexes();
+        if (rows.Count == 0 && HasCurrent) rows.Add(current);
+        var records = rows.Select(r => (Func<string, object>)(name =>
+            results.Columns.Contains(name) ? results.Rows[r][name]
+            : def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } field ? GetValue(field) : null)).ToList();
+        ButtonRunner.Print(b, def.SourcePath, def.ConnectionString, records, this);
     }
 
     /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位</summary>
