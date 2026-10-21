@@ -243,6 +243,8 @@ public partial class EditLayoutDialog : Form
             Column = c.Column,
             Label = string.IsNullOrWhiteSpace(c.EditLabel) ? c.Header : c.EditLabel,
             Placeholder = c.EditPlaceholder,
+            FontSize = c.EditFontSize,
+            BackColorHtml = c.EditBackColorHtml,
             LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
             InputType = c.EditInputType,
             Items = c.EditItems,
@@ -631,6 +633,8 @@ public partial class EditLayoutDialog : Form
                 c.EditReadOnly = box.Field.IsReadOnly;
                 c.EditCheckedValue = box.Field.CheckedValue == "1" ? null : box.Field.CheckedValue;
                 c.EditUncheckedValue = box.Field.UncheckedValue == "0" ? null : box.Field.UncheckedValue;
+                c.EditFontSize = box.Field.FontSize;
+                c.EditBackColorHtml = box.Field.BackColorHtml;
             }
             else
             {
@@ -702,6 +706,12 @@ public class EditFieldView
 
     [DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get => field.AllowFreeText; set => field.AllowFreeText = value; }
+
+    [DisplayName("字體大小"), DefaultValue(0f), Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高")]
+    public float FontSize { get => field.FontSize; set => field.FontSize = Math.Clamp(value, 0, 72); }
+
+    [DisplayName("底色"), DefaultValue(typeof(Color), ""), Description("輸入框的底色；沒設定（Empty）就是預設的白底。在屬性上按右鍵選「重設」可以還原")]
+    public Color BackColor { get => field.BackColor; set => field.BackColor = value; }
 
     [DisplayName("X")]
     public int X { get => field.X; set => field.X = Math.Max(0, value); }

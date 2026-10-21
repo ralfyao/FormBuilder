@@ -22,6 +22,7 @@ public partial class DesignerForm : Form
     private const string LoadingNodeText = "載入中…";
 
     private string connectionString;                       // 由「資料庫連線設定」視窗組成
+    private DbKind databaseType;                           // 連線的資料庫類型（SQL Server / Oracle / MySQL）
     private List<(string Schema, string Name)> allTables = new();
 
     public DesignerForm()
@@ -121,7 +122,7 @@ public partial class DesignerForm : Form
             UpdateStatus();
         };
 
-        SetConnection(null);
+        SetConnection(null, DbKind.SqlServer);
         NewForm();
 
         // Ctrl+Z 復原、Ctrl+Y 取消復原：記錄整個畫面定義的快照
@@ -167,15 +168,17 @@ public partial class DesignerForm : Form
     /// <summary>開啟連線設定視窗，輸入伺服器、資料庫、帳號、密碼後連線</summary>
     private void ChooseConnection()
     {
-        using var dlg = new ConnectionDialog(connectionString);
+        using var dlg = new ConnectionDialog(connectionString, databaseType);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        SetConnection(dlg.ConnectionString);
+        SetConnection(dlg.ConnectionString, dlg.DatabaseType);
         Connect();
     }
 
-    private void SetConnection(string value)
+    private void SetConnection(string value, DbKind kind)
     {
         connectionString = value;
+        databaseType = kind;
+        DbDialect.Register(value, kind);
         lblConn.Text = ConnectionDialog.Mask(value);      // 畫面上不顯示密碼
     }
 
@@ -192,6 +195,7 @@ public partial class DesignerForm : Form
             allTables = SchemaReader.GetTables(connectionString);
             columnCache.Clear();                               // 可能換了資料庫，欄位要重讀
             columnGrid.SelectedObject = null;
+            def.DatabaseType = databaseType;
             def.ConnectionString = connectionString;
             FillTableList();
             ReloadDefTableColumns();
@@ -318,6 +322,7 @@ public partial class DesignerForm : Form
             // 第一個放上來的欄位決定這個畫面的單頭資料表
             def.TableSchema = data.Schema;
             def.TableName = data.Table;
+            def.DatabaseType = databaseType;
             def.ConnectionString = connectionString;
             if (def.Title == "新畫面") def.Title = data.Table;
             defTableColumns = (GetColumnsCached(data.Schema, data.Table) ?? new List<ColumnInfo>()).ToList();
@@ -778,7 +783,7 @@ public partial class DesignerForm : Form
 
     private void NewForm()
     {
-        def = new FormDefinition { ConnectionString = connectionString };
+        def = new FormDefinition { DatabaseType = databaseType, ConnectionString = connectionString };
         defTableColumns = new List<ColumnInfo>();
         currentFilePath = null;
         ClearCanvas();
@@ -826,7 +831,7 @@ public partial class DesignerForm : Form
             NewForm();
             def = FormDefinition.Load(dlg.FileName);
             currentFilePath = dlg.FileName;
-            if (!string.IsNullOrWhiteSpace(def.ConnectionString)) SetConnection(def.ConnectionString);
+            if (!string.IsNullOrWhiteSpace(def.ConnectionString)) SetConnection(def.ConnectionString, def.DatabaseType);
             BuildCanvas();
             ReloadDefTableColumns();
             history.Reset();

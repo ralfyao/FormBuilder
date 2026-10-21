@@ -20,6 +20,15 @@ public static class RoundedStyle
     /// <summary>每個父控制項上要畫外框的輸入控制項；Inset = 控制項相對於外框的位置與外框大小</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, List<FramedInput>> framed = new();
 
+    /// <summary>後台設定了底色的輸入控制項（日期選擇的 BackColor 沒有作用，外框底色要另外記）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> fills = new();
+
+    public static void SetFill(Control input, Color color)
+    {
+        fills.Remove(input);
+        if (!color.IsEmpty) fills.Add(input, color);
+    }
+
     private sealed record FramedInput(Control Input, Point Inset, Size FrameSize)
     {
         /// <summary>外框位置跟著控制項目前的位置算（捲動時控制項會移動）</summary>
@@ -70,7 +79,7 @@ public static class RoundedStyle
     {
         switch (input)
         {
-            case TextBox tb when frame.Height > TallThreshold:
+            case TextBox tb when IsTall(frame.Height, tb.Font):
                 // 拉高的文字框：改成多行輸入，填滿整個圓角框（Enter 換行）
                 tb.BorderStyle = BorderStyle.None;
                 tb.Multiline = true;
@@ -121,6 +130,9 @@ public static class RoundedStyle
         if (input is TextBox t) t.ReadOnlyChanged += Redraw;
     }
 
+    /// <summary>外框比單行文字需要的高度還高（至少超過 32）才改成多行輸入；字放大時單行的框也會跟著變高</summary>
+    public static bool IsTall(int frameHeight, Font font) => frameHeight > Math.Max(TallThreshold, font.Height + 14);
+
     /// <summary>用 Region 裁掉控制項自己的邊框（大小改變時重新裁）</summary>
     private static void ClipBorder(Control c, int border)
     {
@@ -138,6 +150,7 @@ public static class RoundedStyle
             if (!input.Visible || input.IsDisposed) continue;
             // 停用 / 唯讀時用灰底，跟控制項本身的底色一致
             Color fill = !input.Enabled ? SystemColors.Control
+                       : fills.TryGetValue(input, out var custom) ? (Color)custom
                        : input is TextBox { ReadOnly: true } tb ? tb.BackColor
                        : input is TextBox ? input.BackColor
                        : SystemColors.Window;
@@ -322,6 +335,9 @@ public class RoundButton : Button
 /// <summary>設計畫面上的輸入框示意：圓角框 + 灰字（外面露出父控制項的底色）</summary>
 public class RoundedInputPreview : Label
 {
+    /// <summary>輸入框底色；Empty = 預設的白底</summary>
+    public Color Fill { get; set; }
+
     public RoundedInputPreview()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -333,9 +349,9 @@ public class RoundedInputPreview : Label
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        RoundedStyle.DrawBox(e.Graphics, ClientRectangle, SystemColors.Window, RoundedStyle.BorderColor);
+        RoundedStyle.DrawBox(e.Graphics, ClientRectangle, Fill.IsEmpty ? SystemColors.Window : Fill, RoundedStyle.BorderColor);
         // 拉高的輸入框跟執行時一樣是多行輸入：文字從左上角開始，可以換行
-        bool tall = Height > RoundedStyle.TallThreshold;
+        bool tall = RoundedStyle.IsTall(Height, Font);
         var textRect = tall ? Rectangle.Inflate(ClientRectangle, -8, -6) : Rectangle.Inflate(ClientRectangle, -8, 0);
         TextRenderer.DrawText(e.Graphics, Text, Font, textRect, ForeColor,
             tall ? TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak

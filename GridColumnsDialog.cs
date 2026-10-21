@@ -48,6 +48,8 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("IsKey", typeof(bool));
         columnTable.Columns.Add("NoEntry", typeof(bool));
         columnTable.Columns.Add("Source", typeof(string));
+        columnTable.Columns.Add("CellType", typeof(string));
+        columnTable.Columns.Add("CellOptions", typeof(string));
         foreach (var c in workColumns) AddColumnRow(c);
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
@@ -105,7 +107,7 @@ public partial class GridColumnsDialog : Form
             var join = workJoins.FirstOrDefault(j => j.Alias == c.JoinAlias);
             source = $"{c.JoinAlias}：{join?.TableName}.{c.SourceColumn}";
         }
-        columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source);
+        columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions);
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -196,6 +198,8 @@ public partial class GridColumnsDialog : Form
             // JOIN 帶進來的欄位一律只顯示、不是主鍵（不能寫回關聯資料表）
             c.IsKey = !c.IsJoin && (bool)row["IsKey"];
             c.NoEntry = c.IsJoin || (bool)row["NoEntry"];
+            c.CellType = Enum.TryParse<GridCellKind>(Convert.ToString(row["CellType"]), out var kind) ? kind : GridCellKind.自動;
+            c.CellOptions = string.IsNullOrWhiteSpace(Convert.ToString(row["CellOptions"])) ? null : Convert.ToString(row["CellOptions"]).Trim();
         }
         // 已經設計過編輯視窗版面時，新帶進來的欄位預設不放進編輯視窗（不然會全部疊在左上角），要用的話到版面設計器拖進去
         if (grid.HasEditLayout)

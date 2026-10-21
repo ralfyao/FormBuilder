@@ -64,7 +64,7 @@ public partial class RecordEditDialog : Form
         foreach (var l in lists ?? new List<EditListDefinition>())
         {
             var view = new EditListView(l, connectionString);
-            body.Controls.Add(view.Grid);
+            body.Controls.Add(view.Host);                   // 圓角外框
             view.Reload(currentValue);
         }
         var content = bodySize ?? InputHelper.ContentSize(fields, 360);

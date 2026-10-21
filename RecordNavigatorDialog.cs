@@ -89,7 +89,7 @@ public partial class RecordNavigatorDialog : Form
         {
             var view = new EditListView(l, connectionString);
             listViews.Add(view);
-            body.Controls.Add(view.Grid);
+            body.Controls.Add(view.Host);                   // 圓角外框
         }
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());

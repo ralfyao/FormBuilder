@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace FormBuilder;
 
-/// <summary>主鍵欄位：欄位名稱，以及是否為自動編號（新增後要用 SCOPE_IDENTITY 取回）</summary>
+/// <summary>主鍵欄位：欄位名稱，以及是否為自動編號（新增後要取回資料庫產生的值）</summary>
 public record KeyColumn(string Column, bool IsIdentity);
 
 /// <summary>一個畫面的定義：對應一個資料表，存成 JSON 檔（類似 4GL 的 .per）</summary>
@@ -42,8 +42,34 @@ public class FormDefinition
         set => BackColorHtml = ColorText.Format(value);
     }
 
+    private string connectionString;
+    private DbKind databaseType;
+
+    [Category("資料"), DisplayName("資料庫類型"), ReadOnly(true), JsonConverter(typeof(JsonStringEnumConverter))]
+    public DbKind DatabaseType
+    {
+        get => databaseType;
+        set
+        {
+            databaseType = value;
+            DbDialect.Register(connectionString, value);
+        }
+    }
+
     [Category("資料"), DisplayName("連線字串"), ReadOnly(true)]
-    public string ConnectionString { get; set; }
+    public string ConnectionString
+    {
+        get => connectionString;
+        set
+        {
+            connectionString = value;
+            DbDialect.Register(value, databaseType);      // 其他地方只拿到連線字串，靠登記查出是哪種資料庫
+        }
+    }
+
+    /// <summary>這個畫面連的資料庫的 SQL 方言</summary>
+    [Browsable(false), JsonIgnore]
+    public DbDialect Dialect => DbDialect.For(DatabaseType);
 
     [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
     public string TableSchema { get; set; }
@@ -67,7 +93,7 @@ public class FormDefinition
     public string SourcePath { get; set; }
 
     [Browsable(false), JsonIgnore]
-    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+    public string FullTableName => Dialect.Table(TableSchema, TableName);
 
     /// <summary>
     /// 單頭主鍵：上方單頭欄位勾了主鍵的，加上單頭清單 Grid 裡的主鍵欄位。
@@ -199,6 +225,22 @@ public class FieldDefinition
     [Category("畫面"), DisplayName("唯讀"),
      Description("新增、修改時使用者不能改這個欄位，但值照樣存進資料庫（例如自動編號、帶入的預設值）；查詢時仍然可以輸入條件。跟「只顯示」的差別是：唯讀的值會存檔")]
     public bool IsReadOnly { get; set; }
+
+    [Category("外觀"), DisplayName("字體大小"), DefaultValue(0f),
+     Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高，文字才不會被切掉")]
+    public float FontSize { get; set; }
+
+    // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設的白底
+    [Browsable(false)]
+    public string BackColorHtml { get; set; }
+
+    [JsonIgnore, Category("外觀"), DisplayName("底色"), DefaultValue(typeof(Color), ""),
+     Description("輸入框的底色；沒設定（Empty）就是預設的白底。在屬性上按右鍵選「重設」可以還原。日期選擇只有外框會變色")]
+    public Color BackColor
+    {
+        get => ColorText.Parse(BackColorHtml);
+        set => BackColorHtml = ColorText.Format(value);
+    }
 }
 
 /// <summary>
@@ -247,8 +289,7 @@ public class GridDefinition
     [Browsable(false)]
     public List<GridJoinDefinition> Joins { get; set; } = new();
 
-    [Browsable(false), JsonIgnore]
-    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+    public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]
     public List<GridColumnDefinition> KeyColumns => Columns.Where(c => c.IsKey).ToList();
@@ -352,8 +393,7 @@ public class GridJoinDefinition
     /// <summary>關聯條件：本身欄位=關聯資料表欄位，多組用逗號分隔（Master = 本身欄位，Detail = 關聯資料表欄位）</summary>
     public string LinkText { get; set; } = "";
 
-    [JsonIgnore]
-    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+    public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [JsonIgnore]
     public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
@@ -370,25 +410,28 @@ public static class GridSql
     public const string BaseAlias = "T0";
 
     /// <summary>本身資料表的欄位（加上別名，避免跟 JOIN 的資料表欄位同名時不明確）</summary>
-    public static string Base(string column) => $"[{BaseAlias}].{SqlName.Quote(column)}";
+    public static string Base(DbDialect d, string column) => $"{d.Quote(BaseAlias)}.{d.Quote(column)}";
 
-    private static string Expr(GridColumnDefinition c) =>
-        c.IsJoin ? $"{SqlName.Quote(c.JoinAlias)}.{SqlName.Quote(c.SourceColumn)} AS {SqlName.Quote(c.Column)}" : Base(c.Column);
+    private static string Expr(DbDialect d, GridColumnDefinition c) =>
+        c.IsJoin ? $"{d.Quote(c.JoinAlias)}.{d.Quote(c.SourceColumn)} AS {d.Quote(c.Column)}" : Base(d, c.Column);
 
     /// <summary>FROM 子句：只 JOIN 有欄位被選到的資料表</summary>
-    public static string From(string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns)
+    public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns)
     {
         var used = columns.Where(c => c.IsJoin).Select(c => c.JoinAlias).ToHashSet();
-        var sql = new System.Text.StringBuilder($"{fullTableName} AS [{BaseAlias}]");
+        var sql = new System.Text.StringBuilder(fullTableName + d.TableAlias(BaseAlias));
         foreach (var j in joins.Where(j => used.Contains(j.Alias)))
-            sql.Append($" LEFT JOIN {j.FullTableName} AS {SqlName.Quote(j.Alias)} ON "
-                     + string.Join(" AND ", j.Links.Select(l => $"{Base(l.Master)} = {SqlName.Quote(j.Alias)}.{SqlName.Quote(l.Detail)}")));
+            sql.Append($" LEFT JOIN {j.FullTableName(d)}{d.TableAlias(j.Alias)} ON "
+                     + string.Join(" AND ", j.Links.Select(l => $"{Base(d, l.Master)} = {d.Quote(j.Alias)}.{d.Quote(l.Detail)}")));
         return sql.ToString();
     }
 
-    /// <summary>SELECT [TOP n] 欄位 FROM 資料表 [LEFT JOIN ...]（還沒有 WHERE、ORDER BY）</summary>
-    public static string Select(string fullTableName, IList<GridColumnDefinition> columns, IEnumerable<GridJoinDefinition> joins, int? top = null) =>
-        $"SELECT {(top.HasValue ? $"TOP {top} " : "")}{string.Join(", ", columns.Select(Expr))} FROM {From(fullTableName, joins, columns)}";
+    /// <summary>
+    /// SELECT 欄位 FROM 資料表 [LEFT JOIN ...]（還沒有 WHERE、ORDER BY）。
+    /// 要取前 n 筆時，SQL Server 的 TOP n 已經放在這裡；Oracle、MySQL 要在整句最後加上 d.Limit(n)
+    /// </summary>
+    public static string Select(DbDialect d, string fullTableName, IList<GridColumnDefinition> columns, IEnumerable<GridJoinDefinition> joins, int? top = null) =>
+        $"SELECT {d.Top(top)}{string.Join(", ", columns.Select(c => Expr(d, c)))} FROM {From(d, fullTableName, joins, columns)}";
 }
 
 /// <summary>
@@ -428,8 +471,7 @@ public class EditListDefinition
     [Browsable(false)]
     public List<GridJoinDefinition> Joins { get; set; } = new();
 
-    [Browsable(false), JsonIgnore]
-    public string FullTableName => $"{SqlName.Quote(TableSchema)}.{SqlName.Quote(TableName)}";
+    public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]
     public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
@@ -581,6 +623,14 @@ public class GridColumnDefinition
     /// <summary>只顯示，不能輸入，也不寫回資料庫</summary>
     public bool NoEntry { get; set; }
 
+    /// <summary>Grid 儲存格的輸入方式：自動（依資料型別）、文字框、下拉選單、勾選框、日期選擇</summary>
+    public GridCellKind CellType { get; set; }
+    /// <summary>
+    /// 依輸入方式：下拉選單 = 固定選項（值=顯示，逗號分隔）或 SELECT 開頭的選項 SQL；
+    /// 勾選框 = 勾選值/取消值（例如 Y/N，預設 1/0）；日期選擇 = 文字、數字欄位的日期格式（預設 yyyyMMdd）
+    /// </summary>
+    public string CellOptions { get; set; }
+
     /// <summary>JOIN 帶進來的欄位：這個欄位來自哪一個 JOIN（GridJoinDefinition.Alias）；null = 本身資料表的欄位</summary>
     public string JoinAlias { get; set; }
     /// <summary>JOIN 帶進來的欄位在關聯資料表裡的原始欄位名稱（Column 是顯示用的欄位名稱，不重複）</summary>
@@ -617,6 +667,9 @@ public class GridColumnDefinition
     public string EditUncheckedValue { get; set; }
     /// <summary>編輯視窗輸入框的提示文字（Placeholder）</summary>
     public string EditPlaceholder { get; set; }
+    /// <summary>編輯視窗輸入框的字體大小、底色（同 FieldDefinition.FontSize / BackColorHtml）</summary>
+    public float EditFontSize { get; set; }
+    public string EditBackColorHtml { get; set; }
 }
 
 /// <summary>從樹狀清單拖曳整個資料表時帶的資料</summary>
@@ -664,12 +717,6 @@ public class ColumnDragData
     public string Schema { get; set; }
     public string Table { get; set; }
     public ColumnInfo Column { get; set; }
-}
-
-public static class SqlName
-{
-    /// <summary>資料表、欄位名稱加上中括號，避免名稱有空白或保留字</summary>
-    public static string Quote(string name) => "[" + name.Replace("]", "]]") + "]";
 }
 
 /// <summary>SQL Server 資料型別分類與文字轉換</summary>

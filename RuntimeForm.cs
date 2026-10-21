@@ -1,5 +1,5 @@
 using System.Data;
-using Microsoft.Data.SqlClient;
+using System.Data.Common;
 
 namespace FormBuilder;
 
@@ -70,6 +70,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             });
             Control input = CreateInput(f);
             if (input is RadioGroup) input.ForeColor = labelColor;
+            InputHelper.ApplyLook(f, input, body.Font);      // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
@@ -87,13 +88,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnDetail.Visible = gridDef != null;
         if (gridDef != null)
         {
-            detailGrid = CreateDetailGrid(gridDef);
+            detailGrid = CreateDetailGrid(gridDef, def.ConnectionString);
             HookEditDialog(detailGrid, EditDetailRow);
         }
         listDef = def.Grids.FirstOrDefault(g => g.IsMasterList);
         if (listDef != null)
         {
-            listGrid = CreateDetailGrid(listDef);
+            listGrid = CreateDetailGrid(listDef, def.ConnectionString);
             listGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             listGrid.MultiSelect = false;
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
@@ -119,7 +120,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 grid.Dock = DockStyle.Bottom;
                 grid.Height = g.Height;
             }
-            body.Controls.Add(grid);
+            body.Controls.Add(RoundedGridHost.Wrap(grid));      // 圓角外框（位置、停靠方式由外框接手）
         }
 
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
@@ -143,6 +144,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     // ================= 模式與按鈕狀態 =================
 
     private bool HasKey => def.MasterKeys.Count > 0;
+    /// <summary>這個畫面連的資料庫的 SQL 方言</summary>
+    private DbDialect Dialect => def.Dialect;
     private bool HasCurrent => current >= 0 && current < results.Rows.Count;
 
     private void SetMode(Mode newMode)
@@ -274,7 +277,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>有輸入的欄位當條件，查出符合的資料，顯示第一筆</summary>
     private void RunQuery()
     {
-        using var cmd = new SqlCommand();
+        using var cmd = Dialect.CreateCommand();
         string where;
         try
         {
@@ -287,9 +290,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
 
         var orderColumns = HasKey ? def.MasterKeys.Select(k => k.Column).ToList() : def.Fields.Take(1).Select(f => f.Column).ToList();
-        cmd.CommandText = $"SELECT TOP 5000 {SelectColumns()} FROM {def.FullTableName}"
+        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns()} FROM {def.FullTableName}"
                         + (where != "" ? " WHERE " + where : "")
-                        + " ORDER BY " + string.Join(", ", orderColumns.Select(SqlName.Quote));
+                        + " ORDER BY " + string.Join(", ", orderColumns.Select(Dialect.Quote))
+                        + Dialect.Limit(5000);
         LoadResults(cmd);
     }
 
@@ -304,15 +308,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
             MessageBox.Show($"按鈕「{b.Text}」還沒有設定 SQL。", "提醒");
             return;
         }
-        using var cmd = new SqlCommand(b.Sql);
+        var (sql, parameters) = Dialect.PrepareUserSql(b.Sql);       // @欄位名稱 轉成這個資料庫的參數寫法
+        using var cmd = Dialect.CreateCommand(sql: sql);
         try
         {
-            foreach (string name in ButtonRunner.ParameterNames(b.Sql))
+            foreach (var (name, parameter) in parameters)
             {
                 var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                 object value = field != null ? GetValue(field) : DBNull.Value;
                 if (value == DBNull.Value && field != null && TypeHelper.IsString(field.DataType)) value = "";
-                cmd.Parameters.AddWithValue("@" + name, value);
+                Dialect.AddParam(cmd, parameter, value);
             }
         }
         catch (FormatException ex)
@@ -324,15 +329,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆</summary>
-    private void LoadResults(SqlCommand cmd)
+    private void LoadResults(DbCommand cmd)
     {
-        var table = new DataTable();
+        DataTable table;
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
+            using var conn = Dialect.Open(def.ConnectionString);
             cmd.Connection = conn;
-            conn.Open();
-            new SqlDataAdapter(cmd).Fill(table);
+            table = Dialect.Fill(cmd);
         }
         catch (Exception ex)
         {
@@ -349,34 +353,34 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>組出查詢條件（類似 4GL 的 CONSTRUCT）：文字欄位有 * 或 ? 時用 LIKE，否則用 =</summary>
-    private string BuildQueryCondition(SqlCommand cmd)
+    private string BuildQueryCondition(DbCommand cmd)
     {
         var where = new List<string>();
         int i = 0;
         foreach (var f in def.Fields)
         {
             Control c = inputs[f];
-            string col = SqlName.Quote(f.Column);
+            string col = Dialect.Quote(f.Column), q = Dialect.Param($"q{i}");
             if (c is TextBox tb && tb.Text.Trim() != "")
             {
                 string text = tb.Text.Trim();
                 if (TypeHelper.IsString(f.DataType))
                 {
                     bool wildcard = text.Contains('*') || text.Contains('?');
-                    where.Add(wildcard ? $"{col} LIKE @q{i}" : $"{col} = @q{i}");
-                    cmd.Parameters.AddWithValue($"@q{i}", wildcard ? text.Replace('*', '%').Replace('?', '_') : text);
+                    where.Add(wildcard ? $"{col} LIKE {q}" : $"{col} = {q}");
+                    Dialect.AddParam(cmd, $"q{i}", wildcard ? text.Replace('*', '%').Replace('?', '_') : text);
                 }
                 else
                 {
                     try
                     {
-                        cmd.Parameters.AddWithValue($"@q{i}", TypeHelper.Parse(text, f.DataType));
+                        Dialect.AddParam(cmd, $"q{i}", TypeHelper.Parse(text, f.DataType));
                     }
                     catch (Exception)
                     {
                         throw new FormatException($"「{f.Label}」的查詢條件格式不正確：{text}");
                     }
-                    where.Add($"{col} = @q{i}");
+                    where.Add($"{col} = {q}");
                 }
                 i++;
             }
@@ -384,14 +388,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 if (TypeHelper.IsDate(f.DataType))
                 {
-                    where.Add($"CAST({col} AS date) = @q{i}");
-                    cmd.Parameters.AddWithValue($"@q{i}", dtp.Value.Date);
+                    where.Add($"{Dialect.DateOnly(col)} = {q}");
+                    Dialect.AddParam(cmd, $"q{i}", dtp.Value.Date);
                 }
                 else
                 {
                     // 文字、數字欄位存的是日期格式文字（例如 yyyyMMdd），直接用同樣格式的文字比對
-                    where.Add($"{col} = @q{i}");
-                    cmd.Parameters.AddWithValue($"@q{i}", InputHelper.GetValue(f, c));
+                    where.Add($"{col} = {q}");
+                    Dialect.AddParam(cmd, $"q{i}", InputHelper.GetValue(f, c));
                 }
                 i++;
             }
@@ -399,8 +403,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
                      && !(comboValue is string cs && cs == ""))
             {
                 // 下拉選單有選值就當條件（選空白 = 不限）
-                where.Add($"{col} = @q{i}");
-                cmd.Parameters.AddWithValue($"@q{i}", comboValue);
+                where.Add($"{col} = {q}");
+                Dialect.AddParam(cmd, $"q{i}", comboValue);
                 i++;
             }
         }
@@ -485,7 +489,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             .Concat(gridDef?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
             .Concat(listDef?.Columns.Select(c => c.Column) ?? Enumerable.Empty<string>())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(SqlName.Quote));
+            .Select(Dialect.Quote));
 
     // ================= 新增、修改、刪除 =================
 
@@ -502,16 +506,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var cmd = Dialect.CreateCommand(conn);
             var list = values.ToList();
             for (int i = 0; i < list.Count; i++)
-                cmd.Parameters.AddWithValue($"@p{i}", list[i].Value);
-            cmd.CommandText = $"INSERT INTO {def.FullTableName} ({string.Join(", ", list.Select(v => SqlName.Quote(v.Key)))}) "
-                            + $"VALUES ({string.Join(", ", list.Select((v, i) => $"@p{i}"))}); "
-                            + "SELECT CAST(SCOPE_IDENTITY() AS bigint);";
-            object identity = cmd.ExecuteScalar();
+                Dialect.AddParam(cmd, $"p{i}", list[i].Value);
+            string insert = $"INSERT INTO {def.FullTableName} ({string.Join(", ", list.Select(v => Dialect.Quote(v.Key)))}) "
+                          + $"VALUES ({string.Join(", ", list.Select((v, i) => Dialect.Param($"p{i}")))})";
+            // 自動編號由資料庫產生，新增後取回（SQL Server：SCOPE_IDENTITY；Oracle：RETURNING；MySQL：LAST_INSERT_ID）
+            object identity = Dialect.InsertReturningIdentity(cmd, insert, def.MasterKeys.FirstOrDefault(k => k.IsIdentity)?.Column);
 
             // 新增成功後，用主鍵把這筆讀回來，加到查詢結果並顯示
             if (HasKey)
@@ -557,13 +560,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var cmd = Dialect.CreateCommand(conn);
             var list = values.ToList();
             for (int i = 0; i < list.Count; i++)
-                cmd.Parameters.AddWithValue($"@p{i}", list[i].Value);
-            cmd.CommandText = $"UPDATE {def.FullTableName} SET {string.Join(", ", list.Select((v, i) => $"{SqlName.Quote(v.Key)} = @p{i}"))} "
+                Dialect.AddParam(cmd, $"p{i}", list[i].Value);
+            cmd.CommandText = $"UPDATE {def.FullTableName} SET {string.Join(", ", list.Select((v, i) => $"{Dialect.Quote(v.Key)} = {Dialect.Param($"p{i}")}"))} "
                             + "WHERE " + AddKeyCondition(cmd, CurrentKey());
             if (cmd.ExecuteNonQuery() == 0)
             {
@@ -592,14 +594,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (MessageBox.Show(question, "刪除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
-            conn.Open();
+            using var conn = Dialect.Open(def.ConnectionString);
             using var tran = conn.BeginTransaction();             // 單身、單頭一起刪，失敗就全部不變
-            using var cmd = conn.CreateCommand();
+            using var cmd = Dialect.CreateCommand(conn);
             cmd.Transaction = tran;
             if (withDetail)
             {
-                cmd.CommandText = $"DELETE FROM {gridDef.FullTableName} WHERE " + AddDetailCondition(cmd);
+                cmd.CommandText = $"DELETE FROM {gridDef.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd);
                 cmd.ExecuteNonQuery();
                 cmd.Parameters.Clear();
             }
@@ -664,12 +665,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private DataRow LoadRowByKey(Dictionary<string, object> key)
     {
-        using var conn = new SqlConnection(def.ConnectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
+        using var conn = Dialect.Open(def.ConnectionString);
+        using var cmd = Dialect.CreateCommand(conn);
         cmd.CommandText = $"SELECT {SelectColumns()} FROM {def.FullTableName} WHERE " + AddKeyCondition(cmd, key);
-        var table = new DataTable();
-        new SqlDataAdapter(cmd).Fill(table);
+        var table = Dialect.Fill(cmd);
         return table.Rows.Count > 0 ? table.Rows[0] : null;
     }
 
@@ -692,15 +691,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
     }
 
-    /// <summary>組出「主鍵 = 值」條件，參數名稱用 @k0、@k1…</summary>
-    private static string AddKeyCondition(SqlCommand cmd, Dictionary<string, object> key)
+    /// <summary>組出「主鍵 = 值」條件，參數名稱用 k0、k1…</summary>
+    private string AddKeyCondition(DbCommand cmd, Dictionary<string, object> key)
     {
         var conditions = new List<string>();
         int i = 0;
         foreach (var k in key)
         {
-            conditions.Add($"{SqlName.Quote(k.Key)} = @k{i}");
-            cmd.Parameters.AddWithValue($"@k{i}", k.Value ?? DBNull.Value);
+            conditions.Add($"{Dialect.Quote(k.Key)} = {Dialect.Param($"k{i}")}");
+            Dialect.AddParam(cmd, $"k{i}", k.Value);
             i++;
         }
         return string.Join(" AND ", conditions);
@@ -731,7 +730,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private bool IsLinkColumn(string detailColumn) =>
         gridDef != null && gridDef.Links.Any(l => string.Equals(l.Detail, detailColumn, StringComparison.OrdinalIgnoreCase));
 
-    private static DataGridView CreateDetailGrid(GridDefinition g)
+    /// <param name="connectionString">下拉選單欄位的選項 SQL 用</param>
+    private static DataGridView CreateDetailGrid(GridDefinition g, string connectionString)
     {
         var grid = new DataGridView
         {
@@ -743,21 +743,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SelectionMode = DataGridViewSelectionMode.RowHeaderSelect,
             RowHeadersWidth = 30,
         };
+        GridCells.ApplyGridLines(grid);
+        // 欄位依「輸入方式」建立：文字框、下拉選單、勾選框、日期選擇
         foreach (var c in g.Columns.Where(c => c.Visible))
         {
-            DataGridViewColumn col = TypeHelper.IsBool(c.DataType) ? new DataGridViewCheckBoxColumn() : new DataGridViewTextBoxColumn();
-            col.DataPropertyName = c.Column;
-            col.HeaderText = c.Header;
-            col.Width = c.Width;
-            col.Tag = c;
+            DataGridViewColumn col = GridCells.CreateColumn(c, connectionString);
             col.SortMode = DataGridViewColumnSortMode.NotSortable;   // 不排序，列的順序才會跟資料一致
-            if (TypeHelper.IsNumber(c.DataType)) col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
-            if (TypeHelper.IsDate(c.DataType)) col.DefaultCellStyle.Format = c.DataType == "date" ? "yyyy/MM/dd" : "yyyy/MM/dd HH:mm:ss";
-            if (col is DataGridViewTextBoxColumn tc && TypeHelper.IsString(c.DataType) && c.MaxLength > 0) tc.MaxInputLength = c.MaxLength;
             grid.Columns.Add(col);
         }
         grid.DataError += (s, e) =>
         {
+            if (GridCells.IgnoreDisplayError(grid, e)) return;     // 下拉選單裡沒有的值：顯示空白，不跳訊息
             string header = grid.Columns[e.ColumnIndex].HeaderText;
             MessageBox.Show($"第 {e.RowIndex + 1} 列「{header}」的格式不正確。", "提醒");
             e.ThrowException = false;
@@ -774,15 +770,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             try
             {
-                using var conn = new SqlConnection(def.ConnectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
+                var d = Dialect;
+                using var conn = d.Open(def.ConnectionString);
+                using var cmd = d.CreateCommand(conn);
                 string where = AddDetailCondition(cmd, GridSql.BaseAlias);          // 有 JOIN 時，本身的欄位要加別名
                 var orderColumns = gridDef.KeyColumns.Count > 0 ? gridDef.KeyColumns : gridDef.Columns.Where(c => !c.IsJoin).Take(1).ToList();
-                cmd.CommandText = GridSql.Select(gridDef.FullTableName, gridDef.Columns, gridDef.Joins, 5000)
+                cmd.CommandText = GridSql.Select(d, gridDef.FullTableName(d), gridDef.Columns, gridDef.Joins, 5000)
                                 + (where != "" ? " WHERE " + where : "")
-                                + " ORDER BY " + string.Join(", ", orderColumns.Select(c => GridSql.Base(c.Column)));
-                new SqlDataAdapter(cmd).Fill(table);
+                                + " ORDER BY " + string.Join(", ", orderColumns.Select(c => GridSql.Base(d, c.Column)))
+                                + d.Limit(5000);
+                table = d.Fill(cmd);
             }
             catch (Exception ex)
             {
@@ -801,15 +798,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         detailGrid.DataSource = detailTable;
     }
 
-    /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 @m0、@m1…；沒有關聯欄位時回傳空字串</summary>
-    private string AddDetailCondition(SqlCommand cmd, string tableAlias = null)
+    /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 m0、m1…；沒有關聯欄位時回傳空字串</summary>
+    private string AddDetailCondition(DbCommand cmd, string tableAlias = null)
     {
         var conditions = new List<string>();
         int i = 0;
         foreach (var (master, detail) in gridDef.Links)
         {
-            conditions.Add($"{(tableAlias != null ? $"[{tableAlias}]." : "")}{SqlName.Quote(detail)} = @m{i}");
-            cmd.Parameters.AddWithValue($"@m{i}", results.Rows[current][master]);
+            conditions.Add($"{(tableAlias != null ? Dialect.Quote(tableAlias) + "." : "")}{Dialect.Quote(detail)} = {Dialect.Param($"m{i}")}");
+            Dialect.AddParam(cmd, $"m{i}", results.Rows[current][master]);
             i++;
         }
         return string.Join(" AND ", conditions);
@@ -855,12 +852,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
-            conn.Open();
+            var d = Dialect;
+            string table = gridDef.FullTableName(d);
+            using var conn = d.Open(def.ConnectionString);
             using var tran = conn.BeginTransaction();
             foreach (var r in changed)
             {
-                using var cmd = conn.CreateCommand();
+                using var cmd = d.CreateCommand(conn);
                 cmd.Transaction = tran;
                 switch (r.RowState)
                 {
@@ -868,22 +866,22 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     {
                         // 空值不寫，讓資料庫預設值生效；關聯欄位一定要寫
                         var cols = gridDef.Columns.Where(c => !c.IsIdentity && (IsLinkColumn(c.Column) || (!c.NoEntry && r[c.Column] != DBNull.Value))).ToList();
-                        for (int i = 0; i < cols.Count; i++) cmd.Parameters.AddWithValue($"@p{i}", r[cols[i].Column]);
-                        cmd.CommandText = $"INSERT INTO {gridDef.FullTableName} ({string.Join(", ", cols.Select(c => SqlName.Quote(c.Column)))}) "
-                                        + $"VALUES ({string.Join(", ", cols.Select((c, i) => $"@p{i}"))})";
+                        for (int i = 0; i < cols.Count; i++) d.AddParam(cmd, $"p{i}", r[cols[i].Column]);
+                        cmd.CommandText = $"INSERT INTO {table} ({string.Join(", ", cols.Select(c => d.Quote(c.Column)))}) "
+                                        + $"VALUES ({string.Join(", ", cols.Select((c, i) => d.Param($"p{i}")))})";
                         break;
                     }
                     case DataRowState.Modified:
                     {
                         var cols = gridDef.Columns.Where(c => !c.IsIdentity && !c.NoEntry && !c.IsKey && !IsLinkColumn(c.Column)).ToList();
                         if (cols.Count == 0) continue;
-                        for (int i = 0; i < cols.Count; i++) cmd.Parameters.AddWithValue($"@p{i}", r[cols[i].Column]);
-                        cmd.CommandText = $"UPDATE {gridDef.FullTableName} SET {string.Join(", ", cols.Select((c, i) => $"{SqlName.Quote(c.Column)} = @p{i}"))} "
+                        for (int i = 0; i < cols.Count; i++) d.AddParam(cmd, $"p{i}", r[cols[i].Column]);
+                        cmd.CommandText = $"UPDATE {table} SET {string.Join(", ", cols.Select((c, i) => $"{d.Quote(c.Column)} = {d.Param($"p{i}")}"))} "
                                         + "WHERE " + AddOriginalKeyCondition(cmd, r, keys);
                         break;
                     }
                     case DataRowState.Deleted:
-                        cmd.CommandText = $"DELETE FROM {gridDef.FullTableName} WHERE " + AddOriginalKeyCondition(cmd, r, keys);
+                        cmd.CommandText = $"DELETE FROM {table} WHERE " + AddOriginalKeyCondition(cmd, r, keys);
                         break;
                 }
                 cmd.ExecuteNonQuery();
@@ -900,14 +898,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         MessageBox.Show($"單身已儲存（{changed.Count} 筆異動）。", "單身");
     }
 
-    /// <summary>用資料列「改之前」的主鍵值組條件，參數名稱用 @k0、@k1…</summary>
-    private static string AddOriginalKeyCondition(SqlCommand cmd, DataRow row, List<GridColumnDefinition> keys)
+    /// <summary>用資料列「改之前」的主鍵值組條件，參數名稱用 k0、k1…</summary>
+    private string AddOriginalKeyCondition(DbCommand cmd, DataRow row, List<GridColumnDefinition> keys)
     {
         var conditions = new List<string>();
         for (int i = 0; i < keys.Count; i++)
         {
-            conditions.Add($"{SqlName.Quote(keys[i].Column)} = @k{i}");
-            cmd.Parameters.AddWithValue($"@k{i}", row[keys[i].Column, DataRowVersion.Original]);
+            conditions.Add($"{Dialect.Quote(keys[i].Column)} = {Dialect.Param($"k{i}")}");
+            Dialect.AddParam(cmd, $"k{i}", row[keys[i].Column, DataRowVersion.Original]);
         }
         return string.Join(" AND ", conditions);
     }
@@ -1012,12 +1010,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         try
         {
-            using var conn = new SqlConnection(def.ConnectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var cmd = Dialect.CreateCommand(conn);
             var list = dlg.Values.ToList();
-            for (int i = 0; i < list.Count; i++) cmd.Parameters.AddWithValue($"@p{i}", list[i].Value);
-            cmd.CommandText = $"UPDATE {gridDef.FullTableName} SET {string.Join(", ", list.Select((v, i) => $"{SqlName.Quote(v.Key)} = @p{i}"))} "
+            for (int i = 0; i < list.Count; i++) Dialect.AddParam(cmd, $"p{i}", list[i].Value);
+            cmd.CommandText = $"UPDATE {gridDef.FullTableName(Dialect)} SET {string.Join(", ", list.Select((v, i) => $"{Dialect.Quote(v.Key)} = {Dialect.Param($"p{i}")}"))} "
                             + "WHERE " + AddOriginalKeyCondition(cmd, row, keys);
             if (cmd.ExecuteNonQuery() == 0)
                 MessageBox.Show("找不到原本的明細，可能已被其他人刪除。", "修改");
