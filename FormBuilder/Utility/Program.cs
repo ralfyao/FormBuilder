@@ -39,7 +39,7 @@ internal static class Program
         // 登入 → 主選單；按「登出」回到登入畫面
         while (true)
         {
-            using (var login = new LoginForm(config))
+            using (var login = new LoginForm(config, adminOnly: true))       // ERP Studio 只有系統管理者能登入
                 if (login.ShowDialog() != DialogResult.OK) return;
             var menu = new MainMenuForm(config);
             Application.Run(menu);
