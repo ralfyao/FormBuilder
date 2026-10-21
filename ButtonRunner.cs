@@ -68,8 +68,40 @@ public static class ButtonRunner
         Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
              .Distinct(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案</summary>
-    public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner)
+    /// <summary>解析「名稱=值」的清單（逗號、分號或換行分隔）；左右都去掉空白，沒有等號的略過</summary>
+    public static IEnumerable<(string Left, string Right)> ParsePairs(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) yield break;
+        foreach (string part in text.Split(new[] { ',', '，', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            int eq = part.IndexOf('=');
+            if (eq > 0) yield return (part[..eq].Trim(), part[(eq + 1)..].Trim());
+        }
+    }
+
+    /// <summary>有設定「回傳對應」的開啟畫面按鈕 = 選取視窗：要在輸入中（新增、修改）才能按</summary>
+    public static bool IsPicker(ButtonDefinition b) => b.Action == ButtonAction.開啟畫面 && ParsePairs(b.ReturnMap).Any();
+
+    /// <summary>把選取視窗帶回的值填進本視窗的欄位；本視窗沒有的欄位列出來提醒</summary>
+    public static void FillFields(IReadOnlyDictionary<string, object> values, IReadOnlyDictionary<FieldDefinition, Control> inputs)
+    {
+        var missing = new List<string>();
+        foreach (var (column, value) in values)
+        {
+            var field = inputs.Keys.FirstOrDefault(f => f.Column.Equals(column, StringComparison.OrdinalIgnoreCase));
+            if (field == null) missing.Add(column);
+            else InputHelper.SetValue(inputs[field], value);
+        }
+        if (missing.Count > 0)
+            MessageBox.Show("「回傳對應」裡這些欄位不在這個視窗上，沒有帶入：" + string.Join("、", missing), "提醒");
+    }
+
+    /// <summary>
+    /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
+    /// 「傳入參數」的 @欄位名稱 由 valueOf 取值；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn
+    /// </summary>
+    public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner,
+                                Func<string, object> valueOf = null, Action<IReadOnlyDictionary<string, object>> onReturn = null)
     {
         if (string.IsNullOrWhiteSpace(b.TargetForm))
         {
@@ -85,7 +117,30 @@ public static class ButtonRunner
         }
         try
         {
-            new RuntimeForm(FormDefinition.Load(path)).Show(owner);
+            var target = FormDefinition.Load(path);
+            var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, source) in ParsePairs(b.OpenParams))
+                parameters[name] = source.StartsWith('@') ? valueOf?.Invoke(source[1..]) ?? DBNull.Value : source;
+            var returns = ParsePairs(b.ReturnMap).ToList();
+            if (returns.Count == 0)
+            {
+                new RuntimeForm(target, parameters, pickMode: false).Show(owner);
+                return;
+            }
+            // 選取視窗：使用者選一筆後關閉，依「回傳對應」把那筆的值帶回來
+            using var picker = new RuntimeForm(target, parameters, pickMode: true);
+            if (picker.ShowDialog(owner) != DialogResult.OK || picker.PickedRow == null) return;
+            var values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            var notFound = new List<string>();
+            foreach (var (mine, theirs) in returns)
+            {
+                string column = theirs.TrimStart('@');
+                if (picker.PickedRow.Table.Columns.Contains(column)) values[mine] = picker.PickedRow[column];
+                else notFound.Add(column);
+            }
+            if (notFound.Count > 0)
+                MessageBox.Show("開啟的畫面查不到這些「回傳對應」的欄位：" + string.Join("、", notFound), "提醒");
+            onReturn?.Invoke(values);
         }
         catch (Exception ex)
         {

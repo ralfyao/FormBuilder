@@ -593,6 +593,18 @@ public class ButtonDefinition
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string TargetForm { get; set; }
 
+    [Category("開啟畫面"), DisplayName("傳入參數"),
+     Description("開啟時帶給對方畫面的值，用逗號分隔「對方欄位=@本畫面欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號。"
+               + "對方畫面上有同名的欄位時，會當成查詢條件自動查詢；對方的「執行SQL」也可以用 @名稱 取得"),
+     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string OpenParams { get; set; }
+
+    [Category("開啟畫面"), DisplayName("回傳對應"),
+     Description("有填時，開啟的畫面變成「選取視窗」：在清單雙擊（或按「選取帶回」）就關閉，把選的那筆資料填回本畫面的欄位。"
+               + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔"),
+     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string ReturnMap { get; set; }
+
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
     [Browsable(false)]
     public string BackColorHtml { get; set; }
