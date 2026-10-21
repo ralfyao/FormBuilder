@@ -45,6 +45,7 @@ namespace FormBuilder
             this.tabColumns = new System.Windows.Forms.TabPage();
             this.lstColumns = new System.Windows.Forms.ListBox();
             this.btnJoin = new System.Windows.Forms.Button();
+            this.btnDetail = new System.Windows.Forms.Button();
             this.lblColumnsHint = new System.Windows.Forms.Label();
             this.tabTools = new System.Windows.Forms.TabPage();
             this.lstTools = new System.Windows.Forms.ListBox();
@@ -174,6 +175,7 @@ namespace FormBuilder
             //
             this.tabColumns.Controls.Add(this.lstColumns);
             this.tabColumns.Controls.Add(this.btnJoin);
+            this.tabColumns.Controls.Add(this.btnDetail);
             this.tabColumns.Controls.Add(this.lblColumnsHint);
             this.tabColumns.Name = "tabColumns";
             this.tabColumns.Padding = new System.Windows.Forms.Padding(4);
@@ -194,6 +196,14 @@ namespace FormBuilder
             this.btnJoin.Size = new System.Drawing.Size(202, 30);
             this.btnJoin.TabIndex = 1;
             this.btnJoin.Text = "JOIN 其他資料表…";
+            //
+            // btnDetail
+            //
+            this.btnDetail.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.btnDetail.Name = "btnDetail";
+            this.btnDetail.Size = new System.Drawing.Size(202, 30);
+            this.btnDetail.TabIndex = 3;
+            this.btnDetail.Text = "設定單身（單頭與單身的對應）…";
             //
             // lblColumnsHint
             //
@@ -339,6 +349,7 @@ namespace FormBuilder
         private System.Windows.Forms.TabPage tabColumns;
         private System.Windows.Forms.ListBox lstColumns;
         private System.Windows.Forms.Button btnJoin;
+        private System.Windows.Forms.Button btnDetail;
         private System.Windows.Forms.Label lblColumnsHint;
         private System.Windows.Forms.TabPage tabTools;
         private System.Windows.Forms.ListBox lstTools;

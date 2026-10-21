@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.RegularExpressions;
 
 namespace FormBuilder;
@@ -97,6 +98,75 @@ public static class ButtonRunner
             MessageBox.Show("「回傳對應」裡這些欄位不在這個視窗上，沒有帶入：" + string.Join("、", missing), "提醒");
     }
 
+    /// <summary>有設定開窗選取的欄位（SetValue 把帶回來的值加進下拉選項用）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> pickerInputs = new();
+
+    public static bool HasPicker(Control input) => pickerInputs.TryGetValue(input, out _);
+
+    /// <summary>欄位的開窗選取設定轉成「開啟畫面」按鈕（有回傳對應 = 選取視窗）；沒設定回傳 null</summary>
+    public static ButtonDefinition PickerButton(FieldDefinition f) =>
+        string.IsNullOrWhiteSpace(f.PickerForm) ? null : new ButtonDefinition
+        {
+            Text = f.Label ?? f.Column,
+            Action = ButtonAction.開啟畫面,
+            TargetForm = f.PickerForm.Trim(),
+            OpenParams = f.PickerParams,
+            ReturnMap = PickerReturnMap(f),
+        };
+
+    /// <summary>
+    /// 欄位的回傳對應：空白 = 本欄位=同名欄位；只寫對方欄位名稱（沒有 =）時，第一個帶回本欄位，其他帶回同名欄位。
+    /// 例如品項編號欄位寫「產品編號」= 品項編號=產品編號
+    /// </summary>
+    private static string PickerReturnMap(FieldDefinition f)
+    {
+        if (string.IsNullOrWhiteSpace(f.PickerReturn)) return $"{f.Column}={f.Column}";
+        bool first = true;
+        var pairs = f.PickerReturn.Split(new[] { ',', '，', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part =>
+            {
+                if (part.Contains('=')) return part;
+                string pair = first ? $"{f.Column}={part.TrimStart('@')}" : $"{part.TrimStart('@')}={part.TrimStart('@')}";
+                first = false;
+                return pair;
+            });
+        return string.Join(", ", pairs);
+    }
+
+    /// <summary>
+    /// 有設定「開窗畫面」的欄位：點下拉（下拉選單）或雙擊、按 F4（其他輸入框）就開選取視窗；
+    /// 欄位不能輸入（瀏覽中、唯讀）時不開。open 負責開啟（帶傳入參數、把回傳值填回）
+    /// </summary>
+    public static void AttachPickers(IReadOnlyDictionary<FieldDefinition, Control> inputs, Action<ButtonDefinition> open)
+    {
+        foreach (var (f, input) in inputs)
+        {
+            var b = PickerButton(f);
+            if (b == null) continue;
+            pickerInputs.AddOrUpdate(input, b);
+            bool busy = false;
+            void Fire()
+            {
+                if (busy || !input.Enabled || input is TextBoxBase { ReadOnly: true }) return;
+                busy = true;
+                try { open(b); }
+                finally { busy = false; }
+            }
+            if (input is ComboBox combo)
+            {
+                // 不顯示原本的下拉清單，改開選取視窗
+                combo.IntegralHeight = false;
+                combo.DropDownHeight = 1;
+                combo.DropDown += (s, e) => combo.BeginInvoke(() => { combo.DroppedDown = false; Fire(); });
+            }
+            else
+            {
+                input.DoubleClick += (s, e) => Fire();
+                input.KeyDown += (s, e) => { if (e.KeyCode == Keys.F4) { e.Handled = true; Fire(); } };
+            }
+        }
+    }
+
     /// <summary>
     /// 使用者端的 ERP 外框設定這個，「開啟畫面」按鈕（不是選取視窗時）就開成外框裡的分頁；沒設定 = 開新視窗
     /// </summary>
@@ -166,7 +236,9 @@ public static class ButtonRunner
         string.IsNullOrWhiteSpace(sourcePath) ? FormDefinition.DefaultFolder : Path.GetDirectoryName(sourcePath);
 
     /// <summary>列印報表：依按鈕的列印樣板預覽列印；records 每個元素提供一筆資料的欄位值（每筆一頁）</summary>
-    public static void Print(ButtonDefinition b, string sourcePath, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner)
+    /// <param name="selected">明細清單上選取的資料（整筆），樣板「只印清單上選取的資料」用</param>
+    public static void Print(ButtonDefinition b, string sourcePath, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner,
+                             IReadOnlyList<DataRow> selected = null)
     {
         if (string.IsNullOrWhiteSpace(b.PrintTemplate))
         {
@@ -183,14 +255,19 @@ public static class ButtonRunner
             MessageBox.Show(ex.Message + Environment.NewLine + "請先在設計畫面雙擊這個按鈕，設計並儲存列印樣板。", "列印");
             return;
         }
-        PrintRunner.Preview(template, Path.GetFileNameWithoutExtension(b.PrintTemplate).Replace(".print", ""), connectionString, records, owner);
+        // 選取的資料是單身那個資料表的才拿來過濾單身
+        if (selected != null && template.Detail != null && selected.Count > 0
+            && !selected[0].Table.TableName.Equals(template.Detail.TableName, StringComparison.OrdinalIgnoreCase)) selected = null;
+        PrintRunner.Preview(template, Path.GetFileNameWithoutExtension(b.PrintTemplate).Replace(".print", ""), connectionString, records, owner, selected);
     }
 
     /// <summary>
-    /// 「列印來源清單」有設定時：印編輯視窗上那個明細清單選取的資料（每筆一頁）；沒選就提醒。
+    /// 「列印來源清單」有設定時：依編輯視窗上那個明細清單選取的資料列印；沒選就提醒。
+    /// 樣板以單頭為主：每筆選取的資料提供欄位值，先找選取的那筆（重新從資料庫讀整筆），沒有再找編輯視窗目前這筆（current）。
     /// 回傳 false = 這個按鈕沒有設定列印來源清單（照原本的方式印目前這筆）
     /// </summary>
-    public static bool PrintFromList(ButtonDefinition b, IEnumerable<EditListView> views, string sourcePath, string connectionString, IWin32Window owner)
+    public static bool PrintFromList(ButtonDefinition b, IEnumerable<EditListView> views, string sourcePath, string connectionString,
+                                     Func<string, object> current, IWin32Window owner)
     {
         if (string.IsNullOrWhiteSpace(b.PrintListTable)) return false;
         var view = views.FirstOrDefault(v => v.Definition.TableName.Equals(b.PrintListTable.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -206,8 +283,35 @@ public static class ButtonRunner
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
             return true;
         }
-        Print(b, sourcePath, connectionString, rows.Select(r => (Func<string, object>)(name => r.Table.Columns.Contains(name) ? r[name] : null)).ToList(), owner);
+        try
+        {
+            rows = rows.Select(r => ReloadFull(view.Definition, connectionString, r) ?? r).ToList();
+        }
+        catch (Exception) { }                                   // 讀不到整筆就用清單上的欄位
+        foreach (var t in rows.Select(r => r.Table).Distinct()) t.TableName = view.Definition.TableName;   // 讓列印知道是哪個資料表的資料
+        // 單頭的主鍵一定用編輯視窗目前這筆的（明細資料表可能有同名但意思不同的欄位，例如「識別」）
+        var headerKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try { headerKeys.UnionWith(FormStore.LoadTemplate(b.PrintTemplate, FolderOf(sourcePath)).KeyColumns); }
+        catch (Exception) { }                                   // 樣板讀不到時，交給 Print 顯示原因
+        Print(b, sourcePath, connectionString, rows.Select(r => (Func<string, object>)(name =>
+            headerKeys.Contains(name) && current?.Invoke(name) is { } key && key != DBNull.Value ? key
+            : r.Table.Columns.Contains(name) && r[name] != DBNull.Value ? r[name] : current?.Invoke(name))).ToList(), owner, rows);
         return true;
+    }
+
+    /// <summary>清單上只有顯示的欄位：依主鍵重新讀整筆（列印時要用沒顯示的欄位，例如詢價日期）；沒有主鍵或讀不到回傳 null</summary>
+    private static DataRow ReloadFull(EditListDefinition list, string connectionString, DataRow row)
+    {
+        var keys = list.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column).ToList();
+        if (keys.Count == 0 || !keys.All(row.Table.Columns.Contains)) return null;
+        var d = DbDialect.Of(connectionString);
+        using var conn = d.Open(connectionString);
+        using var cmd = d.CreateCommand(conn);
+        cmd.CommandText = $"SELECT * FROM {d.Table(list.TableSchema, list.TableName)} WHERE "
+                        + string.Join(" AND ", keys.Select((k, i) => $"{d.Quote(k)} = {d.Param($"k{i}")}"));
+        for (int i = 0; i < keys.Count; i++) d.AddParam(cmd, $"k{i}", row[keys[i]]);
+        var table = d.Fill(cmd);
+        return table.Rows.Count > 0 ? table.Rows[0] : null;
     }
 
     /// <summary>按鈕所在範圍（算視窗大小用）</summary>

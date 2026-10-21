@@ -27,6 +27,9 @@ public class ToolboxList : ListBox
         };
     }
 
+    /// <summary>加一個元件（只有部分設計畫面才有的元件，例如主畫面的 SQL 清單）</summary>
+    public void AddEntry(string kind, string text) => Items.Add(new Entry(kind, text));
+
     private record Entry(string Kind, string Text)
     {
         public override string ToString() => Text;

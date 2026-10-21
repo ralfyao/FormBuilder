@@ -85,6 +85,8 @@ public partial class RecordNavigatorDialog : Form
 
         // 欄位照後台「編輯視窗版面」設計的位置擺放（依定義動態產生到 body）
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
+        // 欄位的開窗選取（跟「開啟畫面」按鈕一樣開啟、帶回）；瀏覽時不開
+        ButtonRunner.AttachPickers(inputs, b => { if (mode != EditMode.Browse) RunButton(b); });
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
@@ -258,15 +260,13 @@ public partial class RecordNavigatorDialog : Form
                 break;
             case ButtonAction.列印報表:
             {
-                // 有設定「列印來源清單」：印下方清單選取的資料
-                if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, this)) break;
-                // 印目前這筆：欄位值先找視窗上的欄位，沒有就用目前這筆資料
+                // 欄位值先找目前這筆資料，沒有就用視窗上的欄位
                 DataRow current = nav.CurrentRow;
-                ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[]
-                {
-                    name => current != null && current.Table.Columns.Contains(name) ? current[name]
-                          : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null,
-                }, this);
+                Func<string, object> currentValue = name => current != null && current.Table.Columns.Contains(name) ? current[name]
+                    : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null;
+                // 有設定「列印來源清單」：依下方清單選取的資料列印
+                if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, currentValue, this)) break;
+                ButtonRunner.Print(b, sourcePath, connectionString, new[] { currentValue }, this);
                 break;
             }
             case ButtonAction.開啟畫面:
@@ -363,6 +363,7 @@ public partial class RecordNavigatorDialog : Form
     {
         foreach (var f in fields) InputHelper.SetValue(inputs[f], null);
         ReloadLists(null);
+        DefaultValue.FillInputs(inputs);                                         // 欄位的預設值
         NumberRule.FillInputs(inputs, connectionString, nav.FullTableName);     // 有編號規則的欄位自動帶入下一個編號
         SetMode(EditMode.Insert);
     }

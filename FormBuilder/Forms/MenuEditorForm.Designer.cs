@@ -22,6 +22,7 @@ namespace FormBuilder
             this.btnDelete = new FormBuilder.RoundButton();
             this.btnUp = new FormBuilder.RoundButton();
             this.btnDown = new FormBuilder.RoundButton();
+            this.btnOutdent = new FormBuilder.RoundButton();
             this.bottom = new System.Windows.Forms.Panel();
             this.btnSave = new FormBuilder.RoundButton();
             this.btnCancel = new FormBuilder.RoundButton();
@@ -49,6 +50,7 @@ namespace FormBuilder
             this.buttons.Controls.Add(this.btnDelete);
             this.buttons.Controls.Add(this.btnUp);
             this.buttons.Controls.Add(this.btnDown);
+            this.buttons.Controls.Add(this.btnOutdent);
             this.buttons.Dock = System.Windows.Forms.DockStyle.Right;
             this.buttons.FlowDirection = System.Windows.Forms.FlowDirection.TopDown;
             this.buttons.Name = "buttons";
@@ -92,6 +94,12 @@ namespace FormBuilder
             this.btnDown.Size = new System.Drawing.Size(112, 32);
             this.btnDown.Text = "下移";
             //
+            // btnOutdent
+            //
+            this.btnOutdent.Name = "btnOutdent";
+            this.btnOutdent.Size = new System.Drawing.Size(112, 32);
+            this.btnOutdent.Text = "移到上一層";
+            //
             // bottom
             //
             this.bottom.Controls.Add(this.lblHint);
@@ -107,7 +115,7 @@ namespace FormBuilder
             this.lblHint.Dock = System.Windows.Forms.DockStyle.Fill;
             this.lblHint.ForeColor = System.Drawing.SystemColors.GrayText;
             this.lblHint.Name = "lblHint";
-            this.lblHint.Text = "可以拖曳節點調整位置（拖到資料夾上 = 放進資料夾）";
+            this.lblHint.Text = "可以拖曳節點調整位置（拖到資料夾上 = 放進資料夾；按住 Shift = 放在它下面同一層；拖到空白處 = 最上層）";
             this.lblHint.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             //
             // btnSave
@@ -154,6 +162,7 @@ namespace FormBuilder
         private FormBuilder.RoundButton btnDelete;
         private FormBuilder.RoundButton btnUp;
         private FormBuilder.RoundButton btnDown;
+        private FormBuilder.RoundButton btnOutdent;
         private System.Windows.Forms.Panel bottom;
         private FormBuilder.RoundButton btnSave;
         private FormBuilder.RoundButton btnCancel;

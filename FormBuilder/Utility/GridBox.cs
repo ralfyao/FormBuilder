@@ -41,7 +41,9 @@ public class GridBox : DesignBox
     public override void RefreshFromModel()
     {
         SetBounds(GridDef.X, GridDef.Y, Math.Max(GridDef.Width, MinWidth), Math.Max(GridDef.Height, MinHeight));
-        tip.SetToolTip(this, GridDef.IsMasterList
+        tip.SetToolTip(this, GridDef.IsSqlList
+            ? $"SQL 清單：{GridDef.Title}（唯讀，切換單頭時依 SQL 重查）{Environment.NewLine}點一下設定 SQL 與欄位"
+            : GridDef.IsMasterList
             ? $"單頭清單：{GridDef.Title ?? GridDef.TableName}（查詢結果，點選一列切換單頭）{Environment.NewLine}點一下設定欄位"
             : $"單身：{GridDef.Title ?? GridDef.TableName}（{(string.IsNullOrWhiteSpace(GridDef.LinkText) ? "未設定關聯欄位" : "關聯：" + GridDef.LinkText)}）{Environment.NewLine}點一下設定欄位");
         Invalidate();

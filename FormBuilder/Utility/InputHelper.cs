@@ -253,6 +253,9 @@ public static class InputHelper
                 int index = -1;
                 for (int i = 0; i < combo.Items.Count; i++)
                     if (combo.Items[i] is ComboItem item && item.Value.Trim() == s) { index = i; break; }
+                // 開窗選取帶回來的值不在選項裡：加進選項，才顯示得出來
+                if (index < 0 && s != "" && combo.DropDownStyle == ComboBoxStyle.DropDownList && ButtonRunner.HasPicker(combo))
+                    index = combo.Items.Add(new ComboItem(s, s));
                 combo.SelectedIndex = index;
                 if (index < 0 && combo.DropDownStyle == ComboBoxStyle.DropDown) combo.Text = s;
                 break;
@@ -275,16 +278,21 @@ public static class InputHelper
         Label = string.IsNullOrWhiteSpace(c.EditLabel) ? c.Header : c.EditLabel,
         Placeholder = c.EditPlaceholder,
         FontSize = c.EditFontSize,
+        LabelFontSize = c.EditLabelFontSize,
         BackColorHtml = c.EditBackColorHtml,
         LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
         InputType = c.EditInputType,
         Items = c.EditItems,
         ItemsSql = c.EditItemsSql,
         AllowFreeText = c.EditAllowFreeText,
+        PickerForm = c.EditPickerForm,
+        PickerParams = c.EditPickerParams,
+        PickerReturn = c.EditPickerReturn,
         X = c.EditX,
         Y = c.EditY,
         DateFormat = c.EditDateFormat,
         NumberRule = c.EditNumberRule,
+        DefaultValue = c.EditDefaultValue,
         IsReadOnly = c.EditReadOnly,
         CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
         UncheckedValue = c.EditUncheckedValue ?? "0",
@@ -309,7 +317,8 @@ public static class InputHelper
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
                 ForeColor = labelColor,
-                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(body.Font)),   // 字放大時標籤跟著變高
+                Font = LabelGeometry.Font(f, body.Font),                                              // 標籤字體大小
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f, connectionString);
             if (input is RadioGroup) input.ForeColor = labelColor;
