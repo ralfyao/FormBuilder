@@ -17,7 +17,14 @@ public static class ButtonRunner
     /// 執行按鈕設定的 SQL（同一個交易，失敗全部還原）。
     /// @欄位名稱 的值由 valueOf 提供（回傳 null = NULL；格式不對時丟 FormatException）
     /// </summary>
-    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf)
+    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf) =>
+        RunSql(b, connectionString, new[] { valueOf });
+
+    /// <summary>
+    /// 對多筆資料各執行一次按鈕設定的 SQL（清單多選時），全部在同一個交易裡，任何一筆失敗就全部還原；
+    /// rows 的每一個元素提供那一筆的 @欄位名稱 值
+    /// </summary>
+    public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows)
     {
         if (string.IsNullOrWhiteSpace(b.Sql))
         {
@@ -32,11 +39,16 @@ public static class ButtonRunner
             using var tran = conn.BeginTransaction();
             using var cmd = d.CreateCommand(conn, sql);
             cmd.Transaction = tran;
-            foreach (var (name, parameter) in parameters)
-                d.AddParam(cmd, parameter, valueOf(name));
-            int rows = cmd.ExecuteNonQuery();
+            int affected = 0;
+            foreach (var valueOf in rows)
+            {
+                cmd.Parameters.Clear();
+                foreach (var (name, parameter) in parameters)
+                    d.AddParam(cmd, parameter, valueOf(name));
+                affected += Math.Max(0, cmd.ExecuteNonQuery());
+            }
             tran.Commit();
-            MessageBox.Show(rows >= 0 ? $"執行完成（影響 {rows} 筆）。" : "執行完成。", b.Text);
+            MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
         }
         catch (FormatException ex)
