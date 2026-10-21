@@ -135,6 +135,18 @@ public partial class PrintDesignerForm : Form
         miUndo.Click += (s, e) => history.Undo();
         miRedo.Click += (s, e) => history.Redo();
         miRemove.Click += (s, e) => RemoveSelected();
+        // 複製 / 剪下 / 貼上 / 再製一份（放在「刪除」上面）
+        var clipItems = new (string Text, string Keys, Action Action)[]
+        {
+            ("複製", "Ctrl+C", CopySelected), ("剪下", "Ctrl+X", CutSelected), ("貼上", "Ctrl+V", Paste), ("再製一份", "Ctrl+D", Duplicate),
+        };
+        int at = btnEditMenu.DropDownItems.IndexOf(miRemove);
+        foreach (var (text, keys, action) in clipItems)
+        {
+            var mi = new ToolStripMenuItem(text) { ShortcutKeyDisplayString = keys };
+            mi.Click += (s, e) => action();
+            btnEditMenu.DropDownItems.Insert(at++, mi);
+        }
         // 上下層：列印時依元件順序畫（後面的蓋在前面的上面），設計畫面一樣
         var miFront = new ToolStripMenuItem("移到最上層");
         var miBack = new ToolStripMenuItem("移到最下層");
@@ -162,6 +174,10 @@ public partial class PrintDesignerForm : Form
         bool typing = UndoHistory.IsEditingText() || propertyGrid.ContainsFocus;
         if (!typing && keyData == Keys.Delete && selection.Count > 0) { RemoveSelected(); return true; }
         if (!typing && keyData == (Keys.Control | Keys.A)) { SetSelection(canvas.Controls.OfType<DesignBox>()); return true; }
+        if (!typing && keyData == (Keys.Control | Keys.C)) { CopySelected(); return true; }
+        if (!typing && keyData == (Keys.Control | Keys.X)) { CutSelected(); return true; }
+        if (!typing && keyData == (Keys.Control | Keys.V)) { Paste(); return true; }
+        if (!typing && keyData == (Keys.Control | Keys.D)) { Duplicate(); return true; }
         if (!UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.Z)) { history.Undo(); return true; }
         if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z))) { history.Redo(); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
@@ -305,6 +321,59 @@ public partial class PrintDesignerForm : Form
     {
         var boxes = canvas.Controls.OfType<PrintItemBox>().ToList();
         return boxes.Count == 0 ? new Point(40, 40) : new Point(40, boxes.Max(b => b.Bottom) + 10);
+    }
+
+    // ================= 複製 / 剪下 / 貼上 =================
+
+    /// <summary>複製的元件（所有列印樣板設計器共用，可以從一個樣板貼到另一個）</summary>
+    private static List<PrintItem> clipboard = new();
+    /// <summary>同一份複製內容貼了幾次：每次多錯開一點，才不會疊在一起</summary>
+    private int pasteCount;
+
+    private void CopySelected()
+    {
+        // 依樣板上原本的順序（上下層）複製，貼上後誰蓋住誰不變
+        var items = selection.OfType<PrintItemBox>().Select(b => b.Item).OrderBy(i => template.Items.IndexOf(i)).Select(i => i.Clone()).ToList();
+        if (items.Count == 0) return;
+        clipboard = items;
+        pasteCount = 0;
+        UpdateStatus($"已複製 {items.Count} 個元件（Ctrl+V 貼上）");
+    }
+
+    private void CutSelected()
+    {
+        CopySelected();
+        RemoveSelected();
+    }
+
+    /// <summary>貼上：往右下錯開（連續貼上會繼續往下錯開），貼上的元件變成選取狀態，可以直接拖到想要的位置</summary>
+    private void Paste()
+    {
+        if (clipboard.Count == 0) return;
+        pasteCount++;
+        int offset = 10 * pasteCount;
+        var page = template.PageSize;
+        var boxes = new List<DesignBox>();
+        foreach (var source in clipboard)
+        {
+            var item = source.Clone();
+            item.X = Math.Max(0, Math.Min(source.X + offset, page.Width - Math.Min(item.Width, page.Width)));
+            item.Y = Math.Max(0, Math.Min(source.Y + offset, page.Height - Math.Min(item.Height, page.Height)));
+            template.Items.Add(item);
+            var box = new PrintItemBox(item);
+            AttachBox(box);
+            boxes.Add(box);
+        }
+        SyncZOrder();
+        SetSelection(boxes);
+        UpdateStatus($"已貼上 {boxes.Count} 個元件");
+    }
+
+    /// <summary>再製一份：複製 + 貼上</summary>
+    private void Duplicate()
+    {
+        CopySelected();
+        Paste();
     }
 
     private void RemoveSelected()
