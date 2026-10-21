@@ -23,7 +23,8 @@ public partial class ErpShellForm : Form
         lblProduct.Text = Program.ProductName;
         lblUser.Text = $"{user.UserName}（{user.UserId}）";
         lblWelcome.Text = $"歡迎，{user.UserName}";
-        lblServer.Text = "系統資料庫：" + ConnectionDialog.Mask(SysContext.Connection);
+        // 使用者端不顯示資料庫連線（伺服器、資料庫、帳號），只顯示登入時間
+        lblServer.Text = $"登入時間：{DateTime.Now:yyyy/MM/dd HH:mm}";
         lblVersion.Text = "版本 " + Updater.CurrentVersion;
 
         // ---- 選單 ----

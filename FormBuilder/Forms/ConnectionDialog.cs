@@ -264,7 +264,13 @@ public partial class ConnectionDialog : Form
         }
     }
 
-    /// <summary>連線字串裡的密碼換成 ****，用來顯示在畫面上（三種資料庫共用）</summary>
+    /// <summary>
+    /// 畫面上顯示連線狀態用：只說有沒有設定、是哪種資料庫，不顯示伺服器、資料庫名稱、帳號（資料庫路徑不外露）
+    /// </summary>
+    public static string Describe(string connectionString) =>
+        string.IsNullOrWhiteSpace(connectionString) ? "（尚未設定連線）" : $"已連線（{DbDialect.Of(connectionString).DisplayName}）";
+
+    /// <summary>連線字串裡的密碼換成 ****（三種資料庫共用）；畫面上請用 Describe，不要顯示完整的連線字串</summary>
     public static string Mask(string connectionString)
     {
         if (string.IsNullOrWhiteSpace(connectionString)) return "（尚未設定連線）";

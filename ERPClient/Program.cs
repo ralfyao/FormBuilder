@@ -16,15 +16,15 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         var config = SysConfig.Load();
         if (Updater.CheckAndUpdate(config)) return;          // 有新版本：關閉程式，由更新程序換檔後重新啟動
+        // 使用者端不提供系統設定：系統資料庫由管理者用 ERP Studio 設定，或由 IT 在安裝時放 config.json
         if (config.GetConnection() == null)
         {
-            MessageBox.Show("這台電腦還沒有設定系統資料庫，請洽系統管理者，或在接下來的視窗設定。", ProductName);
-            using var setup = new SysSetupForm(config);
-            if (setup.ShowDialog() != DialogResult.OK) return;
+            MessageBox.Show("這台電腦還沒有設定系統連線，請洽系統管理者。", ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
         while (true)
         {
-            using (var login = new LoginForm(config, ProductName))
+            using (var login = new LoginForm(config, ProductName, allowSetup: false))
                 if (login.ShowDialog() != DialogResult.OK) return;
             var shell = new ErpShellForm(config);
             Application.Run(shell);
