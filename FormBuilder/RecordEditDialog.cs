@@ -56,7 +56,13 @@ public partial class RecordEditDialog : Form
                             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
                         });
                         break;
-                    case ButtonAction.開啟畫面: ButtonRunner.OpenForm(b, sourcePath, this); break;
+                    case ButtonAction.開啟畫面:
+                        ButtonRunner.OpenForm(b, sourcePath, this, name =>
+                        {
+                            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
+                        }, values => ButtonRunner.FillFields(values, inputs));
+                        break;
                 }
             };
             body.Controls.Add(button);

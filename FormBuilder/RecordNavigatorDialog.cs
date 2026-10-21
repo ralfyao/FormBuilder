@@ -192,7 +192,9 @@ public partial class RecordNavigatorDialog : Form
         lblPosition.Text = mode != EditMode.Browse ? "輸入完按「確定」存檔，Esc 取消"
                          : hasRow ? $"第 {nav.Current + 1} / {nav.Count} 筆"
                          : "沒有資料，可以按「新增」";
-        foreach (var (b, button) in customButtons) button.Enabled = IsActionEnabled(b.Action);
+        // 選取視窗按鈕（有回傳對應）要在新增、修改時才能按，帶回的值填進正在輸入的欄位
+        foreach (var (b, button) in customButtons)
+            button.Enabled = ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action);
         if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
     }
 
@@ -245,7 +247,16 @@ public partial class RecordNavigatorDialog : Form
                     SetMode(EditMode.Browse);
                 }
                 break;
-            case ButtonAction.開啟畫面: ButtonRunner.OpenForm(b, sourcePath, this); break;
+            case ButtonAction.開啟畫面:
+                // 傳入參數的 @欄位：先找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
+                ButtonRunner.OpenForm(b, sourcePath, this, name =>
+                {
+                    var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (f != null) return InputHelper.GetValue(f, inputs[f]);
+                    DataRow row = nav.CurrentRow;
+                    return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
+                }, values => ButtonRunner.FillFields(values, inputs));
+                break;
         }
     }
 

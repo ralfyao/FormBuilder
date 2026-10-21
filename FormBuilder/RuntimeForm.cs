@@ -35,9 +35,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>查詢模式是由哪個「自訂查詢」按鈕開始的；null = 內建查詢</summary>
     private ButtonDefinition customQuery;
 
-    public RuntimeForm(FormDefinition definition)
+    /// <summary>選取視窗模式（別的畫面的「開啟畫面」按鈕設了回傳對應）：雙擊清單或按「選取帶回」就關閉</summary>
+    private readonly bool pickMode;
+    /// <summary>開啟時帶進來的參數（「傳入參數」）；同名的欄位當查詢條件，執行SQL 的 @名稱 也查得到</summary>
+    private readonly Dictionary<string, object> openParams;
+    /// <summary>選取視窗模式下使用者選的那筆</summary>
+    public DataRow PickedRow { get; private set; }
+
+    public RuntimeForm(FormDefinition definition) : this(definition, null, false) { }
+
+    public RuntimeForm(FormDefinition definition, IDictionary<string, object> parameters, bool pickMode)
     {
         InitializeComponent();
+        this.pickMode = pickMode;
+        openParams = parameters == null ? new(StringComparer.OrdinalIgnoreCase) : new(parameters, StringComparer.OrdinalIgnoreCase);
         def = definition;
         Text = def.Title;
 
@@ -127,8 +138,54 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
 
+        if (pickMode) SetupPickMode();
         ShowCurrent();
         SetMode(Mode.Browse);
+        // 有傳入參數時，打開後用同名的欄位當條件自動查詢
+        if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
+            Shown += (s, e) => QueryByParams();
+    }
+
+    /// <summary>選取視窗：工具列最前面加「選取帶回」，視窗標題加上「選取：」</summary>
+    private void SetupPickMode()
+    {
+        Text = "選取：" + def.Title;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        var btnPick = new ToolStripButton("選取帶回")
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.Text,
+            AutoSize = false,
+            Size = new Size(80, 28),
+            Font = new Font(toolStrip.Font, FontStyle.Bold),
+            ToolTipText = "把目前選的這筆帶回原來的畫面（在清單上雙擊也可以）",
+        };
+        btnPick.Click += (s, e) => Pick();
+        toolStrip.Items.Insert(0, btnPick);
+        toolStrip.Items.Insert(1, new ToolStripSeparator());
+        btnExit.Text = "取消";
+    }
+
+    /// <summary>選取目前這筆，關閉選取視窗</summary>
+    private void Pick()
+    {
+        if (mode != Mode.Browse) return;
+        if (!HasCurrent)
+        {
+            MessageBox.Show("請先查詢並選一筆資料。", "選取");
+            return;
+        }
+        PickedRow = results.Rows[current];
+        DialogResult = DialogResult.OK;
+    }
+
+    /// <summary>傳入參數裡跟欄位同名的，當查詢條件查一次</summary>
+    private void QueryByParams()
+    {
+        BeginQuery();
+        foreach (var f in def.Fields)
+            if (openParams.TryGetValue(f.Column, out var value)) SetValue(f, value);
+        RunQuery();
     }
 
     /// <summary>
@@ -202,7 +259,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             _ => HasKey ? "" : "這個畫面沒有設定主鍵，只能查詢與新增",
         };
         lblPosition.Text = HasCurrent ? $"第 {current + 1} / {results.Rows.Count} 筆" : "";
-        foreach (var (b, button) in customButtons) button.Enabled = IsActionEnabled(b.Action);
+        // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位
+        foreach (var (b, button) in customButtons)
+            button.Enabled = ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action);
         if (mode == Mode.Detail) detailGrid.Focus();
         else if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
     }
@@ -475,7 +534,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             if (row != null && results.Columns.Contains(name)) return results.Rows[row.Value][name];
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-            return field != null ? GetValue(field) : null;
+            if (field != null) return GetValue(field);
+            return openParams.TryGetValue(name, out var param) ? param : null;    // 別的畫面開啟時傳進來的參數
         };
         var valueOfs = rows.Count > 0 ? rows.Select(r => ValueOf(r)).ToList() : new List<Func<string, object>> { ValueOf(null) };
         bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs);
@@ -487,7 +547,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
     }
 
-    private void OpenOtherForm(ButtonDefinition b) => ButtonRunner.OpenForm(b, def.SourcePath, this);
+    /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位</summary>
+    private void OpenOtherForm(ButtonDefinition b) =>
+        ButtonRunner.OpenForm(b, def.SourcePath, this, name =>
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null && mode != Mode.Browse) return GetValue(field);
+            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return field != null ? GetValue(field) : null;
+        }, values => ButtonRunner.FillFields(values, inputs));
 
     /// <summary>單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位</summary>
     private string SelectColumns() =>
@@ -944,6 +1012,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void EditMasterRow(int index)
     {
         if (mode != Mode.Browse) return;
+        if (pickMode)
+        {
+            // 選取視窗：雙擊 = 選這筆帶回
+            if (index >= 0 && index < results.Rows.Count)
+            {
+                if (index != current) MoveTo(index);
+                Pick();
+            }
+            return;
+        }
         if (index >= 0 && index < results.Rows.Count && index != current) MoveTo(index);
         listDef.EnsureEditLayout();                         // 沒設計過版面時排成一欄
         var fields = listDef.EditColumns
