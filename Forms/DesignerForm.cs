@@ -849,11 +849,50 @@ public partial class DesignerForm : Form
     {
         using var dlg = new OpenFileDialog { Filter = "畫面定義 (*.json)|*.json", InitialDirectory = EnsureFolder() };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        LoadFile(dlg.FileName);
+    }
+
+    /// <summary>
+    /// 主選單「系統管理 → 畫面設計」：直接打開選單上選的畫面。
+    /// 優先讀本機上次編輯的 json（Forms 資料夾裡同名的檔案）；本機沒有就讀系統上已發布的版本；
+    /// 兩邊都有、系統上的比較新（例如別人發布過）時，先問要用哪一個
+    /// </summary>
+    public void OpenForEditing(string formKey)
+    {
+        string path = Path.Combine(EnsureFolder(), formKey + ".json");
+        var published = SysContext.Active
+            ? SysDb.LoadPublished(SysContext.Connection, "form").FirstOrDefault(p => p.FormKey.Equals(formKey, StringComparison.OrdinalIgnoreCase))
+            : null;
+        if (!File.Exists(path))
+        {
+            if (published != null) LoadPublishedKey(formKey);
+            else MessageBox.Show($"找不到畫面「{formKey}」：本機沒有 {path}，系統上也還沒發布。", "畫面設計");
+            return;
+        }
+        if (published != null && published.PublishedAt > File.GetLastWriteTime(path).AddMinutes(1))
+        {
+            var answer = MessageBox.Show(
+                $"系統上的「{formKey}」（第 {published.Version} 版，{published.PublishedBy} {published.PublishedAt:yyyy/MM/dd HH:mm} 發布）比本機的檔案新"
+                + $"（{File.GetLastWriteTime(path):yyyy/MM/dd HH:mm} 存檔）。{Environment.NewLine}{Environment.NewLine}"
+                + "要用系統上的版本嗎？（選「否」用本機的檔案）", "畫面設計", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel) return;
+            if (answer == DialogResult.Yes)
+            {
+                LoadPublishedKey(formKey);
+                return;
+            }
+        }
+        LoadFile(path);
+    }
+
+    /// <summary>開啟本機的畫面定義檔</summary>
+    private void LoadFile(string path)
+    {
         try
         {
             NewForm();
-            def = FormDefinition.Load(dlg.FileName);
-            currentFilePath = dlg.FileName;
+            def = FormDefinition.Load(path);
+            currentFilePath = path;
             if (!string.IsNullOrWhiteSpace(def.ConnectionString)) SetConnection(def.ConnectionString, def.DatabaseType);
             BuildCanvas();
             ReloadDefTableColumns();
@@ -916,7 +955,12 @@ public partial class DesignerForm : Form
         using var dlg = new PickListDialog("開啟已發布的畫面（勾一個）",
             list.Select(p => new PickListDialog.Item(p.FormKey, $"{p.Title ?? p.FormKey}　［{p.FormKey}］第 {p.Version} 版　{p.PublishedBy} {p.PublishedAt:yyyy/MM/dd HH:mm}")));
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        string key = dlg.PickedKeys[0];
+        LoadPublishedKey(dlg.PickedKeys[0]);
+    }
+
+    /// <summary>從系統資料庫讀已發布的畫面來編輯，存檔時寫到預設的 Forms 資料夾（同檔名）</summary>
+    private void LoadPublishedKey(string key)
+    {
         try
         {
             NewForm();
