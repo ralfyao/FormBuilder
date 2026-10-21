@@ -258,6 +258,8 @@ public partial class RecordNavigatorDialog : Form
                 break;
             case ButtonAction.列印報表:
             {
+                // 有設定「列印來源清單」：印下方清單選取的資料
+                if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, this)) break;
                 // 印目前這筆：欄位值先找視窗上的欄位，沒有就用目前這筆資料
                 DataRow current = nav.CurrentRow;
                 ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[]

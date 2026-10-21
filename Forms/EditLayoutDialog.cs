@@ -323,9 +323,21 @@ public partial class EditLayoutDialog : Form
             bb.DoubleClick += (s, e) =>
             {
                 if (bb.ButtonDef.Action != ButtonAction.列印報表) return;
-                if (PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
-                                              grid.KeyColumns.Select(c => c.Column)))
-                    propertyGrid.Refresh();
+                // 有設定「列印來源清單」：樣板用那個明細清單的資料表與主鍵（印清單上選取的那筆）
+                string listTable = bb.ButtonDef.PrintListTable?.Trim();
+                var list = string.IsNullOrEmpty(listTable) ? null
+                    : listBoxes.Select(x => x.ListDef).FirstOrDefault(l => l.TableName.Equals(listTable, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(listTable) && list == null)
+                {
+                    MessageBox.Show($"版面上沒有「{listTable}」這個明細清單，請檢查按鈕的「列印來源清單」。", "列印樣板");
+                    return;
+                }
+                bool changed = list != null
+                    ? PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, list.TableSchema, list.TableName,
+                                                list.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column))
+                    : PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                                grid.KeyColumns.Select(c => c.Column));
+                if (changed) propertyGrid.Refresh();
             };
     }
 
@@ -606,6 +618,7 @@ public partial class EditLayoutDialog : Form
         foreach (var b in selection) b.IsSelected = true;
         if (selection.Count > 0) ActiveControl = null;
         // 屬性面板：選一個顯示它，選多個只列共同屬性（改了套用到全部）
+        PrintListConverter.Available = listBoxes.Select(l => l.ListDef.TableName).Distinct().ToList();    // 按鈕「列印來源清單」的選項
         propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
     }
 

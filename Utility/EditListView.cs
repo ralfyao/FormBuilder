@@ -13,6 +13,8 @@ public class EditListView
 
     private readonly EditListDefinition list;
     private readonly string connectionString;
+    /// <summary>清單的定義（資料表、欄位、關聯）</summary>
+    public EditListDefinition Definition => list;
     public DataGridView Grid { get; }
     /// <summary>加到畫面上的是這個圓角外框（Grid 在裡面）</summary>
     public Control Host { get; }
@@ -43,6 +45,8 @@ public class EditListView
         }
         Grid.DataError += (s, e) => e.ThrowException = false;     // 唯讀清單：格式不符的值顯示空白
         Host = RoundedGridHost.Wrap(Grid);
+        // 載入後不要自動選第一列：使用者自己點選的才算「選取」（列印選取的資料時用）
+        Grid.DataBindingComplete += (s, e) => Grid.ClearSelection();
     }
 
     /// <summary>
@@ -64,6 +68,8 @@ public class EditListView
                 Grid.DataSource = null;
                 return;
             }
+            // 主鍵就算沒顯示也要查出來（列印選取的那筆時用主鍵讀資料）
+            visible.AddRange(list.Columns.Where(c => c.IsKey && !c.IsJoin && !visible.Contains(c)));
             // 本身資料表固定用別名 T0（有 JOIN 時，欄位名稱才不會跟關聯資料表衝突）
             string select = GridSql.Select(d, list.FullTableName(d), visible, list.Joins, links.Count == 0 ? MaxRowsWithoutLink : null);
             if (links.Count == 0)
@@ -95,6 +101,11 @@ public class EditListView
             MessageBox.Show($"讀取明細清單「{list.Title ?? list.TableName}」失敗：{ex.Message}", "提醒");
         }
     }
+
+    /// <summary>清單上使用者選取的資料列（由上到下）</summary>
+    public List<DataRow> SelectedRows() =>
+        Grid.SelectedRows.Cast<DataGridViewRow>().Where(r => r.DataBoundItem is DataRowView).OrderBy(r => r.Index)
+            .Select(r => ((DataRowView)r.DataBoundItem).Row).ToList();
 
     /// <summary>清單所在範圍（算視窗大小用）</summary>
     public static Size Extent(IEnumerable<EditListDefinition> lists)
