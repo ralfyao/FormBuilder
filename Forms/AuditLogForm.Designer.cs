@@ -104,7 +104,7 @@ namespace FormBuilder
             this.cboAction.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             this.cboAction.Items.AddRange(new object[] {
             "（全部動作）", "登入", "登入失敗", "登出", "新增", "修改", "刪除", "生效", "取消生效", "單身存檔", "修改明細",
-            "執行SQL", "列印", "發布", "變更密碼", "重設密碼", "新增帳號", "修改帳號", "權限", "新增角色", "刪除角色", "修改選單"});
+            "執行SQL", "列印", "輸出", "發布", "變更密碼", "重設密碼", "新增帳號", "修改帳號", "權限", "新增角色", "刪除角色", "修改選單"});
             this.cboAction.Margin = new System.Windows.Forms.Padding(3, 6, 3, 3);
             this.cboAction.Name = "cboAction";
             this.cboAction.Size = new System.Drawing.Size(120, 23);

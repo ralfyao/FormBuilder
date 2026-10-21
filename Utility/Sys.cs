@@ -71,15 +71,24 @@ public class SysConfig
     }
 }
 
-/// <summary>一個畫面的權限（多個角色時取聯集）</summary>
-public record FormPermission(bool Open, bool Insert, bool Modify, bool Delete, bool Print)
+/// <summary>
+/// 一個畫面的權限（多個角色時取聯集）：開啟、新增、編修（Modify）、刪除、報表（Print：列印、列印報表）、
+/// 核准（Approve：生效 / 取消生效）、輸出（Export：清單匯出 Excel / CSV）
+/// </summary>
+public record FormPermission(bool Open, bool Insert, bool Modify, bool Delete, bool Print, bool Approve = false, bool Export = false)
 {
-    public static readonly FormPermission All = new(true, true, true, true, true);
-    public static readonly FormPermission None = new(false, false, false, false, false);
+    public static readonly FormPermission All = new(true, true, true, true, true, true, true);
+    public static readonly FormPermission None = new(false, false, false, false, false, false, false);
+
+    public bool Any => Open || Insert || Modify || Delete || Print || Approve || Export;
 
     public FormPermission Union(FormPermission other) =>
-        new(Open || other.Open, Insert || other.Insert, Modify || other.Modify, Delete || other.Delete, Print || other.Print);
+        new(Open || other.Open, Insert || other.Insert, Modify || other.Modify, Delete || other.Delete, Print || other.Print,
+            Approve || other.Approve, Export || other.Export);
 }
+
+/// <summary>角色對一個畫面的權限設定：權限、註記、職務代理效期（過了這天這組權限就失效；null = 不限）</summary>
+public record RolePermission(FormPermission Permission, string Note, DateTime? ValidUntil);
 
 /// <summary>登入的使用者</summary>
 public record SysUser(string UserId, string UserName, bool IsAdmin);
@@ -277,6 +286,11 @@ public static class SysDb
                 RoleId nvarchar(30) NOT NULL, FormKey nvarchar(200) NOT NULL,
                 CanOpen bit NOT NULL DEFAULT 0, CanInsert bit NOT NULL DEFAULT 0, CanModify bit NOT NULL DEFAULT 0,
                 CanDelete bit NOT NULL DEFAULT 0, CanPrint bit NOT NULL DEFAULT 0, PRIMARY KEY(RoleId, FormKey));
+            -- 後來加的權限欄位：已經建好的系統資料庫自動補上
+            IF COL_LENGTH('dbo.SYS_Permission', 'CanApprove') IS NULL ALTER TABLE dbo.SYS_Permission ADD CanApprove bit NOT NULL DEFAULT 0;
+            IF COL_LENGTH('dbo.SYS_Permission', 'CanExport') IS NULL ALTER TABLE dbo.SYS_Permission ADD CanExport bit NOT NULL DEFAULT 0;
+            IF COL_LENGTH('dbo.SYS_Permission', 'Note') IS NULL ALTER TABLE dbo.SYS_Permission ADD Note nvarchar(150) NULL;
+            IF COL_LENGTH('dbo.SYS_Permission', 'ValidUntil') IS NULL ALTER TABLE dbo.SYS_Permission ADD ValidUntil smalldatetime NULL;
             IF OBJECT_ID('dbo.SYS_AuditLog') IS NULL
             BEGIN
                 CREATE TABLE dbo.SYS_AuditLog(
@@ -377,34 +391,41 @@ public static class SysDb
         tran.Commit();
     }
 
-    /// <summary>某個角色對每個畫面的權限</summary>
-    public static Dictionary<string, FormPermission> LoadRolePermissions(string cs, string roleId) =>
-        Query(cs, "SELECT FormKey, CanOpen, CanInsert, CanModify, CanDelete, CanPrint FROM dbo.SYS_Permission WHERE RoleId = @r", ("@r", roleId))
-            .Rows.Cast<DataRow>().ToDictionary(r => (string)r[0], ToPermission, StringComparer.OrdinalIgnoreCase);
+    private const string PermissionColumns = "CanOpen, CanInsert, CanModify, CanDelete, CanPrint, CanApprove, CanExport";
 
-    public static void SaveRolePermissions(string cs, string roleId, IDictionary<string, FormPermission> permissions)
+    /// <summary>某個角色對每個畫面的權限（含註記、職務代理效期）</summary>
+    public static Dictionary<string, RolePermission> LoadRolePermissions(string cs, string roleId) =>
+        Query(cs, $"SELECT FormKey, {PermissionColumns}, Note, ValidUntil FROM dbo.SYS_Permission WHERE RoleId = @r", ("@r", roleId))
+            .Rows.Cast<DataRow>().ToDictionary(r => (string)r[0], r => new RolePermission(ToPermission(r), r["Note"] as string, r["ValidUntil"] as DateTime?),
+                                               StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>重存角色的權限：沒勾任何權限、也沒有註記的畫面不存</summary>
+    public static void SaveRolePermissions(string cs, string roleId, IDictionary<string, RolePermission> permissions)
     {
         using var conn = Open(cs);
         using var tran = conn.BeginTransaction();
         using (var del = Cmd(conn, "DELETE FROM dbo.SYS_Permission WHERE RoleId = @r", ("@r", roleId))) { del.Transaction = tran; del.ExecuteNonQuery(); }
-        foreach (var (formKey, p) in permissions.Where(p => p.Value != FormPermission.None))
+        foreach (var (formKey, rp) in permissions.Where(p => p.Value.Permission.Any || !string.IsNullOrWhiteSpace(p.Value.Note)))
         {
-            using var ins = Cmd(conn, """
-                INSERT INTO dbo.SYS_Permission(RoleId, FormKey, CanOpen, CanInsert, CanModify, CanDelete, CanPrint) VALUES (@r, @f, @o, @i, @m, @d, @p)
-                """, ("@r", roleId), ("@f", formKey), ("@o", p.Open), ("@i", p.Insert), ("@m", p.Modify), ("@d", p.Delete), ("@p", p.Print));
+            var p = rp.Permission;
+            using var ins = Cmd(conn, $"""
+                INSERT INTO dbo.SYS_Permission(RoleId, FormKey, {PermissionColumns}, Note, ValidUntil) VALUES (@r, @f, @o, @i, @m, @d, @p, @a, @e, @n, @v)
+                """, ("@r", roleId), ("@f", formKey), ("@o", p.Open), ("@i", p.Insert), ("@m", p.Modify), ("@d", p.Delete), ("@p", p.Print),
+                ("@a", p.Approve), ("@e", p.Export), ("@n", string.IsNullOrWhiteSpace(rp.Note) ? null : rp.Note.Trim()), ("@v", rp.ValidUntil?.Date));
             ins.Transaction = tran;
             ins.ExecuteNonQuery();
         }
         tran.Commit();
     }
 
-    /// <summary>使用者所有角色的權限聯集</summary>
+    /// <summary>使用者所有角色的權限聯集；過了職務代理效期的不算</summary>
     public static Dictionary<string, FormPermission> LoadUserPermissions(string cs, string userId)
     {
         var result = new Dictionary<string, FormPermission>(StringComparer.OrdinalIgnoreCase);
         var t = Query(cs, """
-            SELECT p.FormKey, p.CanOpen, p.CanInsert, p.CanModify, p.CanDelete, p.CanPrint
-            FROM dbo.SYS_Permission p JOIN dbo.SYS_UserRole ur ON ur.RoleId = p.RoleId WHERE ur.UserId = @u
+            SELECT p.FormKey, p.CanOpen, p.CanInsert, p.CanModify, p.CanDelete, p.CanPrint, p.CanApprove, p.CanExport
+            FROM dbo.SYS_Permission p JOIN dbo.SYS_UserRole ur ON ur.RoleId = p.RoleId
+            WHERE ur.UserId = @u AND (p.ValidUntil IS NULL OR p.ValidUntil >= CAST(GETDATE() AS date))
             """, ("@u", userId));
         foreach (DataRow r in t.Rows)
         {
@@ -415,7 +436,8 @@ public static class SysDb
         return result;
     }
 
-    private static FormPermission ToPermission(DataRow r) => new((bool)r["CanOpen"], (bool)r["CanInsert"], (bool)r["CanModify"], (bool)r["CanDelete"], (bool)r["CanPrint"]);
+    private static FormPermission ToPermission(DataRow r) => new((bool)r["CanOpen"], (bool)r["CanInsert"], (bool)r["CanModify"], (bool)r["CanDelete"], (bool)r["CanPrint"],
+                                                                 (bool)r["CanApprove"], (bool)r["CanExport"]);
 
     // ================= 選單 =================
 
