@@ -78,32 +78,8 @@ public class GridBox : DesignBox
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(SystemColors.Window);
-
-        // 欄位標題
-        int x = 0;
-        var headerRect = new Rectangle(0, 0, Width, HeaderHeight);
-        g.FillRectangle(SystemBrushes.Control, headerRect);
-        foreach (var c in GridDef.Columns.Where(c => c.Visible))
-        {
-            var cell = new Rectangle(x, 0, c.Width, HeaderHeight);
-            g.DrawRectangle(SystemPens.ControlDark, cell);
-            TextRenderer.DrawText(g, c.Header, Font, Rectangle.Inflate(cell, -3, 0), SystemColors.ControlText,
-                TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            x += c.Width;
-            if (x > Width) break;
-        }
-
-        // 空白資料列的格線
-        for (int y = HeaderHeight + RowHeight; y < Height; y += RowHeight)
-            g.DrawLine(SystemPens.ControlLight, 0, y, Width, y);
-
-        // 選取時用較粗的藍框標示（沒有標題列可以變色了）
-        if (IsSelected)
-            using (var pen = new Pen(Color.DodgerBlue, 3))
-                g.DrawRectangle(pen, 1, 1, Width - 3, Height - 3);
-        else
-            g.DrawRectangle(SystemPens.ControlDark, 0, 0, Width - 1, Height - 1);
+        // 圓角、欄位標題、橫線與直線（跟執行時的 Grid 一樣）；選取時藍色粗框
+        GridCells.PaintPreview(g, this, GridDef.Columns, HeaderHeight, RowHeight, IsSelected);
         if (IsDocked)
         {
             // 停靠時在上邊緣中央畫兩條短橫線，提示可以往上拉

@@ -29,6 +29,8 @@ namespace FormBuilder
         private void InitializeComponent()
         {
             this.layout = new System.Windows.Forms.TableLayoutPanel();
+            this.lblKind = new System.Windows.Forms.Label();
+            this.cboKind = new System.Windows.Forms.ComboBox();
             this.lblServer = new System.Windows.Forms.Label();
             this.txtServer = new System.Windows.Forms.TextBox();
             this.lblDatabase = new System.Windows.Forms.Label();
@@ -59,20 +61,23 @@ namespace FormBuilder
             this.layout.ColumnCount = 2;
             this.layout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
             this.layout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
-            this.layout.Controls.Add(this.lblServer, 0, 0);
-            this.layout.Controls.Add(this.txtServer, 1, 0);
-            this.layout.Controls.Add(this.lblDatabase, 0, 1);
-            this.layout.Controls.Add(this.dbRow, 1, 1);
-            this.layout.Controls.Add(this.lblAuth, 0, 2);
-            this.layout.Controls.Add(this.authRow, 1, 2);
-            this.layout.Controls.Add(this.lblUser, 0, 3);
-            this.layout.Controls.Add(this.txtUser, 1, 3);
-            this.layout.Controls.Add(this.lblPassword, 0, 4);
-            this.layout.Controls.Add(this.txtPassword, 1, 4);
-            this.layout.Controls.Add(this.buttonRow, 0, 5);
+            this.layout.Controls.Add(this.lblKind, 0, 0);
+            this.layout.Controls.Add(this.cboKind, 1, 0);
+            this.layout.Controls.Add(this.lblServer, 0, 1);
+            this.layout.Controls.Add(this.txtServer, 1, 1);
+            this.layout.Controls.Add(this.lblDatabase, 0, 2);
+            this.layout.Controls.Add(this.dbRow, 1, 2);
+            this.layout.Controls.Add(this.lblAuth, 0, 3);
+            this.layout.Controls.Add(this.authRow, 1, 3);
+            this.layout.Controls.Add(this.lblUser, 0, 4);
+            this.layout.Controls.Add(this.txtUser, 1, 4);
+            this.layout.Controls.Add(this.lblPassword, 0, 5);
+            this.layout.Controls.Add(this.txtPassword, 1, 5);
+            this.layout.Controls.Add(this.buttonRow, 0, 6);
             this.layout.Location = new System.Drawing.Point(10, 10);
             this.layout.Name = "layout";
-            this.layout.RowCount = 6;
+            this.layout.RowCount = 7;
+            this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
             this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
             this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
             this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
@@ -80,8 +85,23 @@ namespace FormBuilder
             this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
             this.layout.RowStyles.Add(new System.Windows.Forms.RowStyle());
             this.layout.SetColumnSpan(this.buttonRow, 2);
-            this.layout.Size = new System.Drawing.Size(360, 200);
+            this.layout.Size = new System.Drawing.Size(360, 230);
             this.layout.TabIndex = 0;
+            //
+            // lblKind
+            //
+            this.lblKind.Anchor = System.Windows.Forms.AnchorStyles.Left;
+            this.lblKind.AutoSize = true;
+            this.lblKind.Margin = new System.Windows.Forms.Padding(3, 8, 10, 3);
+            this.lblKind.Name = "lblKind";
+            this.lblKind.Text = "資料庫類型";
+            //
+            // cboKind
+            //
+            this.cboKind.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cboKind.Name = "cboKind";
+            this.cboKind.Size = new System.Drawing.Size(180, 23);
+            this.cboKind.TabIndex = 0;
             //
             // lblServer
             //
@@ -95,7 +115,7 @@ namespace FormBuilder
             //
             this.txtServer.Name = "txtServer";
             this.txtServer.Size = new System.Drawing.Size(260, 23);
-            this.txtServer.TabIndex = 0;
+            this.txtServer.TabIndex = 1;
             //
             // lblDatabase
             //
@@ -112,7 +132,7 @@ namespace FormBuilder
             this.dbRow.Controls.Add(this.btnListDb);
             this.dbRow.Margin = new System.Windows.Forms.Padding(0);
             this.dbRow.Name = "dbRow";
-            this.dbRow.TabIndex = 1;
+            this.dbRow.TabIndex = 2;
             //
             // cboDatabase
             //
@@ -142,7 +162,7 @@ namespace FormBuilder
             this.authRow.Controls.Add(this.rbWindows);
             this.authRow.Margin = new System.Windows.Forms.Padding(0);
             this.authRow.Name = "authRow";
-            this.authRow.TabIndex = 2;
+            this.authRow.TabIndex = 3;
             //
             // rbSql
             //
@@ -151,7 +171,7 @@ namespace FormBuilder
             this.rbSql.Name = "rbSql";
             this.rbSql.TabIndex = 0;
             this.rbSql.TabStop = true;
-            this.rbSql.Text = "SQL Server 帳號";
+            this.rbSql.Text = "資料庫帳號";
             //
             // rbWindows
             //
@@ -172,7 +192,7 @@ namespace FormBuilder
             //
             this.txtUser.Name = "txtUser";
             this.txtUser.Size = new System.Drawing.Size(260, 23);
-            this.txtUser.TabIndex = 3;
+            this.txtUser.TabIndex = 4;
             //
             // lblPassword
             //
@@ -186,7 +206,7 @@ namespace FormBuilder
             //
             this.txtPassword.Name = "txtPassword";
             this.txtPassword.Size = new System.Drawing.Size(260, 23);
-            this.txtPassword.TabIndex = 4;
+            this.txtPassword.TabIndex = 5;
             this.txtPassword.UseSystemPasswordChar = true;
             //
             // buttonRow
@@ -198,7 +218,7 @@ namespace FormBuilder
             this.buttonRow.Dock = System.Windows.Forms.DockStyle.Fill;
             this.buttonRow.FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft;
             this.buttonRow.Name = "buttonRow";
-            this.buttonRow.TabIndex = 5;
+            this.buttonRow.TabIndex = 6;
             //
             // btnCancel
             //
@@ -228,7 +248,7 @@ namespace FormBuilder
             this.AutoSize = true;
             this.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(380, 220);
+            this.ClientSize = new System.Drawing.Size(380, 250);
             this.Controls.Add(this.layout);
             this.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
@@ -253,6 +273,8 @@ namespace FormBuilder
         #endregion
 
         private System.Windows.Forms.TableLayoutPanel layout;
+        private System.Windows.Forms.Label lblKind;
+        private System.Windows.Forms.ComboBox cboKind;
         private System.Windows.Forms.Label lblServer;
         private System.Windows.Forms.TextBox txtServer;
         private System.Windows.Forms.Label lblDatabase;

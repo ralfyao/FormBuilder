@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Microsoft.Data.SqlClient;
 
 namespace FormBuilder;
 
@@ -27,14 +26,14 @@ public static class ButtonRunner
         }
         try
         {
-            using var conn = new SqlConnection(connectionString);
-            conn.Open();
+            var d = DbDialect.Of(connectionString);
+            var (sql, parameters) = d.PrepareUserSql(b.Sql);      // @欄位名稱 轉成這個資料庫的參數寫法
+            using var conn = d.Open(connectionString);
             using var tran = conn.BeginTransaction();
-            using var cmd = conn.CreateCommand();
+            using var cmd = d.CreateCommand(conn, sql);
             cmd.Transaction = tran;
-            cmd.CommandText = b.Sql;
-            foreach (string name in ParameterNames(b.Sql))
-                cmd.Parameters.AddWithValue("@" + name, valueOf(name) ?? DBNull.Value);
+            foreach (var (name, parameter) in parameters)
+                d.AddParam(cmd, parameter, valueOf(name));
             int rows = cmd.ExecuteNonQuery();
             tran.Commit();
             MessageBox.Show(rows >= 0 ? $"執行完成（影響 {rows} 筆）。" : "執行完成。", b.Text);

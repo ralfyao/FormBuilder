@@ -39,6 +39,8 @@ namespace FormBuilder
             this.colIsKey = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.colNoEntry = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.colSource = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colCellType = new System.Windows.Forms.DataGridViewComboBoxColumn();
+            this.colCellOptions = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ctxJoin = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.miRemoveJoin = new System.Windows.Forms.ToolStripMenuItem();
             this.linkGroup = new System.Windows.Forms.GroupBox();
@@ -86,6 +88,8 @@ namespace FormBuilder
             this.colWidth,
             this.colIsKey,
             this.colNoEntry,
+            this.colCellType,
+            this.colCellOptions,
             this.colSource});
             this.dgvColumns.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dgvColumns.Name = "dgvColumns";
@@ -142,6 +146,30 @@ namespace FormBuilder
             this.colNoEntry.HeaderText = "只顯示";
             this.colNoEntry.Name = "colNoEntry";
             this.colNoEntry.Width = 60;
+            //
+            // colCellType
+            //
+            this.colCellType.DataPropertyName = "CellType";
+            this.colCellType.DisplayStyle = System.Windows.Forms.DataGridViewComboBoxDisplayStyle.ComboBox;
+            this.colCellType.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.colCellType.HeaderText = "輸入方式";
+            this.colCellType.Items.AddRange(new object[] {
+            "自動",
+            "文字框",
+            "下拉選單",
+            "勾選框",
+            "日期選擇"});
+            this.colCellType.Name = "colCellType";
+            this.colCellType.ToolTipText = "Grid 儲存格的輸入方式；自動 = bit 用勾選框、日期用日期選擇，其他用文字框";
+            this.colCellType.Width = 90;
+            //
+            // colCellOptions
+            //
+            this.colCellOptions.DataPropertyName = "CellOptions";
+            this.colCellOptions.HeaderText = "選項 / 格式";
+            this.colCellOptions.Name = "colCellOptions";
+            this.colCellOptions.ToolTipText = "下拉選單：A=甲類,B=乙類 或 SELECT 值, 顯示 FROM …；勾選框：勾選值/取消值，例如 Y/N；日期選擇：文字欄位的日期格式，例如 yyyyMMdd";
+            this.colCellOptions.Width = 200;
             //
             // colSource
             //
@@ -324,6 +352,8 @@ namespace FormBuilder
         private System.Windows.Forms.DataGridViewComboBoxColumn colDetail;
         private System.Windows.Forms.Panel bottom;
         private System.Windows.Forms.DataGridViewTextBoxColumn colSource;
+        private System.Windows.Forms.DataGridViewComboBoxColumn colCellType;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colCellOptions;
         private System.Windows.Forms.ContextMenuStrip ctxJoin;
         private System.Windows.Forms.ToolStripMenuItem miRemoveJoin;
         private System.Windows.Forms.Button btnJoin;

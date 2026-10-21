@@ -62,6 +62,10 @@ public class FieldBox : DesignBox
                        InputKind.選項按鈕 => "  ◉ ○",
                        _ => "",
                    };
+        input.Fill = Field.BackColor;
+        input.Font = Field.FontSize > 0 ? new Font(caption.Font.FontFamily, Field.FontSize) : caption.Font;
+        input.ForeColor = Field.BackColor.IsEmpty ? SystemColors.GrayText : ControlPaint.Dark(ButtonLook.Contrast(Field.BackColor), 0.1f);
+        input.Invalidate();
         input.SetBounds(labelWidth + 4, 0, Math.Max(Field.Width, MinInputWidth), InputHeight);
         Size = new Size(labelWidth + 4 + input.Width + 2, InputHeight + 2);
         Location = new Point(Field.X, Field.Y);

@@ -1,5 +1,4 @@
 using System.Globalization;
-using Microsoft.Data.SqlClient;
 
 namespace FormBuilder;
 
@@ -66,6 +65,20 @@ public static class InputHelper
         return tb;
     }
 
+    /// <summary>
+    /// 套用後台設定的字體大小與底色（要在 RoundedStyle.Place 之前，文字框的高度才會依字體算）；
+    /// baseFont = 畫面的字型，放大時沿用同一個字型
+    /// </summary>
+    public static void ApplyLook(FieldDefinition f, Control input, Font baseFont)
+    {
+        if (f.FontSize > 0) input.Font = new Font(baseFont.FontFamily, f.FontSize, baseFont.Style);
+        if (!f.BackColor.IsEmpty)
+        {
+            input.BackColor = f.BackColor;
+            RoundedStyle.SetFill(input, f.BackColor);     // 圓角外框也用同一個底色
+        }
+    }
+
     /// <summary>勾選框打勾 / 沒打勾要存進非 bit 欄位的值</summary>
     private sealed record CheckValues(string Checked, string Unchecked);
 
@@ -106,7 +119,7 @@ public static class InputHelper
     }
 
     /// <summary>選項 = 固定選項 + 選項 SQL 查出來的（下拉選單、選項按鈕共用）；withBlank = 最上面加空白選項</summary>
-    private static List<ComboItem> BuildItems(FieldDefinition f, string connectionString, bool withBlank)
+    public static List<ComboItem> BuildItems(FieldDefinition f, string connectionString, bool withBlank)
     {
         var items = new List<ComboItem>();
         if (withBlank) items.Add(new ComboItem("", ""));
@@ -115,9 +128,9 @@ public static class InputHelper
         {
             try
             {
-                using var conn = new SqlConnection(connectionString);
-                conn.Open();
-                using var cmd = new SqlCommand(f.ItemsSql, conn);
+                var d = DbDialect.Of(connectionString);
+                using var conn = d.Open(connectionString);
+                using var cmd = d.CreateCommand(conn, d.PrepareUserSql(f.ItemsSql).Sql);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -261,6 +274,8 @@ public static class InputHelper
         IsKey = c.IsKey,
         Label = string.IsNullOrWhiteSpace(c.EditLabel) ? c.Header : c.EditLabel,
         Placeholder = c.EditPlaceholder,
+        FontSize = c.EditFontSize,
+        BackColorHtml = c.EditBackColorHtml,
         LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
         InputType = c.EditInputType,
         Items = c.EditItems,
@@ -298,6 +313,7 @@ public static class InputHelper
             });
             Control input = CreateInput(f, connectionString);
             if (input is RadioGroup) input.ForeColor = labelColor;
+            ApplyLook(f, input, body.Font);                  // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
