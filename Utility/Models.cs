@@ -79,7 +79,8 @@ public class FormDefinition
         }
     }
 
-    [Category("資料"), DisplayName("連線字串"), ReadOnly(true)]
+    // 屬性面板不顯示連線字串（資料庫路徑不外露）；要換連線用上方的「設定連線」
+    [Browsable(false)]
     public string ConnectionString
     {
         get => connectionString;

@@ -188,7 +188,7 @@ public partial class DesignerForm : Form
         connectionString = value;
         databaseType = kind;
         DbDialect.Register(value, kind);
-        lblConn.Text = ConnectionDialog.Mask(value);      // 畫面上不顯示密碼
+        lblConn.Text = ConnectionDialog.Describe(value);  // 畫面上不顯示資料庫路徑（伺服器、資料庫、帳號）
     }
 
     private void Connect()

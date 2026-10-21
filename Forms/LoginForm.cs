@@ -6,11 +6,13 @@ public partial class LoginForm : Form
     private readonly SysConfig config;
 
     /// <param name="productName">登入畫面上顯示的產品名稱（後台工具是 ERP Studio，使用者端是 ERP 系統）</param>
-    public LoginForm(SysConfig config, string productName = "ERP Studio")
+    /// <param name="allowSetup">false = 使用者端：不顯示「系統設定」和系統資料庫的狀態</param>
+    public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true)
     {
         InitializeComponent();
         this.config = config;
         lblTitle.Text = productName;
+        lnkSetup.Visible = lblServer.Visible = allowSetup;
         Text = $"登入　{productName} {Updater.CurrentVersion}";
         txtUser.Text = config.LastUser ?? "";
         btnLogin.Click += (s, e) => DoLogin();
@@ -26,7 +28,7 @@ public partial class LoginForm : Form
     private void ShowServer()
     {
         string cs = config.GetConnection();
-        lblServer.Text = cs == null ? "尚未設定系統資料庫" : "系統資料庫：" + ConnectionDialog.Mask(cs);
+        lblServer.Text = cs == null ? "尚未設定系統資料庫" : "系統資料庫：" + ConnectionDialog.Describe(cs);   // 不顯示資料庫路徑
     }
 
     private void DoLogin()

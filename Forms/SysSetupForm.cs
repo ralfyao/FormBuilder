@@ -36,7 +36,7 @@ public partial class SysSetupForm : Form
     /// <summary>顯示連線（密碼遮起來）；系統資料庫已經有帳號時不用再建管理者</summary>
     private void ShowConnection()
     {
-        txtConn.Text = connection == null ? "" : ConnectionDialog.Mask(connection);
+        txtConn.Text = connection == null ? "" : ConnectionDialog.Describe(connection);    // 不顯示資料庫路徑；要改按「設定連線」
         grpAdmin.Enabled = true;
         if (connection == null) return;
         try
