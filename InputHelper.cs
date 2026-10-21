@@ -309,7 +309,7 @@ public static class InputHelper
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
                 ForeColor = labelColor,
-                Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(body.Font)),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f, connectionString);
             if (input is RadioGroup) input.ForeColor = labelColor;

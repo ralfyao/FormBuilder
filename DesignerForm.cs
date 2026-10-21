@@ -667,10 +667,12 @@ public partial class DesignerForm : Form
         def.Height = Math.Max(def.Height, min.Height);
         canvas.Size = new Size(def.Width, def.Height);
         Color back = ColorText.BackOrDefault(def.BackColor);
-        if (canvas.BackColor != back)
+        Font font = def.ScreenFont(Font);
+        if (canvas.BackColor != back || !canvas.Font.Equals(font))
         {
             canvas.BackColor = back;
-            foreach (var box in canvas.Controls.OfType<FieldBox>()) box.RefreshFromModel();   // 標籤顏色跟著底色
+            canvas.Font = font;                            // 畫面字型：欄位、Grid、按鈕示意都跟著
+            foreach (var box in canvas.Controls.OfType<FieldBox>()) box.RefreshFromModel();   // 標籤顏色、高度跟著底色與字型
         }
         LayoutDockedGrids();
         canvas.Invalidate();                               // 重畫右下角的拖曳格紋
