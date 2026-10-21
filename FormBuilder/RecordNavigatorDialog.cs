@@ -49,10 +49,12 @@ public partial class RecordNavigatorDialog : Form
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
     public RecordNavigatorDialog(IRecordNavigator navigator, string title, List<FieldDefinition> editFields, Size? bodySize = null,
                                  string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
-                                 string effectiveColumn = null, List<EditListDefinition> lists = null, Color backColor = default)
+                                 string effectiveColumn = null, List<EditListDefinition> lists = null, Color backColor = default,
+                                 Font font = null)
     {
         InitializeComponent();
         body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
+        if (font != null) body.Font = font;                                // 畫面設定的字型、大小
         nav = navigator;
         this.connectionString = connectionString;
         this.sourcePath = sourcePath;

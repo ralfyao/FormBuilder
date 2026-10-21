@@ -15,10 +15,11 @@ public partial class RecordEditDialog : Form
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
     public RecordEditDialog(string title, List<FieldDefinition> editFields, Func<string, object> currentValue, Size? bodySize = null,
                             string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
-                            List<EditListDefinition> lists = null, Color backColor = default)
+                            List<EditListDefinition> lists = null, Color backColor = default, Font font = null)
     {
         InitializeComponent();
         body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
+        if (font != null) body.Font = font;                                // 畫面設定的字型、大小
         fields = editFields;
         Text = title;
         btnOk.Click += (s, e) => Accept();

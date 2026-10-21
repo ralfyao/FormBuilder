@@ -42,6 +42,29 @@ public class FormDefinition
         set => BackColorHtml = ColorText.Format(value);
     }
 
+    [Category("字型"), DisplayName("字型"), TypeConverter(typeof(FontNameConverter)),
+     Description("整個畫面（標籤、輸入框、Grid、按鈕，以及雙擊開啟的編輯視窗）用的字型；空白 = 預設的微軟正黑體。可以從清單挑選電腦上有的字型")]
+    public string FontName { get; set; }
+
+    [Category("字型"), DisplayName("字型大小"), DefaultValue(0f),
+     Description("整個畫面的文字大小（點），0 = 預設（9）。個別欄位設定的「字體大小」會優先；字放大後請把輸入框高度一起拉高")]
+    public float FontSize { get; set; }
+
+    /// <summary>畫面用的字型：有設定字型或大小就用設定的，沒有就用 fallback（視窗原本的字型）；字型不存在時也用 fallback</summary>
+    public Font ScreenFont(Font fallback)
+    {
+        if (string.IsNullOrWhiteSpace(FontName) && FontSize <= 0) return fallback;
+        try
+        {
+            var family = string.IsNullOrWhiteSpace(FontName) ? fallback.FontFamily : new FontFamily(FontName.Trim());
+            return new Font(family, FontSize > 0 ? Math.Clamp(FontSize, 6, 72) : fallback.Size, fallback.Style);
+        }
+        catch (ArgumentException)
+        {
+            return fallback;
+        }
+    }
+
     private string connectionString;
     private DbKind databaseType;
 
@@ -121,6 +144,21 @@ public class FormDefinition
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
 
     public static FormDefinition FromJson(string json) => JsonSerializer.Deserialize<FormDefinition>(json, JsonOptions);
+}
+
+/// <summary>屬性面板的「字型」下拉清單：列出這台電腦上安裝的字型（也可以直接打字）</summary>
+public class FontNameConverter : StringConverter
+{
+    public override bool GetStandardValuesSupported(ITypeDescriptorContext context) => true;
+    public override bool GetStandardValuesExclusive(ITypeDescriptorContext context) => false;
+    public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context) =>
+        new(FontFamily.Families.Select(f => f.Name).Prepend("").ToArray());
+}
+
+/// <summary>標籤的高度：至少 26，字放大時跟著變高（文字垂直置中，對齊輸入框）</summary>
+public static class LabelGeometry
+{
+    public static int Height(Font font) => Math.Max(FieldDefinition.DefaultHeight, font.Height + 8);
 }
 
 /// <summary>顏色與文字互轉（定義檔存文字）；沒設定 = Color.Empty，代表用預設的底色</summary>

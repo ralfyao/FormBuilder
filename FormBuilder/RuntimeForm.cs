@@ -57,6 +57,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         // 欄位、按鈕、Grid 依畫面定義動態產生到 body（body 在 Designer.cs）
         body.BackColor = ColorText.BackOrDefault(def.BackColor);             // 後台設定的畫面底色
+        body.Font = def.ScreenFont(body.Font);                               // 後台設定的畫面字型、大小（欄位、Grid、按鈕都跟著）
         Color labelColor = ColorText.LabelColor(def.BackColor);              // 底色深時標籤用白字
         foreach (var f in def.Fields)
         {
@@ -66,7 +67,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
                 ForeColor = labelColor,
-                Bounds = new Rectangle(f.X, f.Y + 2, f.LabelWidth, 22),
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(body.Font)),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f);
             if (input is RadioGroup) input.ForeColor = labelColor;
@@ -943,7 +944,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var keyColumns = def.MasterKeys.Select(k => k.Column).ToList();
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
         using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
-                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor);
+                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, body.Font);
         dlg.ShowDialog(this);
     }
 
@@ -991,7 +992,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column) || (c.IsKey && !keyEditable)))
             .ToList();
         using var dlg = new RecordEditDialog($"{(inDetailMode ? "編輯" : "修改")}明細：{gridDef.Title ?? gridDef.TableName}", fields, col => row[col],
-                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor);
+                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, body.Font);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Values.Count == 0) return;
 
         if (inDetailMode)
