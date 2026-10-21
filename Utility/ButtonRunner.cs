@@ -98,6 +98,11 @@ public static class ButtonRunner
     }
 
     /// <summary>
+    /// 使用者端的 ERP 外框設定這個，「開啟畫面」按鈕（不是選取視窗時）就開成外框裡的分頁；沒設定 = 開新視窗
+    /// </summary>
+    public static Action<FormDefinition, IDictionary<string, object>> OpenInShell { get; set; }
+
+    /// <summary>
     /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
     /// 「傳入參數」的 @欄位名稱 由 valueOf 取值；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn
     /// </summary>
@@ -124,7 +129,8 @@ public static class ButtonRunner
             var returns = ParsePairs(b.ReturnMap).ToList();
             if (returns.Count == 0)
             {
-                new RuntimeForm(target, parameters, pickMode: false).Show(owner);
+                if (OpenInShell != null) OpenInShell(target, parameters);
+                else new RuntimeForm(target, parameters, pickMode: false).Show(owner);
                 return;
             }
             // 選取視窗：使用者選一筆後關閉，依「回傳對應」把那筆的值帶回來
