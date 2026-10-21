@@ -17,6 +17,8 @@ public interface IRecordNavigator
     bool CanInsert { get; }
     bool CanDelete { get; }
     bool CanPrint { get; }
+    /// <summary>有核准權限（生效 / 取消生效）</summary>
+    bool CanApprove { get; }
     void MoveTo(int index);
     /// <summary>重讀目前這筆；已被刪除時回傳 false</summary>
     bool Refresh();
@@ -171,7 +173,7 @@ public partial class RecordNavigatorDialog : Form
         bool effective = hasRow && IsEffective(nav.CurrentRow);
         btnEffective.Visible = effectiveColumn != null && !effective;
         btnUneffective.Visible = effectiveColumn != null && effective;
-        btnEffective.Enabled = btnUneffective.Enabled = browsing && hasRow && nav.CanModify;
+        btnEffective.Enabled = btnUneffective.Enabled = browsing && hasRow && nav.CanApprove;
         btnPrint.Enabled = browsing && hasRow && nav.CanPrint && (effectiveColumn == null || effective);
         AcceptButton = browsing ? null : btnOk;          // 輸入中按 Enter = 確定
 

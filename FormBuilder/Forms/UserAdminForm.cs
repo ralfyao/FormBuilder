@@ -14,6 +14,18 @@ public partial class UserAdminForm : Form
     private readonly DataTable perms = new();
     private bool loadingRoles;
 
+    /// <summary>權限勾選欄：資料欄名稱、顯示名稱（編修 = 修改、報表 = 列印）</summary>
+    private static readonly (string Name, string Header, string Tip)[] PermFlags =
+    {
+        ("Open", "開啟", "可以在選單看到並開啟這個畫面"),
+        ("Insert", "新增", "新增資料"),
+        ("Modify", "編修", "修改資料、單身明細、執行SQL 按鈕"),
+        ("Delete", "刪除", "刪除資料（含批次刪除）"),
+        ("Approve", "核准", "生效 / 取消生效（含批次）"),
+        ("Print", "報表", "列印、列印報表"),
+        ("Export", "輸出", "清單匯出 Excel / CSV"),
+    };
+
     private sealed record RoleItem(string Id, string Name)
     {
         public override string ToString() => $"{Name}（{Id}）";
@@ -32,9 +44,22 @@ public partial class UserAdminForm : Form
         // ---- 角色與權限 ----
         perms.Columns.Add("FormKey", typeof(string));
         perms.Columns.Add("Title", typeof(string));
-        foreach (string c in new[] { "Open", "Insert", "Modify", "Delete", "Print" }) perms.Columns.Add(c, typeof(bool));
+        foreach (var f in PermFlags) perms.Columns.Add(f.Name, typeof(bool));
+        perms.Columns.Add("Note", typeof(string));
+        perms.Columns.Add("ValidUntil", typeof(DateTime));
+        SetupPermColumns();
         dgvPerms.DataSource = perms;
-        dgvPerms.DataBindingComplete += (s, e) => SetupPermColumns();
+        dgvPerms.DataError += (s, e) => e.ThrowException = false;
+        // 職務代理效期：選日期；按 Delete 清掉（= 不限）
+        dgvPerms.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Delete && dgvPerms.CurrentCell?.OwningColumn.DataPropertyName is "ValidUntil" or "Note"
+                && dgvPerms.CurrentRow?.DataBoundItem is DataRowView v)
+            {
+                v[dgvPerms.CurrentCell.OwningColumn.DataPropertyName] = DBNull.Value;
+                e.Handled = true;
+            }
+        };
         lstRoles.SelectedIndexChanged += (s, e) => LoadPerms();
         btnNewRole.Click += (s, e) => NewRole();
         btnRenameRole.Click += (s, e) => RenameRole();
@@ -45,8 +70,8 @@ public partial class UserAdminForm : Form
         // 勾「新增 / 修改 / 刪除 / 列印」時自動勾「開啟」（沒有開啟權限其他都用不到）
         dgvPerms.CellValueChanged += (s, e) =>
         {
-            if (e.RowIndex < 0 || e.ColumnIndex < 3) return;
-            if (perms.Rows[e.RowIndex][e.ColumnIndex] is true) perms.Rows[e.RowIndex]["Open"] = true;
+            if (e.RowIndex < 0 || dgvPerms.Columns[e.ColumnIndex].DataPropertyName is not ("Insert" or "Modify" or "Delete" or "Approve" or "Print" or "Export")) return;
+            if (dgvPerms.Rows[e.RowIndex].DataBoundItem is DataRowView v && v[dgvPerms.Columns[e.ColumnIndex].DataPropertyName] is true) v["Open"] = true;
         };
         dgvPerms.CurrentCellDirtyStateChanged += (s, e) => { if (dgvPerms.IsCurrentCellDirty) dgvPerms.CommitEdit(DataGridViewDataErrorContexts.Commit); };
 
@@ -177,31 +202,34 @@ public partial class UserAdminForm : Form
         var current = SysDb.LoadRolePermissions(Cs, role.Id);
         foreach (var f in SysDb.LoadPublished(Cs, "form"))
         {
-            var p = current.GetValueOrDefault(f.FormKey, FormPermission.None);
-            perms.Rows.Add(f.FormKey, f.Title ?? f.FormKey, p.Open, p.Insert, p.Modify, p.Delete, p.Print);
+            var rp = current.GetValueOrDefault(f.FormKey) ?? new RolePermission(FormPermission.None, null, null);
+            var p = rp.Permission;
+            perms.Rows.Add(f.FormKey, f.Title ?? f.FormKey, p.Open, p.Insert, p.Modify, p.Delete, p.Approve, p.Print, p.Export,
+                           (object)rp.Note ?? DBNull.Value, rp.ValidUntil.HasValue ? rp.ValidUntil.Value : DBNull.Value);
         }
         perms.AcceptChanges();
         lblPermHint.Text = $"角色「{role.Name}」對每個已發布畫面的權限（使用者有多個角色時取聯集）";
     }
 
+    /// <summary>權限表的欄位：畫面代號、名稱、七個權限勾選、註記、職務代理效期（日期選擇）</summary>
     private void SetupPermColumns()
     {
-        var headers = new Dictionary<string, string>
-        {
-            ["FormKey"] = "畫面代號", ["Title"] = "畫面名稱", ["Open"] = "開啟", ["Insert"] = "新增", ["Modify"] = "修改", ["Delete"] = "刪除", ["Print"] = "列印",
-        };
-        foreach (DataGridViewColumn col in dgvPerms.Columns)
-        {
-            col.HeaderText = headers.GetValueOrDefault(col.DataPropertyName, col.HeaderText);
-            col.ReadOnly = col.DataPropertyName is "FormKey" or "Title";
-            col.Width = col.DataPropertyName switch { "FormKey" => 180, "Title" => 200, _ => 56 };
-        }
+        dgvPerms.AutoGenerateColumns = false;
+        dgvPerms.Columns.Clear();
+        dgvPerms.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "FormKey", HeaderText = "畫面代號", Width = 150, ReadOnly = true, Frozen = true });
+        dgvPerms.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Title", HeaderText = "畫面名稱", Width = 150, ReadOnly = true, Frozen = true });
+        foreach (var (name, header, tip) in PermFlags)
+            dgvPerms.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = name, HeaderText = header, Width = 48, ToolTipText = tip });
+        dgvPerms.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Note", HeaderText = "註記", Width = 200, MaxInputLength = 150 });
+        dgvPerms.Columns.Add(new CalendarColumn { DataPropertyName = "ValidUntil", HeaderText = "職務代理效期", Width = 110,
+                                                  ToolTipText = "過了這天這組權限就失效（例如職務代理到期）；空白 = 不限，按 Delete 清除" });
+        GridCells.ApplyGridLines(dgvPerms);
     }
 
     private void SetAllPerms(bool value)
     {
         foreach (DataRow r in perms.Rows)
-            foreach (string c in new[] { "Open", "Insert", "Modify", "Delete", "Print" }) r[c] = value;
+            foreach (var f in PermFlags) r[f.Name] = value;
     }
 
     private void SavePerms()
@@ -210,11 +238,23 @@ public partial class UserAdminForm : Form
         if (role == null) return;
         dgvPerms.EndEdit();
         var map = perms.Rows.Cast<DataRow>().ToDictionary(r => (string)r["FormKey"],
-            r => new FormPermission((bool)r["Open"], (bool)r["Insert"], (bool)r["Modify"], (bool)r["Delete"], (bool)r["Print"]));
+            r => new RolePermission(new FormPermission((bool)r["Open"], (bool)r["Insert"], (bool)r["Modify"], (bool)r["Delete"], (bool)r["Print"],
+                                                       (bool)r["Approve"], (bool)r["Export"]),
+                                    r["Note"] as string, r["ValidUntil"] as DateTime?));
         SysDb.SaveRolePermissions(Cs, role.Id, map);
-        Audit.Write(null, "SYS_Permission", "權限", "RoleId=" + role.Id, map.Where(p => p.Value.Open).ToDictionary(p => p.Key, p => p.Value.ToString()));
+        Audit.Write(null, "SYS_Permission", "權限", "RoleId=" + role.Id,
+                    map.Where(p => p.Value.Permission.Any).ToDictionary(p => p.Key, p => DescribePermission(p.Value)));
         perms.AcceptChanges();
         MessageBox.Show($"角色「{role.Name}」的權限已儲存（使用者重新整理選單或重新登入後生效）。", Text);
+    }
+
+    /// <summary>稽核紀錄用：「開啟、新增、核准（到 2026/12/31）」</summary>
+    private static string DescribePermission(RolePermission rp)
+    {
+        var p = rp.Permission;
+        var names = new (bool On, string Name)[] { (p.Open, "開啟"), (p.Insert, "新增"), (p.Modify, "編修"), (p.Delete, "刪除"), (p.Approve, "核准"), (p.Print, "報表"), (p.Export, "輸出") }
+            .Where(x => x.On).Select(x => x.Name);
+        return string.Join("、", names) + (rp.ValidUntil.HasValue ? $"（到 {rp.ValidUntil:yyyy/MM/dd}）" : "");
     }
 
     private void NewRole()

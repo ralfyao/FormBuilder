@@ -1083,6 +1083,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     bool IRecordNavigator.CanInsert => perm.Insert;
     bool IRecordNavigator.CanDelete => HasKey && perm.Delete;
     bool IRecordNavigator.CanPrint => perm.Print;
+    bool IRecordNavigator.CanApprove => HasKey && perm.Approve;
     void IRecordNavigator.MoveTo(int index) => MoveTo(index);
     bool IRecordNavigator.Refresh()
     {
@@ -1214,7 +1215,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var miEffective = new ToolStripMenuItem("生效");
         var miUneffective = new ToolStripMenuItem("取消生效");
         var miSelectAll = new ToolStripMenuItem("全選") { ShortcutKeyDisplayString = "Ctrl+A" };
-        menu.Items.AddRange(new ToolStripItem[] { miDelete, new ToolStripSeparator(), miEffective, miUneffective, new ToolStripSeparator(), miSelectAll });
+        var miExport = new ToolStripMenuItem("輸出到 Excel（CSV）…");
+        menu.Items.AddRange(new ToolStripItem[] { miDelete, new ToolStripSeparator(), miEffective, miUneffective, new ToolStripSeparator(), miExport, miSelectAll });
+        // 工具列也放一個「輸出」（有輸出權限才看得到）
+        var btnExport = new ToolStripButton("輸出") { DisplayStyle = ToolStripItemDisplayStyle.Text, AutoSize = false, Size = new Size(64, 28),
+                                                     ToolTipText = "把清單匯出成 CSV（Excel 可以直接開）；清單選了多筆時只匯出選取的", Visible = perm.Export };
+        btnExport.Click += (s, e) => ExportList();
+        toolStrip.Items.Insert(toolStrip.Items.IndexOf(sepExit), btnExport);
         menu.Opening += (s, e) =>
         {
             int n = SelectedRowIndexes().Count;
@@ -1225,13 +1232,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
             miUneffective.Text = n > 1 ? $"選取的 {n} 筆取消生效" : "取消生效";
             miDelete.Enabled = canEdit && perm.Delete;
             miEffective.Visible = miUneffective.Visible = effective;
-            miEffective.Enabled = miUneffective.Enabled = canEdit && perm.Modify;
+            miEffective.Enabled = miUneffective.Enabled = canEdit && perm.Approve;
+            miExport.Visible = perm.Export;
+            miExport.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
+            miExport.Text = n > 1 ? $"輸出選取的 {n} 筆到 Excel（CSV）…" : "輸出到 Excel（CSV）…";
             miSelectAll.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
         };
         miDelete.Click += (s, e) => DeleteSelectedRows();
         miEffective.Click += (s, e) => SetEffectiveSelected(true);
         miUneffective.Click += (s, e) => SetEffectiveSelected(false);
         miSelectAll.Click += (s, e) => listGrid.SelectAll();
+        miExport.Click += (s, e) => ExportList();
         listGrid.ContextMenuStrip = menu;
         // 右鍵點在沒選取的列上：改成只選那一列（跟檔案總管一樣）；點在已選取的列上保留多選
         listGrid.CellMouseDown += (s, e) =>
@@ -1249,6 +1260,36 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 DeleteSelectedRows();
             }
         };
+    }
+
+    /// <summary>
+    /// 輸出：把清單匯出成 CSV（UTF-8 含 BOM，Excel 直接開中文不會亂碼），欄位、標題、格式跟清單上看到的一樣；
+    /// 選了多筆時只匯出選取的，否則匯出全部查詢結果
+    /// </summary>
+    private void ExportList()
+    {
+        if (!perm.Export || results.Rows.Count == 0) return;
+        var rows = SelectedRowIndexes();
+        if (rows.Count <= 1) rows = Enumerable.Range(0, Math.Min(results.Rows.Count, listGrid.Rows.Count)).ToList();
+        using var dlg = new SaveFileDialog { Filter = "CSV（Excel 可開）(*.csv)|*.csv", FileName = $"{def.Title}_{DateTime.Now:yyyyMMdd_HHmm}.csv" };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var columns = listGrid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex).ToList();
+        static string Cell(object v) => "\"" + Convert.ToString(v)?.Replace("\"", "\"\"") + "\"";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(string.Join(",", columns.Select(c => Cell(c.HeaderText))));
+        foreach (int r in rows)
+            sb.AppendLine(string.Join(",", columns.Select(c => Cell(listGrid.Rows[r].Cells[c.Index].FormattedValue))));
+        try
+        {
+            File.WriteAllText(dlg.FileName, sb.ToString(), new System.Text.UTF8Encoding(true));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("輸出失敗（檔案是不是正在 Excel 開著？）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        Audit.Write(def.FormKey, def.TableName, "輸出", null, $"{rows.Count} 筆 → {Path.GetFileName(dlg.FileName)}");
+        MessageBox.Show($"已輸出 {rows.Count} 筆到 {dlg.FileName}", "輸出");
     }
 
     /// <summary>刪除清單上選取的資料（可多筆；有單身時連同明細），全部在同一個交易裡</summary>
