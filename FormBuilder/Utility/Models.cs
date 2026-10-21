@@ -576,6 +576,15 @@ public enum ButtonAction
     列印報表,
 }
 
+/// <summary>屬性面板「列印來源清單」的下拉清單：編輯視窗版面設計器把版面上的明細清單資料表放進 Available</summary>
+public class PrintListConverter : StringConverter
+{
+    public static List<string> Available { get; set; } = new();
+    public override bool GetStandardValuesSupported(ITypeDescriptorContext context) => true;
+    public override bool GetStandardValuesExclusive(ITypeDescriptorContext context) => false;
+    public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context) => new(Available.Prepend("").ToArray());
+}
+
 /// <summary>畫面上的按鈕（類似 Visual Studio 從工具箱拖進來的 Button）</summary>
 public class ButtonDefinition
 {
@@ -616,6 +625,11 @@ public class ButtonDefinition
     [Category("列印報表"), DisplayName("列印樣板檔"),
      Description("動作 = 列印報表 時使用的樣板（*.print.json）。在設計畫面上雙擊這個按鈕，就會開啟列印樣板設計（第一次儲存時會建立樣板檔）；只寫檔名時，會找跟目前畫面同一個資料夾的檔案")]
     public string PrintTemplate { get; set; }
+
+    [Category("列印報表"), DisplayName("列印來源清單"), TypeConverter(typeof(PrintListConverter)),
+     Description("空白 = 印目前這筆（主檔）。選編輯視窗上的明細清單（資料表名稱）= 印清單上選取的資料（可多選，每筆一頁；沒選會提醒）。"
+               + "選了之後，列印樣板改用這個清單的資料表與主鍵，主檔的欄位可以在樣板裡 JOIN 進來")]
+    public string PrintListTable { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
     [Browsable(false)]

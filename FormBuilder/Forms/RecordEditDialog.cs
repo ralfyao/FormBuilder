@@ -13,6 +13,9 @@ public partial class RecordEditDialog : Form
     public Dictionary<string, object> Values { get; } = new();
 
     /// <param name="bodySize">後台設計的欄位區大小；null = 依欄位自動決定</param>
+    /// <summary>編輯視窗上的明細清單（「列印來源清單」用）</summary>
+    private readonly List<EditListView> listViews = new();
+
     public RecordEditDialog(string title, List<FieldDefinition> editFields, Func<string, object> currentValue, Size? bodySize = null,
                             string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
                             List<EditListDefinition> lists = null, Color backColor = default, Font font = null)
@@ -57,6 +60,7 @@ public partial class RecordEditDialog : Form
                         });
                         break;
                     case ButtonAction.列印報表:
+                        if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, this)) break;   // 印下方清單選取的資料
                         ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => currentValue(name) }, this);
                         break;
                     case ButtonAction.開啟畫面:
@@ -74,6 +78,7 @@ public partial class RecordEditDialog : Form
         foreach (var l in lists ?? new List<EditListDefinition>())
         {
             var view = new EditListView(l, connectionString);
+            listViews.Add(view);
             body.Controls.Add(view.Host);                   // 圓角外框
             view.Reload(currentValue);
         }

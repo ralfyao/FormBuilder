@@ -186,6 +186,30 @@ public static class ButtonRunner
         PrintRunner.Preview(template, Path.GetFileNameWithoutExtension(b.PrintTemplate).Replace(".print", ""), connectionString, records, owner);
     }
 
+    /// <summary>
+    /// 「列印來源清單」有設定時：印編輯視窗上那個明細清單選取的資料（每筆一頁）；沒選就提醒。
+    /// 回傳 false = 這個按鈕沒有設定列印來源清單（照原本的方式印目前這筆）
+    /// </summary>
+    public static bool PrintFromList(ButtonDefinition b, IEnumerable<EditListView> views, string sourcePath, string connectionString, IWin32Window owner)
+    {
+        if (string.IsNullOrWhiteSpace(b.PrintListTable)) return false;
+        var view = views.FirstOrDefault(v => v.Definition.TableName.Equals(b.PrintListTable.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (view == null)
+        {
+            MessageBox.Show($"這個視窗上找不到列印來源清單「{b.PrintListTable}」，請到編輯視窗版面檢查按鈕的設定。", "列印");
+            return true;
+        }
+        var rows = view.SelectedRows();
+        if (rows.Count == 0)
+        {
+            MessageBox.Show($"請先在下方「{view.Definition.Title ?? view.Definition.TableName}」清單選取要列印的資料（按住 Ctrl 可以選多筆）。", "列印",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
+        }
+        Print(b, sourcePath, connectionString, rows.Select(r => (Func<string, object>)(name => r.Table.Columns.Contains(name) ? r[name] : null)).ToList(), owner);
+        return true;
+    }
+
     /// <summary>按鈕所在範圍（算視窗大小用）</summary>
     public static Size Extent(IEnumerable<ButtonDefinition> buttons)
     {
