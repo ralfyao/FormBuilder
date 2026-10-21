@@ -307,8 +307,11 @@ public static class SysDb
 
     // ================= 使用者 =================
 
-    /// <summary>登入：成功回傳使用者與「是否要先改密碼」；失敗回傳原因（密碼錯誤累計，錯太多次鎖定）</summary>
-    public static (SysUser User, bool MustChange, string Error) Login(string cs, string userId, string password)
+    /// <summary>
+    /// 登入：成功回傳使用者與「是否要先改密碼」；失敗回傳原因（密碼錯誤累計，錯太多次鎖定）。
+    /// adminOnly = 只有系統管理者能登入（ERP Studio）：密碼正確但不是管理者也算登入失敗（不累計錯誤次數）
+    /// </summary>
+    public static (SysUser User, bool MustChange, string Error) Login(string cs, string userId, string password, bool adminOnly = false)
     {
         var t = Query(cs, "SELECT UserId, UserName, PasswordHash, IsAdmin, IsActive, MustChangePassword, FailedCount FROM dbo.SYS_User WHERE UserId = @u",
                       ("@u", userId));
@@ -326,6 +329,11 @@ public static class SysDb
             WriteAudit(cs, userId, null, null, "登入失敗", null, "密碼錯誤");
             int left = LockAfterFailures - (int)r["FailedCount"] - 1;
             return (null, false, left > 0 ? $"帳號或密碼錯誤（再錯 {left} 次會鎖定）。" : "密碼錯誤太多次，帳號已鎖定，請洽系統管理者。");
+        }
+        if (adminOnly && !(bool)r["IsAdmin"])
+        {
+            WriteAudit(cs, userId, null, null, "登入失敗", null, "不是系統管理者，不能登入 ERP Studio");
+            return (null, false, "ERP Studio 只有系統管理者可以登入。一般使用者請使用「ERP 系統」。");
         }
         Execute(cs, "UPDATE dbo.SYS_User SET FailedCount = 0, LastLogin = SYSDATETIME() WHERE UserId = @u", ("@u", userId));
         WriteAudit(cs, userId, null, null, "登入", null, null);

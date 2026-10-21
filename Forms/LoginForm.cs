@@ -7,10 +7,12 @@ public partial class LoginForm : Form
 
     /// <param name="productName">登入畫面上顯示的產品名稱（後台工具是 ERP Studio，使用者端是 ERP 系統）</param>
     /// <param name="allowSetup">false = 使用者端：不顯示「系統設定」和系統資料庫的狀態</param>
-    public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true)
+    /// <param name="adminOnly">true = 只有系統管理者能登入（ERP Studio）</param>
+    public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true, bool adminOnly = false)
     {
         InitializeComponent();
         this.config = config;
+        this.adminOnly = adminOnly;
         lblTitle.Text = productName;
         lnkSetup.Visible = lblServer.Visible = allowSetup;
         Text = $"登入　{productName} {Updater.CurrentVersion}";
@@ -18,11 +20,38 @@ public partial class LoginForm : Form
         btnLogin.Click += (s, e) => DoLogin();
         lnkSetup.LinkClicked += (s, e) =>
         {
+            if (!VerifyAdminForSetup()) return;
             using var setup = new SysSetupForm(config);
             if (setup.ShowDialog(this) == DialogResult.OK) ShowServer();
         };
         Shown += (s, e) => (txtUser.Text == "" ? txtUser : txtPwd).Focus();
         ShowServer();
+    }
+
+    private readonly bool adminOnly;
+
+    /// <summary>
+    /// 「系統設定」會改這台電腦的系統資料庫連線，所以已經設定好時要先通過管理者驗證；
+    /// 還沒設定、或系統資料庫連不上（要改連線才能修好）時不擋
+    /// </summary>
+    private bool VerifyAdminForSetup()
+    {
+        string cs = config.GetConnection();
+        if (cs == null) return true;
+        try
+        {
+            if (SysDb.UserCount(cs) == 0) return true;
+        }
+        catch (Exception)
+        {
+            return MessageBox.Show("目前的系統資料庫連不上，要重新設定連線嗎？", "系統設定", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+        }
+        var v = PromptDialog.Ask(this, "系統設定：請輸入系統管理者帳號密碼", values =>
+        {
+            var (user, _, error) = SysDb.Login(cs, values[0], values[1], adminOnly: true);
+            return user == null ? error : null;
+        }, new PromptDialog.Field("管理者帳號", txtUser.Text.Trim()), new PromptDialog.Field("密碼", Password: true));
+        return v != null;
     }
 
     private void ShowServer()
@@ -48,7 +77,7 @@ public partial class LoginForm : Form
         try
         {
             Cursor = Cursors.WaitCursor;
-            var (user, mustChange, error) = SysDb.Login(cs, userId, txtPwd.Text);
+            var (user, mustChange, error) = SysDb.Login(cs, userId, txtPwd.Text, adminOnly);
             Cursor = Cursors.Default;
             if (user == null)
             {
