@@ -97,7 +97,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             listGrid = CreateDetailGrid(listDef, def.ConnectionString);
             listGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-            listGrid.MultiSelect = false;
+            listGrid.MultiSelect = true;                     // 按住 Ctrl / Shift 可以選多筆，右鍵選單批次刪除、生效
+            SetupListBatchMenu();
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
             HookEditDialog(listGrid, EditMasterRow);
             // 空白處雙擊（還沒有資料時）也能開編輯視窗，才有地方按「新增」
@@ -467,17 +468,21 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// </summary>
     private void RunCustomSql(ButtonDefinition b)
     {
-        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, name =>
+        // 清單選了多筆時，每一筆各執行一次（同一個交易）；@欄位名稱 先找那一筆的資料，沒有就找畫面上的輸入欄位
+        var rows = SelectedRowIndexes();
+        if (rows.Count == 0 && HasCurrent) rows.Add(current);
+        Func<string, object> ValueOf(int? row) => name =>
         {
-            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            if (row != null && results.Columns.Contains(name)) return results.Rows[row.Value][name];
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             return field != null ? GetValue(field) : null;
-        });
-        // 資料可能被 SQL 改過，重讀目前這筆
-        if (ok && HasCurrent && HasKey)
+        };
+        var valueOfs = rows.Count > 0 ? rows.Select(r => ValueOf(r)).ToList() : new List<Func<string, object>> { ValueOf(null) };
+        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs);
+        // 資料可能被 SQL 改過，重讀執行過的那幾筆
+        if (ok && HasKey && rows.Count > 0)
         {
-            RefreshCurrentRow();
-            ShowCurrent();
+            RefreshRows(rows);
             SetMode(mode);
         }
     }
@@ -661,8 +666,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     // ================= 讀取單筆 =================
 
-    private Dictionary<string, object> CurrentKey() =>
-        def.MasterKeys.ToDictionary(k => k.Column, k => results.Rows[current][k.Column]);
+    private Dictionary<string, object> CurrentKey() => KeyOf(current);
+
+    /// <summary>查詢結果第 row 筆的主鍵值</summary>
+    private Dictionary<string, object> KeyOf(int row) =>
+        def.MasterKeys.ToDictionary(k => k.Column, k => results.Rows[row][k.Column]);
 
     private DataRow LoadRowByKey(Dictionary<string, object> key)
     {
@@ -800,14 +808,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 m0、m1…；沒有關聯欄位時回傳空字串</summary>
-    private string AddDetailCondition(DbCommand cmd, string tableAlias = null)
+    /// <param name="row">查詢結果的第幾筆；null = 目前這筆</param>
+    private string AddDetailCondition(DbCommand cmd, string tableAlias = null, int? row = null)
     {
         var conditions = new List<string>();
         int i = 0;
         foreach (var (master, detail) in gridDef.Links)
         {
             conditions.Add($"{(tableAlias != null ? Dialect.Quote(tableAlias) + "." : "")}{Dialect.Quote(detail)} = {Dialect.Param($"m{i}")}");
-            Dialect.AddParam(cmd, $"m{i}", results.Rows[current][master]);
+            Dialect.AddParam(cmd, $"m{i}", results.Rows[row ?? current][master]);
             i++;
         }
         return string.Join(" AND ", conditions);
@@ -1039,6 +1048,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         try
         {
             if (listGrid.DataSource != results) listGrid.DataSource = results;
+            // 使用者在清單上點選（含 Ctrl / Shift 多選）造成的切換：保留使用者選的列
+            if (HasCurrent && current < listGrid.Rows.Count && listGrid.CurrentRow?.Index == current && listGrid.Rows[current].Selected) return;
             listGrid.ClearSelection();
             if (HasCurrent && current < listGrid.Rows.Count)
             {
@@ -1059,6 +1070,150 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (syncingList || mode != Mode.Browse) return;
         int index = listGrid.CurrentRow?.Index ?? -1;
         if (index >= 0 && index < results.Rows.Count && index != current) MoveTo(index);
+    }
+
+    /// <summary>清單上選取的列（由上到下）；沒有清單時是空的</summary>
+    private List<int> SelectedRowIndexes() =>
+        listGrid == null ? new List<int>()
+        : listGrid.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Index).Where(i => i >= 0 && i < results.Rows.Count).OrderBy(i => i).ToList();
+
+    /// <summary>清單的右鍵選單：刪除、生效、取消生效選取的資料（可多選）；Delete 鍵也可以刪除</summary>
+    private void SetupListBatchMenu()
+    {
+        var menu = new ContextMenuStrip();
+        var miDelete = new ToolStripMenuItem("刪除選取的資料") { ShortcutKeyDisplayString = "Delete" };
+        var miEffective = new ToolStripMenuItem("生效");
+        var miUneffective = new ToolStripMenuItem("取消生效");
+        var miSelectAll = new ToolStripMenuItem("全選") { ShortcutKeyDisplayString = "Ctrl+A" };
+        menu.Items.AddRange(new ToolStripItem[] { miDelete, new ToolStripSeparator(), miEffective, miUneffective, new ToolStripSeparator(), miSelectAll });
+        menu.Opening += (s, e) =>
+        {
+            int n = SelectedRowIndexes().Count;
+            bool canEdit = mode == Mode.Browse && HasKey && n > 0;
+            bool effective = !string.IsNullOrWhiteSpace(listDef.EffectiveColumn);
+            miDelete.Text = n > 1 ? $"刪除選取的 {n} 筆資料" : "刪除選取的資料";
+            miEffective.Text = n > 1 ? $"選取的 {n} 筆生效" : "生效";
+            miUneffective.Text = n > 1 ? $"選取的 {n} 筆取消生效" : "取消生效";
+            miDelete.Enabled = canEdit;
+            miEffective.Visible = miUneffective.Visible = effective;
+            miEffective.Enabled = miUneffective.Enabled = canEdit;
+            miSelectAll.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
+        };
+        miDelete.Click += (s, e) => DeleteSelectedRows();
+        miEffective.Click += (s, e) => SetEffectiveSelected(true);
+        miUneffective.Click += (s, e) => SetEffectiveSelected(false);
+        miSelectAll.Click += (s, e) => listGrid.SelectAll();
+        listGrid.ContextMenuStrip = menu;
+        // 右鍵點在沒選取的列上：改成只選那一列（跟檔案總管一樣）；點在已選取的列上保留多選
+        listGrid.CellMouseDown += (s, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.RowIndex < 0 || listGrid.Rows[e.RowIndex].Selected) return;
+            listGrid.ClearSelection();
+            listGrid.CurrentCell = listGrid[Math.Max(0, e.ColumnIndex), e.RowIndex];
+            listGrid.Rows[e.RowIndex].Selected = true;
+        };
+        listGrid.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Delete && mode == Mode.Browse && HasKey)
+            {
+                e.Handled = true;
+                DeleteSelectedRows();
+            }
+        };
+    }
+
+    /// <summary>刪除清單上選取的資料（可多筆；有單身時連同明細），全部在同一個交易裡</summary>
+    private void DeleteSelectedRows()
+    {
+        var rows = SelectedRowIndexes();
+        if (rows.Count == 0 || !HasKey) return;
+        bool withDetail = gridDef != null && gridDef.Links.Count > 0;
+        string what = rows.Count > 1 ? $"選取的 {rows.Count} 筆資料" : "這筆資料";
+        if (MessageBox.Show($"確定要刪除{what}{(withDetail ? "（連同單身明細）" : "")}嗎？", "刪除",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        int deleted = 0;
+        try
+        {
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var tran = conn.BeginTransaction();             // 任何一筆失敗就全部不變
+            using var cmd = Dialect.CreateCommand(conn);
+            cmd.Transaction = tran;
+            foreach (int row in rows)
+            {
+                if (withDetail)
+                {
+                    cmd.Parameters.Clear();
+                    cmd.CommandText = $"DELETE FROM {gridDef.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd, row: row);
+                    cmd.ExecuteNonQuery();
+                }
+                cmd.Parameters.Clear();
+                cmd.CommandText = $"DELETE FROM {def.FullTableName} WHERE " + AddKeyCondition(cmd, KeyOf(row));
+                deleted += cmd.ExecuteNonQuery();
+            }
+            tran.Commit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("刪除失敗（已全部還原）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        // 從查詢結果拿掉（由下往上刪，前面的索引才不會跑掉），改顯示原本位置的下一筆
+        foreach (int row in rows.OrderByDescending(r => r)) results.Rows.RemoveAt(row);
+        current = results.Rows.Count == 0 ? -1 : Math.Min(rows[0], results.Rows.Count - 1);
+        listGrid.ClearSelection();
+        ShowCurrent();
+        SetMode(Mode.Browse);
+        MessageBox.Show(deleted == rows.Count ? $"已刪除 {deleted} 筆。" : $"已刪除 {deleted} 筆（有 {rows.Count - deleted} 筆找不到，可能已被其他人刪除）。", "刪除");
+    }
+
+    /// <summary>清單上選取的資料一起生效（生效欄位改成 1）或取消生效（改成 0）</summary>
+    private void SetEffectiveSelected(bool effective)
+    {
+        var rows = SelectedRowIndexes();
+        string column = listDef.EffectiveColumn;
+        if (rows.Count == 0 || !HasKey || string.IsNullOrWhiteSpace(column)) return;
+        try
+        {
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var tran = conn.BeginTransaction();
+            using var cmd = Dialect.CreateCommand(conn);
+            cmd.Transaction = tran;
+            foreach (int row in rows)
+            {
+                cmd.Parameters.Clear();
+                Dialect.AddParam(cmd, "v", effective ? 1 : 0);
+                cmd.CommandText = $"UPDATE {def.FullTableName} SET {Dialect.Quote(column)} = {Dialect.Param("v")} WHERE " + AddKeyCondition(cmd, KeyOf(row));
+                cmd.ExecuteNonQuery();
+            }
+            tran.Commit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show((effective ? "生效" : "取消生效") + "失敗（已全部還原）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        RefreshRows(rows);
+        MessageBox.Show($"已{(effective ? "生效" : "取消生效")} {rows.Count} 筆。", Text);
+    }
+
+    /// <summary>用主鍵重讀查詢結果裡的這幾筆（批次處理後清單顯示最新的值），選取的列維持不變</summary>
+    private void RefreshRows(IEnumerable<int> rows)
+    {
+        try
+        {
+            foreach (int row in rows)
+            {
+                DataRow fresh = LoadRowByKey(KeyOf(row));
+                if (fresh == null) continue;
+                foreach (DataColumn col in fresh.Table.Columns)
+                    if (results.Columns.Contains(col.ColumnName)) results.Rows[row][col.ColumnName] = fresh[col.ColumnName];
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("重新讀取資料失敗：" + ex.Message, "提醒");
+        }
+        LoadDetail();
     }
 
     private Control CreateInput(FieldDefinition f) => InputHelper.CreateInput(f, def.ConnectionString);
