@@ -40,7 +40,7 @@ public partial class RecordEditDialog : Form
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
-            button.Enabled = b.Action is ButtonAction.確定 or ButtonAction.取消 or ButtonAction.離開 or ButtonAction.執行SQL or ButtonAction.開啟畫面;
+            button.Enabled = b.Action is ButtonAction.確定 or ButtonAction.取消 or ButtonAction.離開 or ButtonAction.執行SQL or ButtonAction.開啟畫面 or ButtonAction.列印報表;
             button.Click += (s, e) =>
             {
                 if (!ButtonRunner.Confirm(b)) return;
@@ -55,6 +55,9 @@ public partial class RecordEditDialog : Form
                             var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
                         });
+                        break;
+                    case ButtonAction.列印報表:
+                        ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => currentValue(name) }, this);
                         break;
                     case ButtonAction.開啟畫面:
                         ButtonRunner.OpenForm(b, sourcePath, this, name =>

@@ -566,6 +566,8 @@ public enum ButtonAction
     開啟畫面,
     /// <summary>用自訂 SELECT 查詢：@欄位名稱 帶入畫面輸入框的值，結果顯示在單頭（清單）</summary>
     自訂查詢,
+    /// <summary>依列印樣板預覽列印目前這筆（清單多選時每筆一頁）；設計畫面雙擊按鈕開啟列印樣板設計</summary>
+    列印報表,
 }
 
 /// <summary>畫面上的按鈕（類似 Visual Studio 從工具箱拖進來的 Button）</summary>
@@ -604,6 +606,10 @@ public class ButtonDefinition
                + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string ReturnMap { get; set; }
+
+    [Category("列印報表"), DisplayName("列印樣板檔"),
+     Description("動作 = 列印報表 時使用的樣板（*.print.json）。在設計畫面上雙擊這個按鈕，就會開啟列印樣板設計（第一次儲存時會建立樣板檔）；只寫檔名時，會找跟目前畫面同一個資料夾的檔案")]
+    public string PrintTemplate { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
     [Browsable(false)]

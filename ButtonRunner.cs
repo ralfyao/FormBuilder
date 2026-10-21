@@ -148,6 +148,28 @@ public static class ButtonRunner
         }
     }
 
+    /// <summary>檔名轉成完整路徑：只寫檔名時放在 folder（畫面定義檔的資料夾）；空白回傳 null</summary>
+    public static string ResolvePath(string file, string folder)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return null;
+        return Path.IsPathRooted(file) ? file : Path.Combine(folder ?? FormDefinition.DefaultFolder, file);
+    }
+
+    /// <summary>畫面定義檔所在的資料夾（還沒存檔的畫面用預設的 Forms 資料夾）</summary>
+    public static string FolderOf(string sourcePath) =>
+        string.IsNullOrWhiteSpace(sourcePath) ? FormDefinition.DefaultFolder : Path.GetDirectoryName(sourcePath);
+
+    /// <summary>列印報表：依按鈕的列印樣板預覽列印；records 每個元素提供一筆資料的欄位值（每筆一頁）</summary>
+    public static void Print(ButtonDefinition b, string sourcePath, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner)
+    {
+        if (string.IsNullOrWhiteSpace(b.PrintTemplate))
+        {
+            MessageBox.Show($"按鈕「{b.Text}」還沒有設計列印樣板：請在設計畫面雙擊這個按鈕，設計好後儲存。", "列印");
+            return;
+        }
+        PrintRunner.Preview(ResolvePath(b.PrintTemplate, FolderOf(sourcePath)), connectionString, records, owner);
+    }
+
     /// <summary>按鈕所在範圍（算視窗大小用）</summary>
     public static Size Extent(IEnumerable<ButtonDefinition> buttons)
     {

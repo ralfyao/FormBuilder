@@ -402,7 +402,18 @@ public partial class DesignerForm : Form
         box.Resized += (s, e) => { propertyGrid.Refresh(); ApplyCanvasSize(); };
         canvas.Controls.Add(box);
         if (box is FieldBox) box.RefreshFromModel();       // 加進畫面後才知道底色，標籤文字顏色要重算
+        if (box is ButtonBox bb) bb.DoubleClick += (s, e) => OpenPrintDesigner(bb);
         return box;
+    }
+
+    /// <summary>雙擊「列印報表」按鈕：開啟列印樣板設計（資料表、主鍵用這個畫面的）</summary>
+    private void OpenPrintDesigner(ButtonBox box)
+    {
+        if (box.ButtonDef.Action != ButtonAction.列印報表) return;
+        string folder = currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : FormDefinition.DefaultFolder;
+        if (PrintDesignerForm.OpenFor(box.ButtonDef, this, folder, connectionString, def.TableSchema, def.TableName,
+                                      def.MasterKeys.Select(k => k.Column)))
+            propertyGrid.Refresh();
     }
 
     // ================= 工具箱 =================
