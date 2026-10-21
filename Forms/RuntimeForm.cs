@@ -150,6 +150,23 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>選取視窗：工具列最前面加「選取帶回」，視窗標題加上「選取：」</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // 一起關掉這個畫面開的編輯視窗；有視窗還在輸入、使用者選擇不放棄時，主畫面也不關
+        foreach (var (dialog, _) in editWindows.ToList())
+        {
+            if (dialog.IsDisposed) continue;
+            dialog.Close();
+            if (!dialog.IsDisposed)
+            {
+                e.Cancel = true;
+                dialog.Activate();
+                return;
+            }
+        }
+        base.OnFormClosing(e);
+    }
+
     private void SetupPickMode()
     {
         Text = "選取：" + def.Title;
@@ -1044,7 +1061,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             if (e.KeyCode != Keys.Enter || mode == Mode.Detail || grid.CurrentRow == null) return;
             e.SuppressKeyPress = true;                     // 不要讓 Enter 跳到下一列
-            edit(grid.CurrentRow.Index);
+            edit(grid.CurrentRow.Index);                   // 單頭清單選了多筆時，EditMasterRow 會每筆各開一個視窗
         };
     }
 
@@ -1065,7 +1082,40 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             return;
         }
+        // 清單選了多筆、雙擊（或 Enter）的是其中一筆：每筆各開一個編輯視窗
+        var rows = SelectedRowIndexes();
+        if (index >= 0 && rows.Count > 1 && rows.Contains(index))
+        {
+            OpenEditWindows(rows);
+            return;
+        }
         if (index >= 0 && index < results.Rows.Count && index != current) MoveTo(index);
+        OpenEditWindow(index >= 0 && index < results.Rows.Count ? results.Rows[index] : null);
+    }
+
+    /// <summary>開著的編輯視窗（主畫面關閉時一起關；同一筆不重複開）</summary>
+    private readonly List<(RecordNavigatorDialog Dialog, RecordCursor Cursor)> editWindows = new();
+
+    /// <summary>清單選取的每一筆各開一個編輯視窗（一次太多時先確認）</summary>
+    private void OpenEditWindows(IList<int> rows)
+    {
+        if (rows.Count > 10 && MessageBox.Show($"要開 {rows.Count} 個編輯視窗嗎？", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        foreach (int r in rows) OpenEditWindow(results.Rows[r]);
+    }
+
+    /// <summary>
+    /// 開一個編輯視窗（不鎖住主畫面，可以同時開好幾個）：每個視窗有自己的「目前這筆」（RecordCursor），
+    /// 在視窗裡切換上一筆 / 下一筆不會影響其他視窗；row = null 是空白處雙擊（沒有資料時用來新增）
+    /// </summary>
+    private void OpenEditWindow(DataRow row)
+    {
+        // 這一筆已經有視窗開著：切過去
+        var existing = editWindows.FirstOrDefault(w => row != null && w.Cursor.CurrentRow == row && !w.Dialog.IsDisposed);
+        if (existing.Dialog != null)
+        {
+            existing.Dialog.Activate();
+            return;
+        }
         listDef.EnsureEditLayout();                         // 沒設計過版面時排成一欄
         var fields = listDef.EditColumns
             .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity))
@@ -1073,9 +1123,103 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 主鍵：清單欄位的主鍵設定，加上單頭欄位裡勾了主鍵的
         var keyColumns = def.MasterKeys.Select(k => k.Column).ToList();
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
-        using var dlg = new RecordNavigatorDialog(this, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
-                                                 listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font));
-        dlg.ShowDialog(this);
+        var cursor = new RecordCursor(this, row);
+        var dlg = new RecordNavigatorDialog(cursor, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
+                                            listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font));
+        // 多個視窗錯開排列，才看得到後面的
+        var owner = (TopLevelControl as Form) ?? this;
+        int open = editWindows.Count(w => !w.Dialog.IsDisposed);
+        dlg.StartPosition = FormStartPosition.Manual;
+        var area = Screen.FromControl(owner).WorkingArea;
+        var origin = new Point(owner.Left + Math.Max(0, (owner.Width - dlg.Width) / 2), owner.Top + Math.Max(0, (owner.Height - dlg.Height) / 2));
+        dlg.Location = new Point(Math.Min(origin.X + open * 28, area.Right - dlg.Width), Math.Min(origin.Y + open * 28, area.Bottom - dlg.Height));
+        editWindows.Add((dlg, cursor));
+        dlg.FormClosed += (s, e) => editWindows.RemoveAll(w => w.Dialog == dlg);
+        dlg.Show(owner);
+    }
+
+    /// <summary>
+    /// 一個編輯視窗的「目前這筆」：記住資料列本身（不是第幾筆），別的視窗刪掉資料時才不會跑掉。
+    /// 存檔、刪除、重讀時先把主畫面切到這一筆，再用主畫面原本的存檔邏輯
+    /// </summary>
+    private sealed class RecordCursor : IRecordNavigator
+    {
+        private readonly RuntimeForm form;
+        private DataRow row;
+
+        public RecordCursor(RuntimeForm form, DataRow row)
+        {
+            this.form = form;
+            this.row = row;
+        }
+
+        private int Index => row == null ? -1 : form.results.Rows.IndexOf(row);
+        private IRecordNavigator Main => form;
+
+        /// <summary>主畫面切到這一筆（存檔、刪除都是對主畫面的目前這筆做）</summary>
+        private void Select()
+        {
+            int i = Index;
+            if (i >= 0 && i != form.current)
+            {
+                form.current = i;
+                form.ShowCurrent();
+                form.SetMode(form.mode);
+            }
+        }
+
+        /// <summary>操作之後，這個視窗跟著主畫面的目前這筆（新增後是新的那筆、刪除後是下一筆）</summary>
+        private void Follow() => row = form.HasCurrent ? form.results.Rows[form.current] : null;
+
+        public string FullTableName => Main.FullTableName;
+        public int Count => Main.Count;
+        public int Current => Index;
+        public DataRow CurrentRow => Index >= 0 ? row : null;
+        public bool CanModify => Main.CanModify;
+        public bool CanInsert => Main.CanInsert;
+        public bool CanDelete => Main.CanDelete;
+        public bool CanPrint => Main.CanPrint;
+        public bool CanApprove => Main.CanApprove;
+
+        public void MoveTo(int index)
+        {
+            if (index >= 0 && index < form.results.Rows.Count) row = form.results.Rows[index];
+        }
+
+        public bool Refresh()
+        {
+            Select();
+            bool ok = Main.Refresh();
+            if (!ok) Follow();
+            return ok;
+        }
+
+        public bool Insert(Dictionary<string, object> values)
+        {
+            bool ok = Main.Insert(values);
+            if (ok) Follow();
+            return ok;
+        }
+
+        public bool Update(Dictionary<string, object> values)
+        {
+            Select();
+            return Main.Update(values);
+        }
+
+        public bool UpdateColumn(string column, object value, string doneMessage)
+        {
+            Select();
+            return Main.UpdateColumn(column, value, doneMessage);
+        }
+
+        public bool Delete()
+        {
+            Select();
+            bool ok = Main.Delete();
+            if (ok) Follow();
+            return ok;
+        }
     }
 
     // ---- 給單筆編輯視窗呼叫（IRecordNavigator）----
@@ -1220,6 +1364,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var miUneffective = new ToolStripMenuItem("取消生效");
         var miSelectAll = new ToolStripMenuItem("全選") { ShortcutKeyDisplayString = "Ctrl+A" };
         var miExport = new ToolStripMenuItem("輸出到 Excel（CSV）…");
+        var miOpen = new ToolStripMenuItem("開啟選取的資料") { ShortcutKeyDisplayString = "Enter" };
+        menu.Items.Add(miOpen);
+        menu.Items.Add(new ToolStripSeparator());
+        miOpen.Click += (s, e) => OpenEditWindows(SelectedRowIndexes());
         menu.Items.AddRange(new ToolStripItem[] { miDelete, new ToolStripSeparator(), miEffective, miUneffective, new ToolStripSeparator(), miExport, miSelectAll });
         // 工具列也放一個「輸出」（有輸出權限才看得到）
         var btnExport = new ToolStripButton("輸出") { DisplayStyle = ToolStripItemDisplayStyle.Text, AutoSize = false, Size = new Size(64, 28),
@@ -1238,6 +1386,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             miEffective.Visible = miUneffective.Visible = effective;
             miEffective.Enabled = miUneffective.Enabled = canEdit && perm.Approve;
             miExport.Visible = perm.Export;
+            miOpen.Text = n > 1 ? $"開啟選取的 {n} 筆（每筆一個視窗）" : "開啟選取的資料";
+            miOpen.Enabled = mode == Mode.Browse && n > 0;
             miExport.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
             miExport.Text = n > 1 ? $"輸出選取的 {n} 筆到 Excel（CSV）…" : "輸出到 Excel（CSV）…";
             miSelectAll.Enabled = mode == Mode.Browse && results.Rows.Count > 0;
