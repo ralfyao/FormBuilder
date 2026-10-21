@@ -70,6 +70,7 @@ public partial class DesignerForm : Form
         btnReconnect.Click += (s, e) => Connect();
 
         // ---- 左上「工具箱」頁籤 ----
+        toolbox.AddEntry("SqlList", "SQL 清單（唯讀明細）");
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // 分隔線位置要等視窗有實際大小後才能設定
@@ -434,7 +435,36 @@ public partial class DesignerForm : Form
         else if (kind == "DatePicker") AddKindField(location, InputKind.日期選擇);
         else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
         else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
+        else if (kind == "SqlList") AddSqlList(location);
     }
+
+    /// <summary>加入 SQL 清單：資料來自自己寫的 SELECT（唯讀），可以用 @單頭欄位，切換單頭時重查</summary>
+    private void AddSqlList(Point location)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("請先連線資料庫，再加入 SQL 清單。", "提醒");
+            return;
+        }
+        var grid = new GridDefinition
+        {
+            Title = "SQL 清單",
+            X = location.X,
+            Y = location.Y,
+            Width = Math.Max(400, def.Width - location.X - 20),
+            Height = 200,
+        };
+        using var dlg = new SqlListDialog(grid, connectionString, MasterColumnNames());
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        def.Grids.Add(grid);
+        SelectBox(AddGridBox(grid));
+        ApplyCanvasSize();
+        UpdateStatus("已加入 SQL 清單：點一下可以修改 SQL 與欄位");
+    }
+
+    /// <summary>單頭的欄位名稱（畫面上的欄位 + 單頭資料表的欄位）</summary>
+    private List<string> MasterColumnNames() =>
+        def.Fields.Select(f => f.Column).Concat(defTableColumns.Select(c => c.Name)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     /// <summary>工具箱元件的名稱、加入後的提示、輸入框預設寬度（加入下拉選單、日期選擇、勾選框、選項按鈕共用）</summary>
     internal static (string Name, string Tip, int MinWidth) KindInfo(InputKind kind) => kind switch
@@ -499,7 +529,7 @@ public partial class DesignerForm : Form
             return;
         }
         bool isMasterList = def.TableSchema == data.Schema && def.TableName == data.Table;
-        if (def.Grids.Any(g => g.IsMasterList == isMasterList))
+        if (def.Grids.Any(g => !g.IsSqlList && g.IsMasterList == isMasterList))
         {
             MessageBox.Show(isMasterList
                 ? "畫面上已經有單頭清單 Grid 了。"
@@ -574,6 +604,15 @@ public partial class DesignerForm : Form
         if (box == null)
         {
             MessageBox.Show("畫面上還沒有單身 Grid。把左邊整個資料表拖到畫面上就會產生。", "提醒");
+            return;
+        }
+        if (box.GridDef.IsSqlList)
+        {
+            using var sqlDialog = new SqlListDialog(box.GridDef, connectionString, MasterColumnNames());
+            if (sqlDialog.ShowDialog(this) != DialogResult.OK) return;
+            box.RefreshFromModel();
+            propertyGrid.Refresh();
+            UpdateStatus();
             return;
         }
         var masterColumns = def.Fields.Select(f => f.Column)
@@ -793,7 +832,7 @@ public partial class DesignerForm : Form
             var missing = defTableColumns.Where(c => c.IsRequiredOnInsert && def.Fields.All(f => f.Column != c.Name)).Select(c => c.Name).ToList();
             if (missing.Count > 0) notes.Add("注意：這些必填欄位沒放到畫面上，新增資料會失敗：" + string.Join(", ", missing));
             if (def.MasterKeys.Count == 0) notes.Add("注意：單頭欄位與單頭清單都沒有主鍵，使用者只能新增，不能修改、刪除");
-            foreach (var g in def.Grids.Where(g => !g.IsMasterList))
+            foreach (var g in def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList))
             {
                 if (g.Links.Count == 0) notes.Add($"注意：單身 {g.TableName} 沒有設定關聯欄位");
                 if (g.KeyColumns.Count == 0) notes.Add($"注意：單身 {g.TableName} 沒有主鍵，只能新增明細，不能修改、刪除");
@@ -906,8 +945,8 @@ public partial class DesignerForm : Form
     }
 
     /// <summary>
-    /// 發布到系統：先存檔，再把畫面定義（代號 = 檔名）和按鈕用到的列印樣板寫進系統資料庫；
-    /// 「開啟畫面」按鈕指向的畫面要各自發布，還沒發布的會列出來提醒
+    /// 發布到系統：先存檔，再把畫面定義（代號 = 檔名）和按鈕用到的列印樣板寫進系統資料庫。
+    /// 「開啟畫面」按鈕指向的畫面（包含那些畫面再開啟的畫面）在本機有畫面定義檔的，問過後一併發布
     /// </summary>
     private void Publish()
     {
@@ -915,36 +954,100 @@ public partial class DesignerForm : Form
         SaveForm(false);
         if (currentFilePath == null || !File.Exists(currentFilePath)) return;
         string key = Path.GetFileNameWithoutExtension(currentFilePath);
-        string folder = Path.GetDirectoryName(currentFilePath);
         try
         {
             var cs = SysContext.Connection;
-            int version = SysDb.Publish(cs, key, "form", def.Title, def.ToJson(), SysContext.User.UserId);
-            var buttons = def.Buttons.Concat(def.Grids.SelectMany(g => g.EditButtons)).ToList();
             var notes = new List<string>();
-            foreach (var b in buttons.Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
+            // 這個畫面底下會開到的其他畫面（一層一層找下去，不重複）
+            var related = RelatedForms(def, currentFilePath, notes);
+            bool withRelated = related.Count > 0 &&
+                MessageBox.Show($"這個畫面的按鈕會開啟下列畫面，要一併發布嗎？{Environment.NewLine}{Environment.NewLine}"
+                                + string.Join(Environment.NewLine, related.Select(r => $"　{r.Def.Title ?? r.Key}（{r.Key}）"))
+                                + $"{Environment.NewLine}{Environment.NewLine}是 = 全部發布（用本機的畫面定義檔與列印樣板）；否 = 只發布這個畫面",
+                                "發布", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+            int version = PublishOne(cs, key, def, currentFilePath, notes);
+            var done = new List<string> { $"「{def.Title}」（{key}）第 {version} 版" };
+            if (withRelated)
+                foreach (var r in related)
+                    done.Add($"「{r.Def.Title ?? r.Key}」（{r.Key}）第 {PublishOne(cs, r.Key, r.Def, r.Path, notes)} 版");
+            else if (related.Count > 0)
             {
-                string path = ButtonRunner.ResolvePath(b.PrintTemplate, folder);
-                if (File.Exists(path)) SysDb.Publish(cs, Path.GetFileName(path), "print", Path.GetFileName(path), File.ReadAllText(path), SysContext.User.UserId);
-                else notes.Add($"找不到列印樣板檔：{path}");
+                var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                notes.AddRange(related.Where(r => !published.Contains(r.Key)).Select(r => $"畫面「{r.Def.Title ?? r.Key}」（{r.Key}）還沒發布，按鈕會開不起來"));
             }
-            var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var b in buttons.Where(b => b.Action == ButtonAction.開啟畫面 && !string.IsNullOrWhiteSpace(b.TargetForm)))
-            {
-                string target = Path.GetFileNameWithoutExtension(b.TargetForm);
-                if (!published.Contains(target)) notes.Add($"按鈕「{b.Text}」要開啟的畫面「{target}」還沒發布");
-            }
-            Audit.Write(key, def.TableName, "發布", "FormKey=" + key, $"第 {version} 版");
-            UpdateStatus($"已發布「{def.Title}」（代號 {key}，第 {version} 版）");
-            MessageBox.Show($"已發布「{def.Title}」（代號 {key}，第 {version} 版）。" + Environment.NewLine
-                            + "第一次發布的畫面，請到「選單管理」放進選單，並在「使用者、角色與權限」設定哪些角色可以用。"
-                            + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes) : ""),
+            UpdateStatus($"已發布 {done.Count} 個畫面：" + string.Join("、", done));
+            MessageBox.Show("已發布：" + Environment.NewLine + string.Join(Environment.NewLine, done.Select(x => "　" + x)) + Environment.NewLine + Environment.NewLine
+                            + "第一次發布的畫面，請到「選單管理」放進選單（只從按鈕開啟的畫面不用），並在「使用者、角色與權限」設定哪些角色可以用。"
+                            + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Distinct()) : ""),
                             "發布");
         }
         catch (Exception ex)
         {
             MessageBox.Show("發布失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /// <summary>畫面上所有的按鈕（主畫面 + 編輯視窗），欄位的開窗選取也當成「開啟畫面」按鈕</summary>
+    private static List<ButtonDefinition> AllButtons(FormDefinition form) =>
+        form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
+            .Concat(form.Fields.Select(ButtonRunner.PickerButton))
+            .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
+            .Where(b => b != null).ToList();
+
+    /// <summary>發布一個畫面和它的按鈕用到的列印樣板，回傳畫面的版本</summary>
+    private static int PublishOne(string cs, string key, FormDefinition form, string path, List<string> notes)
+    {
+        string folder = Path.GetDirectoryName(path);
+        int version = SysDb.Publish(cs, key, "form", form.Title, form.ToJson(), SysContext.User.UserId);
+        foreach (var b in AllButtons(form).Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
+        {
+            string template = ButtonRunner.ResolvePath(b.PrintTemplate, folder);
+            if (File.Exists(template)) SysDb.Publish(cs, Path.GetFileName(template), "print", Path.GetFileName(template), File.ReadAllText(template), SysContext.User.UserId);
+            else notes.Add($"找不到列印樣板檔：{template}");
+        }
+        Audit.Write(key, form.TableName, "發布", "FormKey=" + key, $"第 {version} 版");
+        return version;
+    }
+
+    /// <summary>
+    /// 「開啟畫面」按鈕指向的畫面，以及那些畫面再開啟的畫面（不含自己、不重複）；
+    /// 本機找不到畫面定義檔的記到 notes
+    /// </summary>
+    private static List<(string Key, string Path, FormDefinition Def)> RelatedForms(FormDefinition root, string rootPath, List<string> notes)
+    {
+        var result = new List<(string, string, FormDefinition)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFileNameWithoutExtension(rootPath) };
+        var queue = new Queue<(FormDefinition Def, string Path)>();
+        queue.Enqueue((root, rootPath));
+        while (queue.Count > 0)
+        {
+            var (form, path) = queue.Dequeue();
+            string folder = Path.GetDirectoryName(path);
+            foreach (var b in AllButtons(form).Where(b => b.Action == ButtonAction.開啟畫面 && !string.IsNullOrWhiteSpace(b.TargetForm)))
+            {
+                string key = Path.GetFileNameWithoutExtension(b.TargetForm.Trim());
+                if (!seen.Add(key)) continue;
+                string file = ButtonRunner.ResolvePath(b.TargetForm.Trim(), folder);
+                if (!File.Exists(file)) file = Path.Combine(folder, key + ".json");
+                if (!File.Exists(file))
+                {
+                    notes.Add($"按鈕「{b.Text}」要開啟的畫面「{key}」在本機找不到畫面定義檔，沒有一併發布");
+                    continue;
+                }
+                try
+                {
+                    var target = FormDefinition.Load(file);
+                    result.Add((key, file, target));
+                    queue.Enqueue((target, file));
+                }
+                catch (Exception ex)
+                {
+                    notes.Add($"畫面「{key}」讀取失敗，沒有一併發布：{ex.Message}");
+                }
+            }
+        }
+        return result;
     }
 
     /// <summary>開啟已發布的畫面：從系統資料庫讀出來編輯，存檔時寫到預設的 Forms 資料夾（同檔名）</summary>
@@ -982,9 +1085,9 @@ public partial class DesignerForm : Form
 
     private void SaveForm(bool saveAs)
     {
-        if (def.Fields.Count == 0)
+        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList))       // 只放 SQL 清單（唯讀明細）的畫面不需要欄位
         {
-            MessageBox.Show("畫面上還沒有欄位。", "提醒");
+            MessageBox.Show("畫面上還沒有欄位（或 SQL 清單）。", "提醒");
             return;
         }
         if (saveAs || currentFilePath == null)
@@ -1012,9 +1115,9 @@ public partial class DesignerForm : Form
 
     private void Preview()
     {
-        if (def.Fields.Count == 0)
+        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList))       // 只放 SQL 清單（唯讀明細）的畫面不需要欄位
         {
-            MessageBox.Show("畫面上還沒有欄位。", "提醒");
+            MessageBox.Show("畫面上還沒有欄位（或 SQL 清單）。", "提醒");
             return;
         }
         new RuntimeForm(def).Show(this);

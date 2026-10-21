@@ -50,6 +50,7 @@ public class FieldBox : DesignBox
         int labelWidth = Math.Clamp(Field.LabelWidth, 0, MaxLabelWidth);
         caption.Text = Field.Label;
         caption.ForeColor = ColorText.LabelColor(Parent?.BackColor ?? Color.Empty);     // 畫面底色深時標籤改白字
+        caption.Font = Field.LabelFontSize > 0 ? LabelGeometry.Font(Field, Font) : null;   // null = 跟畫面字型一樣
         caption.SetBounds(0, 0, labelWidth, LabelGeometry.Height(caption.Font));   // 跟執行時一樣：字放大時標籤跟著變高
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
         input.Text = (string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
@@ -63,7 +64,7 @@ public class FieldBox : DesignBox
                        _ => "",
                    };
         input.Fill = Field.BackColor;
-        input.Font = Field.FontSize > 0 ? new Font(caption.Font.FontFamily, Field.FontSize) : caption.Font;
+        input.Font = Field.FontSize > 0 ? new Font(Font.FontFamily, Field.FontSize) : Font;
         input.ForeColor = Field.BackColor.IsEmpty ? SystemColors.GrayText : ControlPaint.Dark(ButtonLook.Contrast(Field.BackColor), 0.1f);
         input.Invalidate();
         input.SetBounds(labelWidth + 4, 0, Math.Max(Field.Width, MinInputWidth), InputHeight);

@@ -284,14 +284,19 @@ public partial class EditLayoutDialog : Form
             Label = string.IsNullOrWhiteSpace(c.EditLabel) ? c.Header : c.EditLabel,
             Placeholder = c.EditPlaceholder,
             FontSize = c.EditFontSize,
+            LabelFontSize = c.EditLabelFontSize,
             BackColorHtml = c.EditBackColorHtml,
             LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
             InputType = c.EditInputType,
             Items = c.EditItems,
             ItemsSql = c.EditItemsSql,
             AllowFreeText = c.EditAllowFreeText,
+            PickerForm = c.EditPickerForm,
+            PickerParams = c.EditPickerParams,
+            PickerReturn = c.EditPickerReturn,
             DateFormat = c.EditDateFormat,
             NumberRule = c.EditNumberRule,
+            DefaultValue = c.EditDefaultValue,
             IsReadOnly = c.EditReadOnly,
             CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
             UncheckedValue = c.EditUncheckedValue ?? "0",
@@ -323,7 +328,8 @@ public partial class EditLayoutDialog : Form
             bb.DoubleClick += (s, e) =>
             {
                 if (bb.ButtonDef.Action != ButtonAction.列印報表) return;
-                // 有設定「列印來源清單」：樣板用那個明細清單的資料表與主鍵（印清單上選取的那筆）
+                // 樣板一律以單頭（這個 Grid 的資料表）為主；有設定「列印來源清單」時，清單選取那筆的欄位（例如詢價日期）
+                // 也可以放到樣板上、拿來對應單身
                 string listTable = bb.ButtonDef.PrintListTable?.Trim();
                 var list = string.IsNullOrEmpty(listTable) ? null
                     : listBoxes.Select(x => x.ListDef).FirstOrDefault(l => l.TableName.Equals(listTable, StringComparison.OrdinalIgnoreCase));
@@ -332,12 +338,11 @@ public partial class EditLayoutDialog : Form
                     MessageBox.Show($"版面上沒有「{listTable}」這個明細清單，請檢查按鈕的「列印來源清單」。", "列印樣板");
                     return;
                 }
-                bool changed = list != null
-                    ? PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, list.TableSchema, list.TableName,
-                                                list.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column))
-                    : PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
-                                                grid.KeyColumns.Select(c => c.Column));
-                if (changed) propertyGrid.Refresh();
+                var recordColumns = list?.Columns.Where(c => !c.IsJoin)
+                    .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, MaxLength = c.MaxLength, Description = c.Header }).ToList();
+                if (PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                              grid.KeyColumns.Select(c => c.Column), recordColumns, listBoxes.Select(x => x.ListDef)))
+                    propertyGrid.Refresh();
             };
     }
 
@@ -721,12 +726,17 @@ public partial class EditLayoutDialog : Form
                 c.EditItems = box.Field.Items;
                 c.EditItemsSql = box.Field.ItemsSql;
                 c.EditAllowFreeText = box.Field.AllowFreeText;
+                c.EditPickerForm = string.IsNullOrWhiteSpace(box.Field.PickerForm) ? null : box.Field.PickerForm.Trim();
+                c.EditPickerParams = string.IsNullOrWhiteSpace(box.Field.PickerParams) ? null : box.Field.PickerParams;
+                c.EditPickerReturn = string.IsNullOrWhiteSpace(box.Field.PickerReturn) ? null : box.Field.PickerReturn;
                 c.EditDateFormat = string.IsNullOrWhiteSpace(box.Field.DateFormat) ? null : box.Field.DateFormat.Trim();
                 c.EditNumberRule = string.IsNullOrWhiteSpace(box.Field.NumberRule) ? null : box.Field.NumberRule.Trim();
+                c.EditDefaultValue = string.IsNullOrWhiteSpace(box.Field.DefaultValue) ? null : box.Field.DefaultValue.Trim();
                 c.EditReadOnly = box.Field.IsReadOnly;
                 c.EditCheckedValue = box.Field.CheckedValue == "1" ? null : box.Field.CheckedValue;
                 c.EditUncheckedValue = box.Field.UncheckedValue == "0" ? null : box.Field.UncheckedValue;
                 c.EditFontSize = box.Field.FontSize;
+                c.EditLabelFontSize = box.Field.LabelFontSize;
                 c.EditBackColorHtml = box.Field.BackColorHtml;
             }
             else
@@ -782,6 +792,9 @@ public class EditFieldView
                + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
     public string NumberRule { get => field.NumberRule; set => field.NumberRule = value; }
 
+    [DisplayName("預設值"), Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；USER() = 登入帳號；有設編號規則時以編號規則為準")]
+    public string DefaultValue { get => field.DefaultValue; set => field.DefaultValue = value; }
+
     [DisplayName("日期格式"), Description("日期選擇用在文字、數字欄位時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
     public string DateFormat { get => field.DateFormat; set => field.DateFormat = value; }
 
@@ -802,8 +815,21 @@ public class EditFieldView
     [DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get => field.AllowFreeText; set => field.AllowFreeText = value; }
 
+    [DisplayName("開窗畫面"), Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來"),
+     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string PickerForm { get => field.PickerForm; set => field.PickerForm = value; }
+
+    [DisplayName("開窗傳入參數"), Description("「對方欄位=@本視窗欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+    public string PickerParams { get => field.PickerParams; set => field.PickerParams = value; }
+
+    [DisplayName("開窗回傳對應"), Description("「本視窗欄位=對方欄位」，可以帶回多個欄位；空白 = 只帶回這個欄位（對方同名的欄位）；只寫對方的欄位名稱 = 把它帶回這個欄位")]
+    public string PickerReturn { get => field.PickerReturn; set => field.PickerReturn = value; }
+
     [DisplayName("字體大小"), DefaultValue(0f), Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高")]
     public float FontSize { get => field.FontSize; set => field.FontSize = Math.Clamp(value, 0, 72); }
+
+    [DisplayName("標籤字體大小"), DefaultValue(0f), Description("標籤文字的大小（點），0 = 跟編輯視窗的字型大小一樣。字放大時請一起把「標籤寬度」拉寬")]
+    public float LabelFontSize { get => field.LabelFontSize; set => field.LabelFontSize = Math.Clamp(value, 0, 72); }
 
     [DisplayName("底色"), DefaultValue(typeof(Color), ""), Description("輸入框的底色；沒設定（Empty）就是預設的白底。在屬性上按右鍵選「重設」可以還原")]
     public Color BackColor { get => field.BackColor; set => field.BackColor = value; }

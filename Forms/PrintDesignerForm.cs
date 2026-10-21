@@ -17,6 +17,10 @@ public partial class PrintDesignerForm : Form
 
     /// <summary>主資料表的欄位（從資料庫讀）</summary>
     private List<ColumnInfo> tableColumns = new();
+    /// <summary>列印來源清單的欄位（按鈕依明細清單選取的資料列印時，選取那筆提供的欄位）；null = 沒有列印來源清單</summary>
+    private readonly List<ColumnInfo> sourceColumns;
+    /// <summary>編輯視窗上的明細清單（「設定單身」可以直接用它，不用再 JOIN）</summary>
+    private readonly List<EditListDefinition> editLists;
     private readonly List<DesignBox> selection = new();
     private Dictionary<DesignBox, Point> dragStarts;
     private SelectionBand band;
@@ -32,14 +36,20 @@ public partial class PrintDesignerForm : Form
         public PrintItemKind Kind { get; init; }
         public string Column { get; init; }
         public string Header { get; init; }
+        /// <summary>單身的欄位（放進明細表格）</summary>
+        public bool IsDetail { get; init; }
     }
 
     /// <param name="path">既有的樣板檔（不存在就建立新的樣板）</param>
     /// <param name="keyColumns">主資料表的主鍵（列印時用來讀出要印的那筆）</param>
+    /// <param name="recordColumns">列印來源清單的欄位（選取那筆提供的欄位）；null = 沒有列印來源清單</param>
     public PrintDesignerForm(string path, string connectionString, string tableSchema, string tableName, IEnumerable<string> keyColumns,
-                             string defaultFolder, string defaultName)
+                             string defaultFolder, string defaultName, IEnumerable<ColumnInfo> recordColumns = null,
+                             IEnumerable<EditListDefinition> editLists = null)
     {
         InitializeComponent();
+        sourceColumns = recordColumns?.ToList();
+        this.editLists = editLists?.Where(l => !string.IsNullOrWhiteSpace(l.TableName)).ToList() ?? new();
         this.connectionString = connectionString;
         this.defaultFolder = defaultFolder;
         this.defaultName = defaultName;
@@ -53,9 +63,30 @@ public partial class PrintDesignerForm : Form
             template = new PrintTemplate();
         }
         // 資料表與主鍵以目前畫面為準（畫面換了資料表時樣板跟著換）
+        var keys = keyColumns.ToList();
+        bool tableChanged = templatePath != null && !string.IsNullOrWhiteSpace(template.TableName)
+                            && !template.TableName.Equals(tableName, StringComparison.OrdinalIgnoreCase);
+        if (tableChanged && template.HasJoinTo(tableName))
+        {
+            // 例如按鈕改成印明細清單選取的資料：原本以廠商為主 JOIN 供料 → 以供料為主 JOIN 廠商，欄位都保留
+            if (MessageBox.Show($"這個樣板原本以「{template.TableName}」為主資料表，現在要改印「{tableName}」的資料。{Environment.NewLine}{Environment.NewLine}"
+                                + $"要自動轉換成以「{tableName}」為主、「{template.TableName}」改用 JOIN 帶入嗎？（樣板上的欄位都會保留；轉換後記得存檔）",
+                                "列印樣板", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                List<string> columns = new();
+                try { if (!string.IsNullOrWhiteSpace(connectionString)) columns = SchemaReader.GetColumns(connectionString, tableSchema, tableName).Select(c => c.Name).ToList(); }
+                catch (Exception) { }
+                var notes = template.RebaseTo(tableSchema, tableName, keys, new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase));
+                MessageBox.Show("已轉換，請檢查後按「檔案 → 儲存」。" + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, notes) : ""), "列印樣板");
+            }
+        }
+        else if (tableChanged)
+        {
+            MessageBox.Show($"這個樣板原本以「{template.TableName}」為主資料表，現在改成「{tableName}」；原本的欄位如果「{tableName}」沒有，會印成空白，請重新拖欄位或用 JOIN 帶入。", "列印樣板");
+        }
         template.TableSchema = tableSchema;
         template.TableName = tableName;
-        template.KeyColumns = keyColumns.ToList();
+        template.KeyColumns = keys;
         UpdateTitle();
 
         // ---- 左邊「欄位」頁籤 ----
@@ -63,27 +94,35 @@ public partial class PrintDesignerForm : Form
         {
             int i = lstColumns.IndexFromPoint(e.Location);
             if (e.Button == MouseButtons.Left && e.Clicks == 1 && i >= 0 && lstColumns.Items[i] is ColumnItem c)
-                lstColumns.DoDragDrop(new PrintDragData { Kind = PrintItemKind.欄位, Column = c.Name, Header = c.Header }, DragDropEffects.Copy);
+                lstColumns.DoDragDrop(new PrintDragData { Kind = PrintItemKind.欄位, Column = c.Name, Header = c.Header, IsDetail = c.IsDetail }, DragDropEffects.Copy);
         };
         lstColumns.DoubleClick += (s, e) =>
         {
-            if (lstColumns.SelectedItem is ColumnItem c) AddItem(PrintItemKind.欄位, NextFreePoint(), c.Name, c.Header);
+            if (lstColumns.SelectedItem is not ColumnItem c) return;
+            if (c.IsDetail) AddDetailColumn(null, NextFreePoint(), c.Name, c.Header);
+            else AddItem(PrintItemKind.欄位, NextFreePoint(), c.Name, c.Header);
         };
         btnJoin.Click += (s, e) => AddJoin();
+        btnDetail.Click += (s, e) => ChooseDetail();
         var columnMenu = new ContextMenuStrip();
         var miRemoveJoin = new ToolStripMenuItem("移除這個 JOIN");
-        columnMenu.Items.Add(miRemoveJoin);
+        var miRemoveDetail = new ToolStripMenuItem("移除單身");
+        columnMenu.Items.AddRange(new ToolStripItem[] { miRemoveJoin, miRemoveDetail });
         columnMenu.Opening += (s, e) =>
         {
             int i = lstColumns.IndexFromPoint(lstColumns.PointToClient(MousePosition));
             if (i >= 0) lstColumns.SelectedIndex = i;
-            e.Cancel = lstColumns.SelectedItem is not ColumnItem { JoinAlias: not null };
+            var c = lstColumns.SelectedItem as ColumnItem;
+            miRemoveJoin.Visible = c is { IsDetail: false, JoinAlias: not null };
+            miRemoveDetail.Visible = c is { IsDetail: true };
+            e.Cancel = !miRemoveJoin.Visible && !miRemoveDetail.Visible;
         };
         miRemoveJoin.Click += (s, e) => { if (lstColumns.SelectedItem is ColumnItem { JoinAlias: { } alias }) RemoveJoin(alias); };
+        miRemoveDetail.Click += (s, e) => RemoveDetail();
         lstColumns.ContextMenuStrip = columnMenu;
 
         // ---- 左邊「工具箱」頁籤 ----
-        lstTools.Items.AddRange(new object[] { PrintItemKind.文字, PrintItemKind.圖片, PrintItemKind.線條, PrintItemKind.方框 });
+        lstTools.Items.AddRange(new object[] { PrintItemKind.文字, PrintItemKind.圖片, PrintItemKind.線條, PrintItemKind.方框, PrintItemKind.明細表格 });
         lstTools.MouseDown += (s, e) =>
         {
             int i = lstTools.IndexFromPoint(e.Location);
@@ -97,12 +136,7 @@ public partial class PrintDesignerForm : Form
 
         // ---- 中間：紙張 ----
         canvas.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) ? DragDropEffects.Copy : DragDropEffects.None;
-        canvas.DragDrop += (s, e) =>
-        {
-            if (e.Data.GetData(typeof(PrintDragData)) is not PrintDragData data) return;
-            Point p = canvas.PointToClient(new Point(e.X, e.Y));
-            AddItem(data.Kind, new Point(Snap(p.X), Snap(p.Y)), data.Column, data.Header);
-        };
+        canvas.DragDrop += (s, e) => OnDrop(e);
         canvas.MouseDown += (s, e) =>
         {
             if (e.Button != MouseButtons.Left) return;
@@ -127,6 +161,7 @@ public partial class PrintDesignerForm : Form
             foreach (var b in selection) b.RefreshFromModel();
             if (selection.Count == 0) ApplyPageSize();     // 紙張大小、方向
             UpdateStatus();
+            MarkMissingColumns();                           // 改了欄位：重新檢查找不到資料來源的欄位
         };
 
         // ---- 選單 ----
@@ -141,9 +176,9 @@ public partial class PrintDesignerForm : Form
             ("複製", "Ctrl+C", CopySelected), ("剪下", "Ctrl+X", CutSelected), ("貼上", "Ctrl+V", Paste), ("再製一份", "Ctrl+D", Duplicate),
         };
         int at = btnEditMenu.DropDownItems.IndexOf(miRemove);
-        foreach (var (text, keys, action) in clipItems)
+        foreach (var (text, shortcut, action) in clipItems)
         {
-            var mi = new ToolStripMenuItem(text) { ShortcutKeyDisplayString = keys };
+            var mi = new ToolStripMenuItem(text) { ShortcutKeyDisplayString = shortcut };
             mi.Click += (s, e) => action();
             btnEditMenu.DropDownItems.Insert(at++, mi);
         }
@@ -186,9 +221,11 @@ public partial class PrintDesignerForm : Form
     // ================= 欄位清單 =================
 
     /// <summary>左邊欄位清單的一項：主資料表的欄位，或 JOIN 帶進來的欄位</summary>
-    private sealed record ColumnItem(string Name, string Header, string Type, string JoinAlias)
+    private sealed record ColumnItem(string Name, string Header, string Type, string JoinAlias, bool IsDetail = false, bool IsRecord = false)
     {
-        public override string ToString() => JoinAlias == null ? $"{Header}（{Type}）" : $"{Header}（{JoinAlias}，{Type}）";
+        public override string ToString() => IsDetail ? $"{Header}（單身，{Type}）"
+                                           : IsRecord ? $"{Header}（選取資料，{Type}）"
+                                           : JoinAlias == null ? $"{Header}（{Type}）" : $"{Header}（{JoinAlias}，{Type}）";
     }
 
     private void LoadColumns()
@@ -207,6 +244,8 @@ public partial class PrintDesignerForm : Form
         {
             Cursor = Cursors.Default;
         }
+        // 之前設定的單身沒有記主鍵（「只印清單上選取的資料」要用）
+        if (template.Detail != null && template.DetailKeyColumns.Count == 0) template.DetailKeyColumns = DetailKeysFromDatabase();
         FillColumnList();
     }
 
@@ -218,9 +257,163 @@ public partial class PrintDesignerForm : Form
             lstColumns.Items.Add(new ColumnItem(c.Name, string.IsNullOrWhiteSpace(c.Description) ? c.Name : c.Description, c.DataType, null));
         foreach (var c in template.JoinColumns)
             lstColumns.Items.Add(new ColumnItem(c.Column, c.Header ?? c.Column, c.DataType, c.JoinAlias));
+        // 列印來源清單選取那筆提供的欄位：單頭資料表、JOIN 都沒有的才列（例如詢價日期）
+        if (tableColumns.Count > 0)
+        {
+            var known = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            template.RecordColumns = (sourceColumns ?? new()).Select(c => c.Name).Where(n => !known.Contains(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        foreach (var name in template.RecordColumns)
+        {
+            var c = sourceColumns?.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            lstColumns.Items.Add(new ColumnItem(name, string.IsNullOrWhiteSpace(c?.Description) ? name : c.Description, c?.DataType, null, IsRecord: true));
+        }
+        // 單身的欄位排在最後（拖到明細表格）
+        foreach (var c in template.DetailColumns)
+            lstColumns.Items.Add(new ColumnItem(c.Column, c.Header ?? c.Column, c.DataType, null, IsDetail: true));
         lstColumns.EndUpdate();
         // 屬性面板「欄位」的下拉清單
-        PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).ToList();
+        PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).Concat(template.RecordColumns).ToList();
+        PrintDetailColumnConverter.Available = template.DetailColumns.Select(c => c.Column).ToList();
+        btnDetail.Text = template.Detail == null ? "設定單身（單頭與單身的對應）…" : $"單身：{template.Detail.TableName}（重新設定…）";
+        MarkMissingColumns();
+    }
+
+    /// <summary>
+    /// 樣板上找不到資料來源的欄位：不是主資料表的欄位、也不是 JOIN 帶進來的（例如換了主資料表，原本的欄位沒有 JOIN 進來）。
+    /// 還沒讀到主資料表的欄位時無法判斷，回傳空的
+    /// </summary>
+    private List<string> MissingColumns()
+    {
+        if (tableColumns.Count == 0) return new();
+        var known = PrintColumnConverter.Available.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var detail = PrintDetailColumnConverter.Available.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return template.Items.Where(i => i.Kind == PrintItemKind.欄位 && !string.IsNullOrWhiteSpace(i.Column) && !known.Contains(i.Column)).Select(i => i.Column)
+            .Concat(template.Items.Where(i => i.Kind == PrintItemKind.明細表格)
+                                  .SelectMany(i => i.TableColumns).Select(c => c.Column)
+                                  .Where(c => !string.IsNullOrWhiteSpace(c) && !detail.Contains(c)))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>找不到資料來源的欄位在紙張上用紅框標出來，狀態列說明怎麼補</summary>
+    private void MarkMissingColumns()
+    {
+        var missing = MissingColumns().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var box in canvas.Controls.OfType<PrintItemBox>())
+        {
+            bool m = box.Item.Kind == PrintItemKind.欄位 ? missing.Contains(box.Item.Column ?? "")
+                   : box.Item.Kind == PrintItemKind.明細表格 && box.Item.TableColumns.Any(c => missing.Contains(c.Column ?? ""));
+            if (box.Missing == m) continue;
+            box.Missing = m;
+            box.Invalidate();
+        }
+        if (missing.Count > 0)
+            UpdateStatus($"紅框的欄位在「{template.TableName}」找不到：{string.Join("、", missing)}，請按「JOIN 其他資料表」把它們帶進來");
+    }
+
+    /// <summary>預覽、列印前的檢查說明；沒問題回傳 null</summary>
+    private string MissingColumnsMessage()
+    {
+        var missing = MissingColumns();
+        if (missing.Count == 0) return null;
+        var selfJoins = template.Joins.Where(j => j.TableName.Equals(template.TableName, StringComparison.OrdinalIgnoreCase)).Select(j => j.Alias).ToList();
+        return $"樣板上有欄位在主資料表「{template.TableName}」找不到，也沒有用 JOIN 帶進來：{Environment.NewLine}　{string.Join("、", missing)}"
+             + $"{Environment.NewLine}{Environment.NewLine}請按左下「JOIN 其他資料表…」，選這些欄位所在的資料表（例如廠商資料表，對應 廠商編號=廠商編號），"
+             + "勾選這些欄位；名稱一樣就會自動接上，紙張上的紅框會消失。"
+             + (selfJoins.Count == 0 ? "" : $"{Environment.NewLine}{Environment.NewLine}另外，JOIN {string.Join("、", selfJoins)} 是 JOIN「{template.TableName}」自己"
+                                          + "（換主資料表前留下的），可能對到別筆資料，建議在左邊欄位清單按右鍵移除，改用主資料表本身的欄位。");
+    }
+
+    /// <summary>單頭可以拿來對應的欄位：主資料表的欄位 + JOIN 帶進來的欄位 + 列印來源清單選取那筆的欄位</summary>
+    private List<ColumnInfo> HeaderColumns() =>
+        tableColumns.Concat(template.JoinColumns.Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, MaxLength = c.MaxLength, Description = c.Header }))
+                    .Concat(template.RecordColumns.Select(n => sourceColumns?.FirstOrDefault(x => x.Name.Equals(n, StringComparison.OrdinalIgnoreCase)) ?? new ColumnInfo { Name = n }))
+                    .ToList();
+
+    /// <summary>
+    /// 設定單身：選單身資料表、單頭欄位=單身欄位的對應（例如 廠商編號=廠商編號, 詢價日期=詢價日期）、要印的單身欄位。
+    /// 列印時對應的值都相同的單身資料印在同一張單據的明細表格
+    /// </summary>
+    /// <summary>設定單身：編輯視窗上有明細清單時，可以直接用清單（資料表、關聯、欄位、清單的 JOIN 都照清單），或另外選資料表</summary>
+    private void ChooseDetail()
+    {
+        if (editLists.Count == 0)
+        {
+            SetDetail();
+            return;
+        }
+        var menu = new ContextMenuStrip();
+        foreach (var list in editLists)
+            menu.Items.Add($"使用編輯視窗的明細清單：{list.Title ?? list.TableName}（關聯：{list.LinkText}）", null, (s, e) => UseListAsDetail(list));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("選其他資料表…", null, (s, e) => SetDetail());
+        menu.Show(btnDetail, new Point(0, btnDetail.Height));
+    }
+
+    /// <summary>單身直接用編輯視窗的明細清單：資料表、關聯欄位、顯示的欄位、清單的 JOIN（例如品名）都照清單</summary>
+    private void UseListAsDetail(EditListDefinition list)
+    {
+        if (template.Detail != null &&
+            MessageBox.Show($"已經設定單身「{template.Detail.TableName}」（對應：{template.Detail.LinkText}），要換成明細清單「{list.Title ?? list.TableName}」嗎？",
+                            "設定單身", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+        var copy = list.Clone();
+        template.Detail = new GridJoinDefinition { Alias = "D", TableSchema = copy.TableSchema, TableName = copy.TableName, LinkText = copy.LinkText };
+        template.DetailJoins = copy.Joins;
+        template.DetailColumns = copy.Columns.Where(c => c.Visible).ToList();
+        template.DetailKeyColumns = copy.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column).ToList();
+        FillColumnList();
+        if (!template.Items.Any(i => i.Kind == PrintItemKind.明細表格)) AddItem(PrintItemKind.明細表格, NextFreePoint());
+        propertyGrid.Refresh();
+        UpdateStatus($"單身用明細清單 {copy.TableName}（對應：{copy.LinkText}，{template.DetailColumns.Count} 個欄位）");
+        MessageBox.Show($"已帶入明細清單「{list.Title ?? list.TableName}」的 {template.DetailColumns.Count} 個欄位，對應：{copy.LinkText}。{Environment.NewLine}{Environment.NewLine}"
+                        + "如果還要其他欄位也相同才印在同一張（例如同一詢價日期），點紙張空白處，在屬性面板「單頭與單身的對應」後面加上，例如：, 詢價日期=詢價日期",
+                        "設定單身");
+    }
+
+    private void SetDetail()
+    {
+        if (template.Detail != null &&
+            MessageBox.Show($"已經設定單身「{template.Detail.TableName}」（對應：{template.Detail.LinkText}）。{Environment.NewLine}"
+                            + "要重新設定嗎？（只改對應條件的話，點紙張空白處，在屬性面板「單頭與單身的對應」直接改）",
+                            "設定單身", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+        using var dlg = new JoinDialog(connectionString, "D", HeaderColumns(), Array.Empty<string>(), forDetail: true);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        template.Detail = dlg.Join;
+        template.DetailJoins = new();
+        template.DetailKeyColumns = DetailKeysFromDatabase();
+        // 單身資料表本身的欄位（JOIN 對話框沒有其他欄位，名稱就是原本的欄位名稱）
+        template.DetailColumns = dlg.NewColumns.Select(c => new GridColumnDefinition
+            { Column = c.SourceColumn, Header = c.Header, DataType = c.DataType, MaxLength = c.MaxLength, Width = c.Width }).ToList();
+        FillColumnList();
+        // 還沒有明細表格就放一個，欄位先全部放進去
+        if (!template.Items.Any(i => i.Kind == PrintItemKind.明細表格)) AddItem(PrintItemKind.明細表格, NextFreePoint());
+        propertyGrid.Refresh();
+        UpdateStatus($"已設定單身 {dlg.Join.TableName}（對應：{dlg.Join.LinkText}，{dlg.NewColumns.Count} 個欄位）");
+    }
+
+    /// <summary>單身資料表的主鍵：編輯視窗上同一個資料表的明細清單有設定主鍵就用它，否則用資料庫的主鍵</summary>
+    private List<string> DetailKeysFromDatabase()
+    {
+        if (template.Detail == null) return new();
+        var list = editLists.FirstOrDefault(l => l.TableName.Equals(template.Detail.TableName, StringComparison.OrdinalIgnoreCase));
+        var keys = list?.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column).ToList() ?? new();
+        if (keys.Count > 0) return keys;
+        try { return SchemaReader.GetColumns(connectionString, template.Detail.TableSchema, template.Detail.TableName).Where(c => c.IsPrimaryKey).Select(c => c.Name).ToList(); }
+        catch (Exception) { return new(); }
+    }
+
+    private void RemoveDetail()
+    {
+        if (template.Detail == null) return;
+        if (MessageBox.Show($"確定要移除單身「{template.Detail.TableName}」嗎？明細表格會印成空白。", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        template.Detail = null;
+        template.DetailColumns = new();
+        template.DetailJoins = new();
+        template.DetailKeyColumns = new();
+        FillColumnList();
+        propertyGrid.Refresh();
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位（跟單身 Grid 的 JOIN 一樣）</summary>
@@ -280,6 +473,12 @@ public partial class PrintDesignerForm : Form
                 item.Width = 300;
                 item.Height = 150;
                 break;
+            case PrintItemKind.明細表格:
+                item.Width = Math.Max(200, template.PageSize.Width - 80 - location.X);
+                item.Height = 300;
+                item.TableColumns = template.DetailColumns
+                    .Select(c => new PrintTableColumn { Column = c.Column, Header = c.Header, Width = Math.Clamp(c.Width, 60, 200) }).ToList();
+                break;
         }
         template.Items.Add(item);
         var box = new PrintItemBox(item);
@@ -288,8 +487,72 @@ public partial class PrintDesignerForm : Form
         SetSelection(new[] { box });
     }
 
+    /// <summary>拖放到紙張或元件上：單身的欄位放進明細表格，其他照種類新增元件</summary>
+    private void OnDrop(DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(PrintDragData)) is not PrintDragData data) return;
+        Point p = canvas.PointToClient(new Point(e.X, e.Y));
+        if (data.IsDetail)
+        {
+            var target = canvas.Controls.OfType<PrintItemBox>().LastOrDefault(b => b.Item.Kind == PrintItemKind.明細表格 && b.Bounds.Contains(p));
+            AddDetailColumn(target, new Point(Snap(p.X), Snap(p.Y)), data.Column, data.Header);
+            return;
+        }
+        AddItem(data.Kind, new Point(Snap(p.X), Snap(p.Y)), data.Column, data.Header);
+    }
+
+    /// <summary>單身的欄位加到明細表格：target 空白時用樣板上第一個明細表格，沒有就在 location 新增一個</summary>
+    private void AddDetailColumn(PrintItemBox target, Point location, string column, string header)
+    {
+        target ??= canvas.Controls.OfType<PrintItemBox>().FirstOrDefault(b => b.Item.Kind == PrintItemKind.明細表格);
+        if (target == null)
+        {
+            AddItem(PrintItemKind.明細表格, location);
+            target = canvas.Controls.OfType<PrintItemBox>().First(b => b.Item.Kind == PrintItemKind.明細表格);
+            target.Item.TableColumns.Clear();
+        }
+        if (target.Item.TableColumns.Any(c => string.Equals(c.Column, column, StringComparison.OrdinalIgnoreCase)))
+        {
+            UpdateStatus($"明細表格已經有「{column}」");
+            return;
+        }
+        target.Item.TableColumns.Add(new PrintTableColumn { Column = column, Header = header });
+        target.RefreshFromModel();
+        SetSelection(new[] { target });
+        UpdateStatus($"已把「{header ?? column}」加到明細表格");
+    }
+
+    /// <summary>明細表格要印哪些單身欄位、順序（勾選清單）</summary>
+    private void ChooseTableColumns(PrintItemBox box)
+    {
+        if (template.DetailColumns.Count == 0)
+        {
+            MessageBox.Show("還沒有設定單身：請先按左下「設定單身」。", "明細表格");
+            return;
+        }
+        using var dlg = new TableColumnsDialog(template.DetailColumns, box.Item.TableColumns);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        box.Item.TableColumns = dlg.Columns;
+        box.RefreshFromModel();
+        SetSelection(new[] { box });
+        MarkMissingColumns();
+        UpdateStatus($"明細表格 {dlg.Columns.Count} 個欄位");
+    }
+
     private void AttachBox(PrintItemBox box)
     {
+        // 單身的欄位可以直接拖到明細表格上
+        box.AllowDrop = true;
+        box.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) ? DragDropEffects.Copy : DragDropEffects.None;
+        box.DragDrop += (s, e) => OnDrop(e);
+        // 明細表格：雙擊或右鍵挑要印的單身欄位
+        if (box.Item.Kind == PrintItemKind.明細表格)
+        {
+            box.DoubleClick += (s, e) => ChooseTableColumns(box);
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("選擇表格欄位…", null, (s, e) => ChooseTableColumns(box));
+            box.ContextMenuStrip = menu;
+        }
         box.Pressed += (s, e) => OnBoxPressed(box);
         box.Dragging += (s, delta) => MoveSelection(box, delta);
         box.DragFinished += (s, e) => { dragStarts = null; propertyGrid.Refresh(); };
@@ -474,15 +737,20 @@ public partial class PrintDesignerForm : Form
     /// <summary>用主資料表的第一筆資料預覽列印（看排版用）</summary>
     private void PreviewSample()
     {
+        if (MissingColumnsMessage() is { } message)
+        {
+            MessageBox.Show(message, "預覽列印", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         try
         {
-            var row = PrintRunner.LoadSample(template, connectionString);
-            if (row == null)
+            var sheet = PrintRunner.LoadSample(template, connectionString);
+            if (sheet == null)
             {
                 MessageBox.Show("資料表裡沒有資料可以預覽。", "預覽列印");
                 return;
             }
-            using var doc = PrintRunner.CreateDocument(template, new[] { row }, Text);
+            using var doc = PrintRunner.CreateDocument(template, new[] { sheet }, Text);
             PrintRunner.ShowPreview(doc, this, Path.GetFileNameWithoutExtension(templatePath ?? defaultName));
         }
         catch (Exception ex)
@@ -507,8 +775,10 @@ public partial class PrintDesignerForm : Form
     /// 設計畫面雙擊「列印報表」按鈕時開啟；存過檔就把樣板檔寫回按鈕的「列印樣板檔」（跟畫面同資料夾時只存檔名）。
     /// 回傳 true = 按鈕的設定有改
     /// </summary>
+    /// <param name="recordColumns">按鈕有設定列印來源清單時，那個清單的欄位（選取那筆提供的欄位）</param>
     public static bool OpenFor(ButtonDefinition b, IWin32Window owner, string formFolder, string connectionString,
-                               string tableSchema, string tableName, IEnumerable<string> keyColumns)
+                               string tableSchema, string tableName, IEnumerable<string> keyColumns, IEnumerable<ColumnInfo> recordColumns = null,
+                               IEnumerable<EditListDefinition> editLists = null)
     {
         if (string.IsNullOrWhiteSpace(tableName))
         {
@@ -526,7 +796,7 @@ public partial class PrintDesignerForm : Form
         // 新樣板檔的預設檔名：資料表_按鈕文字（去掉檔名不能用的字元）
         string name = string.IsNullOrWhiteSpace(b.Text) ? tableName : $"{tableName}_{b.Text}";
         name = string.Concat(name.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch))).Trim();
-        using var dlg = new PrintDesignerForm(path, connectionString, tableSchema, tableName, keys, folder, name == "" ? "列印樣板" : name);
+        using var dlg = new PrintDesignerForm(path, connectionString, tableSchema, tableName, keys, folder, name == "" ? "列印樣板" : name, recordColumns, editLists);
         dlg.ShowDialog(owner);
         if (dlg.SavedPath == null) return false;
         string saved = string.Equals(Path.GetDirectoryName(dlg.SavedPath), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase)

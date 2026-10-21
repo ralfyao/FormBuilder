@@ -17,6 +17,8 @@ public partial class JoinDialog : Form
     private List<ColumnInfo> remoteColumns = new();
     private (string Schema, string Name)? selectedTable;
     private readonly List<ColumnInfo> localColumns;
+    /// <summary>列印樣板的單身：一筆單頭本來就對到多筆單身，不用提醒主鍵沒放進條件</summary>
+    private readonly bool forDetail;
 
     public GridJoinDefinition Join { get; private set; }
     public List<GridColumnDefinition> NewColumns { get; } = new();
@@ -24,9 +26,12 @@ public partial class JoinDialog : Form
     /// <param name="alias">這個 JOIN 在 SQL 裡的別名（J1、J2…）</param>
     /// <param name="localColumns">Grid 本身資料表的欄位（關聯條件左邊的選項）</param>
     /// <param name="existingColumnNames">Grid 已經有的欄位名稱，帶進來的欄位不能重複</param>
-    public JoinDialog(string connectionString, string alias, List<ColumnInfo> localColumns, IEnumerable<string> existingColumnNames)
+    /// <param name="forDetail">列印樣板設定單身用（左邊 = 單頭欄位，右邊 = 單身欄位）</param>
+    public JoinDialog(string connectionString, string alias, List<ColumnInfo> localColumns, IEnumerable<string> existingColumnNames, bool forDetail = false)
     {
         InitializeComponent();
+        this.forDetail = forDetail;
+        if (forDetail) Text = "設定單身：選單身資料表、對應條件（單頭欄位 = 單身欄位）、勾選要印的欄位";
         this.connectionString = connectionString;
         this.alias = alias;
         this.localColumns = localColumns;
@@ -149,7 +154,7 @@ public partial class JoinDialog : Form
         }
         // 關聯資料表的主鍵沒有全部放進條件，一筆可能對到多筆，Grid 的列會重複
         var primaryKeys = remoteColumns.Where(c => c.IsPrimaryKey).Select(c => c.Name).ToList();
-        if (primaryKeys.Count > 0 && !primaryKeys.All(k => links.Any(l => l.Remote.Equals(k, StringComparison.OrdinalIgnoreCase))) &&
+        if (!forDetail && primaryKeys.Count > 0 && !primaryKeys.All(k => links.Any(l => l.Remote.Equals(k, StringComparison.OrdinalIgnoreCase))) &&
             MessageBox.Show($"關聯資料表的主鍵（{string.Join("、", primaryKeys)}）沒有全部放進關聯條件，同一筆可能對到多筆資料，造成 Grid 的列重複。\n\n仍要加入嗎？",
                             "提醒", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
             return;

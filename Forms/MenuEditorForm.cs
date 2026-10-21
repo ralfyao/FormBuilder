@@ -14,11 +14,13 @@ public partial class MenuEditorForm : Form
         btnDelete.Click += (s, e) => RemoveSelected();
         btnUp.Click += (s, e) => MoveSelected(-1);
         btnDown.Click += (s, e) => MoveSelected(1);
+        btnOutdent.Click += (s, e) => OutdentSelected();
         btnSave.Click += (s, e) => Save();
         treeMenu.KeyDown += (s, e) =>
         {
             if (e.KeyCode == Keys.F2) treeMenu.SelectedNode?.BeginEdit();
             if (e.KeyCode == Keys.Delete) RemoveSelected();
+            if (e.KeyData == (Keys.Control | Keys.Left)) { OutdentSelected(); e.Handled = true; }
         };
         treeMenu.AfterLabelEdit += (s, e) =>
         {
@@ -39,7 +41,7 @@ public partial class MenuEditorForm : Form
             if (target == dragged || IsAncestor(dragged, target)) return;
             dragged.Remove();
             if (target == null) treeMenu.Nodes.Add(dragged);
-            else if (((MenuNode)target.Tag).IsFolder) { target.Nodes.Add(dragged); target.Expand(); }
+            else if (((MenuNode)target.Tag).IsFolder && !ModifierKeys.HasFlag(Keys.Shift)) { target.Nodes.Add(dragged); target.Expand(); }   // Shift = 放在資料夾下面同一層
             else (target.Parent?.Nodes ?? treeMenu.Nodes).Insert(target.Index + 1, dragged);
             treeMenu.SelectedNode = dragged;
         };
@@ -133,6 +135,16 @@ public partial class MenuEditorForm : Form
         if (index < 0 || index >= siblings.Count) return;
         node.Remove();
         siblings.Insert(index, node);
+        treeMenu.SelectedNode = node;
+    }
+
+    /// <summary>移到上一層：從資料夾裡拿出來，放在那個資料夾的下面（同一層）</summary>
+    private void OutdentSelected()
+    {
+        var node = treeMenu.SelectedNode;
+        if (node?.Parent is not { } parent) return;                 // 已經在最上層
+        node.Remove();
+        (parent.Parent?.Nodes ?? treeMenu.Nodes).Insert(parent.Index + 1, node);
         treeMenu.SelectedNode = node;
     }
 

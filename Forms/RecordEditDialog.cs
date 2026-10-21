@@ -39,6 +39,12 @@ public partial class RecordEditDialog : Form
                 else input.Enabled = false;
             }
         }
+        // 欄位的開窗選取：傳入參數先找視窗上的欄位，帶回的值填進欄位
+        ButtonRunner.AttachPickers(inputs, b => ButtonRunner.OpenForm(b, sourcePath, this, name =>
+        {
+            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
+        }, values => ButtonRunner.FillFields(values, inputs)));
         // 後台在編輯視窗版面放的按鈕：明細編輯只支援確定、取消、離開、執行SQL、開啟畫面
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
@@ -60,7 +66,7 @@ public partial class RecordEditDialog : Form
                         });
                         break;
                     case ButtonAction.列印報表:
-                        if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, this)) break;   // 印下方清單選取的資料
+                        if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, name => currentValue(name), this)) break;   // 依下方清單選取的資料列印
                         ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => currentValue(name) }, this);
                         break;
                     case ButtonAction.開啟畫面:

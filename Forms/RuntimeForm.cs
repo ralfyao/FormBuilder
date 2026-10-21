@@ -30,6 +30,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private readonly GridDefinition listDef;
     private readonly DataGridView listGrid;
     private bool syncingList;                  // 程式在同步選取列時，不要觸發「切換單頭」
+
+    // SQL 清單：資料來自後台寫的 SELECT（唯讀），切換單頭時用 @單頭欄位 重查
+    private readonly List<(GridDefinition Def, DataGridView Grid)> sqlGrids = new();
     /// <summary>後台設計的按鈕，以及對應的控制項</summary>
     private readonly List<(ButtonDefinition Def, Button Control)> customButtons = new();
     /// <summary>查詢模式是由哪個「自訂查詢」按鈕開始的；null = 內建查詢</summary>
@@ -81,7 +84,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
                 ForeColor = labelColor,
-                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(body.Font)),   // 字放大時標籤跟著變高
+                Font = LabelGeometry.Font(f, body.Font),                                              // 標籤字體大小
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f);
             if (input is RadioGroup) input.ForeColor = labelColor;
@@ -89,6 +93,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
+        // 欄位的開窗選取：瀏覽時不開（跟選取視窗按鈕一樣，輸入中、查詢中才能用）
+        ButtonRunner.AttachPickers(inputs, b => { if (mode != Mode.Browse) OpenOtherForm(b); });
 
         // 後台從工具箱拖進來的按鈕
         foreach (var b in def.Buttons)
@@ -99,14 +105,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
             body.Controls.Add(button);
         }
 
-        gridDef = def.Grids.FirstOrDefault(g => !g.IsMasterList);
+        gridDef = def.Grids.FirstOrDefault(g => !g.IsMasterList && !g.IsSqlList);
         btnDetail.Visible = gridDef != null;
         if (gridDef != null)
         {
             detailGrid = CreateDetailGrid(gridDef, def.ConnectionString);
             HookEditDialog(detailGrid, EditDetailRow);
         }
-        listDef = def.Grids.FirstOrDefault(g => g.IsMasterList);
+        foreach (var g in def.Grids.Where(g => g.IsSqlList))
+            sqlGrids.Add((g, CreateDetailGrid(g, def.ConnectionString)));   // 唯讀
+        listDef = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
         if (listDef != null)
         {
             listGrid = CreateDetailGrid(listDef, def.ConnectionString);
@@ -129,7 +137,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 讓先放的 Grid 在最下面，跟設計畫面一樣
         foreach (var g in def.Grids.AsEnumerable().Reverse())
         {
-            DataGridView grid = g == gridDef ? detailGrid : g == listDef ? listGrid : null;
+            DataGridView grid = g == gridDef ? detailGrid : g == listDef ? listGrid : sqlGrids.FirstOrDefault(x => x.Def == g).Grid;
             if (grid == null) continue;
             if (g.Dock == GridDock.Bottom)
             {
@@ -140,6 +148,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
 
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
+
+        // 沒有單頭資料表（只放 SQL 清單的畫面）：沒有資料可以查詢、新增、修改，只留「離開」，SQL 清單打開就查
+        if (!HasMasterTable)
+            foreach (ToolStripItem item in new ToolStripItem[] { btnQuery, btnInsert, btnModify, btnDelete, btnDetail, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast, sepEdit, btnOk, btnCancel, sepExit })
+                item.Visible = false;
 
         if (pickMode) SetupPickMode();
         ShowCurrent();
@@ -167,6 +180,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
         base.OnFormClosing(e);
     }
 
+    /// <summary>有單頭資料表；false = 只放 SQL 清單的畫面</summary>
+    private bool HasMasterTable => !string.IsNullOrWhiteSpace(def.TableName);
+
     private void SetupPickMode()
     {
         Text = "選取：" + def.Title;
@@ -181,6 +197,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             ToolTipText = "把目前選的這筆帶回原來的畫面（在清單上雙擊也可以）",
         };
         btnPick.Click += (s, e) => Pick();
+        // 只放 SQL 清單的畫面：在清單上雙擊一列 = 選這筆帶回
+        if (!HasMasterTable)
+            foreach (var (_, grid) in sqlGrids)
+                grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) Pick(); };
         toolStrip.Items.Insert(0, btnPick);
         toolStrip.Items.Insert(1, new ToolStripSeparator());
         btnExit.Text = "取消";
@@ -190,6 +210,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void Pick()
     {
         if (mode != Mode.Browse) return;
+        if (!HasMasterTable)
+        {
+            // 只放 SQL 清單的畫面：帶回清單上選的那列（有多個清單時先看正在操作的那個）
+            var row = sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus)
+                              .Select(g => (g.CurrentRow?.DataBoundItem as DataRowView)?.Row).FirstOrDefault(r => r != null);
+            if (row == null)
+            {
+                MessageBox.Show("請先在清單上選一筆資料。", "選取");
+                return;
+            }
+            PickedRow = row;
+            DialogResult = DialogResult.OK;
+            return;
+        }
         if (!HasCurrent)
         {
             MessageBox.Show("請先查詢並選一筆資料。", "選取");
@@ -277,7 +311,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             Mode.Insert => "新增：輸入資料後按「確定」存檔，Esc 取消",
             Mode.Modify => "修改：改完後按「確定」存檔，Esc 取消",
             Mode.Detail => "單身：在下方 Grid 新增（最後一列）、修改、刪除（選列後按 Delete）明細，按「確定」存檔、「取消」放棄",
-            _ => HasKey ? "" : "這個畫面沒有設定主鍵，只能查詢與新增",
+            _ => HasKey || !HasMasterTable ? "" : "這個畫面沒有設定主鍵，只能查詢與新增",   // 只放 SQL 清單的畫面不提示
         };
         lblPosition.Text = HasCurrent ? $"第 {current + 1} / {results.Rows.Count} 筆" : "";
         // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位
@@ -302,6 +336,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         ClearInputs();
         ClearDetail();
+        DefaultValue.FillInputs(inputs);                                          // 欄位的預設值
         NumberRule.FillInputs(inputs, def.ConnectionString, def.FullTableName);   // 有編號規則的欄位自動帶入下一個編號
         SetMode(Mode.Insert);
     }
@@ -582,7 +617,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonRunner.Print(b, def.SourcePath, def.ConnectionString, records, this);
     }
 
-    /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位</summary>
+    /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位（欄位的開窗選取也用這個）</summary>
     private void OpenOtherForm(ButtonDefinition b) =>
         ButtonRunner.OpenForm(b, def.SourcePath, this, name =>
         {
@@ -844,7 +879,31 @@ public partial class RuntimeForm : Form, IRecordNavigator
         else
             ClearInputs();
         LoadDetail();
+        LoadSqlLists();
         SyncList();
+    }
+
+    /// <summary>重查 SQL 清單：@名稱 先取目前這筆單頭的值，再找畫面上的欄位、開啟時的傳入參數</summary>
+    private void LoadSqlLists()
+    {
+        foreach (var (g, grid) in sqlGrids)
+        {
+            try
+            {
+                grid.DataSource = SqlList.Load(def.ConnectionString, g.Sql, name =>
+                {
+                    if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+                    var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (field != null) return GetValue(field);
+                    return openParams.TryGetValue(name, out var v) ? v : null;
+                });
+            }
+            catch (Exception ex)
+            {
+                grid.DataSource = null;
+                MessageBox.Show($"讀取「{g.Title}」失敗：{ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
     }
 
     private void ClearInputs()
@@ -920,6 +979,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 新增明細時，關聯欄位自動帶入目前單頭的值
         table.TableNewRow += (s, e) =>
         {
+            // 新增明細時先帶入欄位的預設值
+            foreach (var c in gridDef.Columns.Where(c => !string.IsNullOrWhiteSpace(c.EditDefaultValue) && e.Row.Table.Columns.Contains(c.Column)))
+            {
+                try { e.Row[c.Column] = DefaultValue.Resolve(c.EditDefaultValue); }
+                catch (Exception) { }                           // 型別對不上就不帶
+            }
             if (!HasCurrent) return;
             foreach (var (master, detail) in gridDef.Links)
                 if (e.Row.Table.Columns.Contains(detail))

@@ -7,6 +7,9 @@ public class PrintItemBox : DesignBox
 
     public PrintItem Item { get; }
 
+    /// <summary>欄位找不到資料來源（設計器用紅框標出來）</summary>
+    public bool Missing { get; set; }
+
     public PrintItemBox(PrintItem item)
     {
         Item = item;
@@ -52,6 +55,11 @@ public class PrintItemBox : DesignBox
         g.Clear(Color.White);
         PrintRenderer.DrawItem(g, Item, new RectangleF(0, 0, Width - 1, Height - 1), null);
         // 範圍：選取時藍色粗框，平常淡灰色虛線（列印時不會印出來）
+        if (Missing)
+        {
+            using var red = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash };
+            g.DrawRectangle(red, 1, 1, Width - 3, Height - 3);
+        }
         if (IsSelected)
         {
             using var pen = new Pen(Color.DodgerBlue, 2);

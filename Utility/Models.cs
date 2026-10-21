@@ -165,6 +165,10 @@ public class FontNameConverter : StringConverter
 public static class LabelGeometry
 {
     public static int Height(Font font) => Math.Max(FieldDefinition.DefaultHeight, font.Height + 8);
+
+    /// <summary>標籤的字型：欄位有設「標籤字體大小」就用它，沒有就跟畫面字型一樣</summary>
+    public static Font Font(FieldDefinition f, Font baseFont) =>
+        f.LabelFontSize > 0 ? new Font(baseFont.FontFamily, Math.Clamp(f.LabelFontSize, 6, 72), baseFont.Style) : baseFont;
 }
 
 /// <summary>顏色與文字互轉（定義檔存文字）；沒設定 = Color.Empty，代表用預設的底色</summary>
@@ -240,6 +244,11 @@ public class FieldDefinition
                + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
     public string NumberRule { get; set; }
 
+    [Category("編號"), DisplayName("預設值"),
+     Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；"
+               + "USER() = 登入帳號。也可以用 {今天} {現在} {使用者} {使用者名稱} 夾在文字裡。有設「編號規則」時以編號規則為準")]
+    public string DefaultValue { get; set; }
+
     [Category("日期選擇"), DisplayName("日期格式"),
      Description("文字、數字欄位用日期選擇時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
     public string DateFormat { get; set; }
@@ -263,6 +272,20 @@ public class FieldDefinition
     [Category("下拉選單"), DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get; set; }
 
+    [Category("開窗選取"), DisplayName("開窗畫面"),
+     Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string PickerForm { get; set; }
+
+    [Category("開窗選取"), DisplayName("傳入參數"),
+     Description("開窗時帶給對方畫面的值（同按鈕的「傳入參數」）：「對方欄位=@本畫面欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+    public string PickerParams { get; set; }
+
+    [Category("開窗選取"), DisplayName("回傳對應"),
+     Description("選好後帶回哪些值（同按鈕的「回傳對應」）：「本畫面欄位=對方欄位」，可以一次帶回多個欄位，例如：品項編號=品項編號, 採購單位=單位。"
+               + "空白 = 只帶回這個欄位（對方畫面同名的欄位）；只寫對方的欄位名稱（例如：產品編號）= 把對方的這個欄位帶回這個欄位")]
+    public string PickerReturn { get; set; }
+
     [Category("畫面"), DisplayName("只顯示（NOENTRY）"), Description("使用者不能輸入，存檔時也不會寫回資料庫")]
     public bool NoEntry { get; set; }
 
@@ -273,6 +296,10 @@ public class FieldDefinition
     [Category("外觀"), DisplayName("字體大小"), DefaultValue(0f),
      Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高，文字才不會被切掉")]
     public float FontSize { get; set; }
+
+    [Category("外觀"), DisplayName("標籤字體大小"), DefaultValue(0f),
+     Description("輸入框左邊標籤文字的大小（點），0 = 跟畫面的字型大小一樣。字放大時請一起把「標籤寬度」拉寬")]
+    public float LabelFontSize { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設的白底
     [Browsable(false)]
@@ -296,6 +323,13 @@ public class GridDefinition
 {
     [Category("資料"), DisplayName("單頭清單"), ReadOnly(true), Description("True = 列出單頭自己的查詢結果；False = 單身明細")]
     public bool IsMasterList { get; set; }
+
+    /// <summary>SQL 清單：資料來自這個 SELECT（唯讀，可以用 @單頭欄位）；空白 = 一般的資料表 Grid</summary>
+    [Browsable(false)]
+    public string Sql { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
 
     [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
     public string TableSchema { get; set; }
@@ -627,8 +661,8 @@ public class ButtonDefinition
     public string PrintTemplate { get; set; }
 
     [Category("列印報表"), DisplayName("列印來源清單"), TypeConverter(typeof(PrintListConverter)),
-     Description("空白 = 印目前這筆（主檔）。選編輯視窗上的明細清單（資料表名稱）= 印清單上選取的資料（可多選，每筆一頁；沒選會提醒）。"
-               + "選了之後，列印樣板改用這個清單的資料表與主鍵，主檔的欄位可以在樣板裡 JOIN 進來")]
+     Description("空白 = 印目前這筆（主檔）。選編輯視窗上的明細清單（資料表名稱）= 依清單上選取的資料列印（可多選；沒選會提醒）。"
+               + "樣板一樣以主檔（單頭）為主，選取那筆的欄位（例如詢價日期）可以放到樣板上，或在「設定單身」拿來對應單身")]
     public string PrintListTable { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
@@ -755,10 +789,16 @@ public class GridColumnDefinition
     public string EditItems { get; set; }
     public string EditItemsSql { get; set; }
     public bool EditAllowFreeText { get; set; }
+    /// <summary>編輯視窗的開窗選取（同 FieldDefinition.PickerForm / PickerParams / PickerReturn）</summary>
+    public string EditPickerForm { get; set; }
+    public string EditPickerParams { get; set; }
+    public string EditPickerReturn { get; set; }
     /// <summary>編輯視窗的日期選擇格式、勾選框的值（同 FieldDefinition）</summary>
     public string EditDateFormat { get; set; }
     /// <summary>編輯視窗新增時的自動編號規則（同 FieldDefinition.NumberRule）</summary>
     public string EditNumberRule { get; set; }
+    /// <summary>編輯視窗新增時的預設值（同 FieldDefinition.DefaultValue）；單身 Grid 新增明細時也用它</summary>
+    public string EditDefaultValue { get; set; }
     /// <summary>編輯視窗欄位是否唯讀（同 FieldDefinition.IsReadOnly）</summary>
     public bool EditReadOnly { get; set; }
     public string EditCheckedValue { get; set; }
@@ -768,6 +808,8 @@ public class GridColumnDefinition
     /// <summary>編輯視窗輸入框的字體大小、底色（同 FieldDefinition.FontSize / BackColorHtml）</summary>
     public float EditFontSize { get; set; }
     public string EditBackColorHtml { get; set; }
+    /// <summary>編輯視窗標籤的字體大小（同 FieldDefinition.LabelFontSize）</summary>
+    public float EditLabelFontSize { get; set; }
 }
 
 /// <summary>從樹狀清單拖曳整個資料表時帶的資料</summary>
