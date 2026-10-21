@@ -857,10 +857,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 欄位依「輸入方式」建立：文字框、下拉選單、勾選框、日期選擇
         foreach (var c in g.Columns.Where(c => c.Visible))
         {
-            DataGridViewColumn col = GridCells.CreateColumn(c, connectionString);
+            // 生效欄位（輸入方式沒特別設定時）：不管欄位是文字還是數字，都顯示成唯讀的勾選框
+            bool effective = c.CellType == GridCellKind.自動 && !TypeHelper.IsBool(c.DataType)
+                             && c.Column.Equals(g.EffectiveColumn ?? "", StringComparison.OrdinalIgnoreCase);
+            DataGridViewColumn col = effective ? GridCells.CreateEffectiveColumn(c) : GridCells.CreateColumn(c, connectionString);
             col.SortMode = DataGridViewColumnSortMode.NotSortable;   // 不排序，列的順序才會跟資料一致
             grid.Columns.Add(col);
         }
+        GridCells.HookEffectiveColumn(grid);
         grid.DataError += (s, e) =>
         {
             if (GridCells.IgnoreDisplayError(grid, e)) return;     // 下拉選單裡沒有的值：顯示空白，不跳訊息

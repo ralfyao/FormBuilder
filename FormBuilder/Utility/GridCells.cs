@@ -34,6 +34,35 @@ public static class GridCells
         return col;
     }
 
+    /// <summary>生效欄位顯示用的勾選框欄位名稱（HookEffectiveColumn 靠它找到要轉換的欄位）</summary>
+    public const string EffectiveColumnName = "__effective";
+
+    /// <summary>
+    /// 生效欄位：顯示成唯讀勾選框（只看不改，生效 / 取消生效要用按鈕）。
+    /// 欄位是文字或數字時，值是 1、Y、True 就打勾（跟生效按鈕的判斷一樣），要配合 HookEffectiveColumn
+    /// </summary>
+    public static DataGridViewColumn CreateEffectiveColumn(GridColumnDefinition c) => new DataGridViewCheckBoxColumn
+    {
+        Name = EffectiveColumnName,
+        DataPropertyName = c.Column,
+        HeaderText = c.Header,
+        Width = Math.Min(c.Width, 70),
+        ReadOnly = true,
+        Tag = c,
+    };
+
+    /// <summary>把生效欄位的值（文字、數字）轉成打勾 / 不打勾顯示</summary>
+    public static void HookEffectiveColumn(DataGridView grid)
+    {
+        if (grid.Columns[EffectiveColumnName] == null) return;
+        grid.CellFormatting += (s, e) =>
+        {
+            if (e.ColumnIndex < 0 || grid.Columns[e.ColumnIndex].Name != EffectiveColumnName) return;
+            e.Value = GridDefinition.IsEffectiveValue(e.Value);
+            e.FormattingApplied = true;
+        };
+    }
+
     private static DataGridViewTextBoxColumn CreateTextBox(GridColumnDefinition c)
     {
         var col = new DataGridViewTextBoxColumn();
