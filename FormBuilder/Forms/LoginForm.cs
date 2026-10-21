@@ -5,11 +5,13 @@ public partial class LoginForm : Form
 {
     private readonly SysConfig config;
 
-    public LoginForm(SysConfig config)
+    /// <param name="productName">登入畫面上顯示的產品名稱（後台工具是 ERP Studio，使用者端是 ERP 系統）</param>
+    public LoginForm(SysConfig config, string productName = "ERP Studio")
     {
         InitializeComponent();
         this.config = config;
-        Text = $"登入　ERP Studio {Updater.CurrentVersion}";
+        lblTitle.Text = productName;
+        Text = $"登入　{productName} {Updater.CurrentVersion}";
         txtUser.Text = config.LastUser ?? "";
         btnLogin.Click += (s, e) => DoLogin();
         lnkSetup.LinkClicked += (s, e) =>

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ERP 系統（使用者端）：登入 → 依權限顯示選單 → 用分頁開啟後台設計、發布好的畫面。
+    畫面執行、編輯視窗、列印、登入、權限、系統資料庫的程式碼直接連結 FormBuilder 專案的原始檔（共用同一份），
+    不含畫面設計器與系統管理工具（那些在 FormBuilder 的 ERP Studio 裡）
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>ERPClient</RootNamespace>
+    <AssemblyName>ERPClient</AssemblyName>
+    <!-- 版本：發布新版前改這裡（..\FormBuilder\installer\build-release.ps1 -Project ERPClient -Version x.y.z），自動更新靠它比對新舊 -->
+    <Version>1.0.0</Version>
+    <Product>ERP 系統</Product>
+    <Company>YJF</Company>
+    <AssemblyTitle>ERP 系統</AssemblyTitle>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Shared>..\FormBuilder\</Shared>
+  </PropertyGroup>
+
+  <!-- 共用的執行時程式碼（設計器專用的類別排除） -->
+  <ItemGroup>
+    <Compile Include="$(Shared)Utility\*.cs"
+             Exclude="$(Shared)Utility\Program.cs;$(Shared)Utility\AlignHelper.cs;$(Shared)Utility\ButtonBox.cs;$(Shared)Utility\CanvasResizer.cs;$(Shared)Utility\GridBox.cs;$(Shared)Utility\PrintItemBox.cs;$(Shared)Utility\SelectionBand.cs;$(Shared)Utility\ToolboxList.cs"
+             LinkBase="Shared\Utility" />
+    <Compile Include="$(Shared)Forms\RuntimeForm*.cs;$(Shared)Forms\RecordNavigatorDialog*.cs;$(Shared)Forms\RecordEditDialog*.cs;$(Shared)Forms\LoginForm*.cs;$(Shared)Forms\SysSetupForm*.cs;$(Shared)Forms\ConnectionDialog*.cs;$(Shared)Forms\PromptDialog*.cs;$(Shared)Forms\PickListDialog*.cs"
+             LinkBase="Shared\Forms" />
+    <EmbeddedResource Include="$(Shared)Forms\RuntimeForm*.resx;$(Shared)Forms\RecordNavigatorDialog*.resx;$(Shared)Forms\RecordEditDialog*.resx;$(Shared)Forms\LoginForm*.resx;$(Shared)Forms\SysSetupForm*.resx;$(Shared)Forms\ConnectionDialog*.resx;$(Shared)Forms\PromptDialog*.resx;$(Shared)Forms\PickListDialog*.resx"
+                      LinkBase="Shared\Forms" />
+  </ItemGroup>
+
+  <!-- 發布輸出不是程式碼 -->
+  <ItemGroup>
+    <Compile Remove="release\**" />
+    <None Remove="release\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.400" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

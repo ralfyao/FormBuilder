@@ -19,7 +19,12 @@ public static class Updater
     {
         public string Version { get; set; }
         public string Notes { get; set; }
+        /// <summary>這是哪個程式的新版（FormBuilder = ERP Studio、ERPClient = ERP 系統）；跟自己不同就不更新</summary>
+        public string App { get; set; }
     }
+
+    /// <summary>自己是哪個程式（執行檔名稱）</summary>
+    private static string AppName => Assembly.GetEntryAssembly()?.GetName().Name ?? "FormBuilder";
 
     /// <summary>回傳 true = 要更新（程式應該馬上結束）</summary>
     public static bool CheckAndUpdate(SysConfig config)
@@ -28,11 +33,15 @@ public static class Updater
         if (string.IsNullOrWhiteSpace(source)) return false;
         try
         {
-            string versionFile = Path.Combine(source, "version.json");
-            string files = Path.Combine(source, "files");
+            // ERP Studio 和 ERP 系統共用同一個更新來源：各自放在「更新來源\程式名稱」子資料夾（舊的放法是直接放在更新來源）
+            string folder = Path.Combine(source, AppName);
+            if (!Directory.Exists(folder)) folder = source;
+            string versionFile = Path.Combine(folder, "version.json");
+            string files = Path.Combine(folder, "files");
             if (!File.Exists(versionFile) || !Directory.Exists(files)) return false;     // 更新來源連不到（例如離線）就照常啟動
             var info = JsonSerializer.Deserialize<VersionInfo>(File.ReadAllText(versionFile));
             if (info == null || !Version.TryParse(info.Version, out var latest) || latest <= CurrentVersion) return false;
+            if (!string.IsNullOrEmpty(info.App) && !info.App.Equals(AppName, StringComparison.OrdinalIgnoreCase)) return false;   // 別的程式的新版
 
             string notes = string.IsNullOrWhiteSpace(info.Notes) ? "" : Environment.NewLine + Environment.NewLine + info.Notes;
             if (MessageBox.Show($"有新版本 {latest}（目前 {CurrentVersion}），要現在更新嗎？{notes}", "ERP Studio 更新",
