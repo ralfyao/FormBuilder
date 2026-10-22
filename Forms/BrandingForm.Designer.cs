@@ -24,6 +24,14 @@ namespace FormBuilder
             this.picLogo = new System.Windows.Forms.PictureBox();
             this.btnLogo = new FormBuilder.RoundButton();
             this.btnClearLogo = new FormBuilder.RoundButton();
+            this.lblAppIcon = new System.Windows.Forms.Label();
+            this.picAppIcon = new System.Windows.Forms.PictureBox();
+            this.btnAppIcon = new FormBuilder.RoundButton();
+            this.btnClearAppIcon = new FormBuilder.RoundButton();
+            this.lblFavicon = new System.Windows.Forms.Label();
+            this.picFavicon = new System.Windows.Forms.PictureBox();
+            this.btnFavicon = new FormBuilder.RoundButton();
+            this.btnClearFavicon = new FormBuilder.RoundButton();
             this.lblBanner = new System.Windows.Forms.Label();
             this.btnBanner = new System.Windows.Forms.Button();
             this.lblText = new System.Windows.Forms.Label();
@@ -35,6 +43,8 @@ namespace FormBuilder
             this.btnSave = new FormBuilder.RoundButton();
             this.btnCancel = new FormBuilder.RoundButton();
             ((System.ComponentModel.ISupportInitialize)(this.picLogo)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.picAppIcon)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.picFavicon)).BeginInit();
             this.SuspendLayout();
             //
             // lblTitle
@@ -117,9 +127,73 @@ namespace FormBuilder
             this.btnClearLogo.TabIndex = 4;
             this.btnClearLogo.Text = "清除標誌";
             //
+            // lblAppIcon
+            //
+            this.lblAppIcon.Location = new System.Drawing.Point(16, 206);
+            this.lblAppIcon.Name = "lblAppIcon";
+            this.lblAppIcon.Size = new System.Drawing.Size(84, 32);
+            this.lblAppIcon.Text = "視窗圖示";
+            this.lblAppIcon.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            //
+            // picAppIcon
+            //
+            this.picAppIcon.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.picAppIcon.Location = new System.Drawing.Point(106, 206);
+            this.picAppIcon.Name = "picAppIcon";
+            this.picAppIcon.Size = new System.Drawing.Size(32, 32);
+            this.picAppIcon.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+            //
+            // btnAppIcon
+            //
+            this.btnAppIcon.Location = new System.Drawing.Point(182, 208);
+            this.btnAppIcon.Name = "btnAppIcon";
+            this.btnAppIcon.Size = new System.Drawing.Size(110, 28);
+            this.btnAppIcon.TabIndex = 5;
+            this.btnAppIcon.Text = "選擇圖示…";
+            //
+            // btnClearAppIcon
+            //
+            this.btnClearAppIcon.Location = new System.Drawing.Point(298, 208);
+            this.btnClearAppIcon.Name = "btnClearAppIcon";
+            this.btnClearAppIcon.Size = new System.Drawing.Size(110, 28);
+            this.btnClearAppIcon.TabIndex = 6;
+            this.btnClearAppIcon.Text = "清除圖示";
+            //
+            // lblFavicon
+            //
+            this.lblFavicon.Location = new System.Drawing.Point(16, 248);
+            this.lblFavicon.Name = "lblFavicon";
+            this.lblFavicon.Size = new System.Drawing.Size(84, 32);
+            this.lblFavicon.Text = "小圖示";
+            this.lblFavicon.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            //
+            // picFavicon
+            //
+            this.picFavicon.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.picFavicon.Location = new System.Drawing.Point(106, 248);
+            this.picFavicon.Name = "picFavicon";
+            this.picFavicon.Size = new System.Drawing.Size(32, 32);
+            this.picFavicon.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+            //
+            // btnFavicon
+            //
+            this.btnFavicon.Location = new System.Drawing.Point(182, 250);
+            this.btnFavicon.Name = "btnFavicon";
+            this.btnFavicon.Size = new System.Drawing.Size(110, 28);
+            this.btnFavicon.TabIndex = 7;
+            this.btnFavicon.Text = "選擇圖示…";
+            //
+            // btnClearFavicon
+            //
+            this.btnClearFavicon.Location = new System.Drawing.Point(298, 250);
+            this.btnClearFavicon.Name = "btnClearFavicon";
+            this.btnClearFavicon.Size = new System.Drawing.Size(110, 28);
+            this.btnClearFavicon.TabIndex = 8;
+            this.btnClearFavicon.Text = "清除小圖示";
+            //
             // lblBanner
             //
-            this.lblBanner.Location = new System.Drawing.Point(16, 210);
+            this.lblBanner.Location = new System.Drawing.Point(16, 292);
             this.lblBanner.Name = "lblBanner";
             this.lblBanner.Size = new System.Drawing.Size(84, 26);
             this.lblBanner.Text = "橫幅底色";
@@ -128,14 +202,14 @@ namespace FormBuilder
             // btnBanner
             //
             this.btnBanner.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnBanner.Location = new System.Drawing.Point(106, 210);
+            this.btnBanner.Location = new System.Drawing.Point(106, 292);
             this.btnBanner.Name = "btnBanner";
             this.btnBanner.Size = new System.Drawing.Size(64, 26);
-            this.btnBanner.TabIndex = 5;
+            this.btnBanner.TabIndex = 9;
             //
             // lblText
             //
-            this.lblText.Location = new System.Drawing.Point(182, 210);
+            this.lblText.Location = new System.Drawing.Point(182, 292);
             this.lblText.Name = "lblText";
             this.lblText.Size = new System.Drawing.Size(84, 26);
             this.lblText.Text = "標題文字";
@@ -144,14 +218,14 @@ namespace FormBuilder
             // btnText
             //
             this.btnText.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnText.Location = new System.Drawing.Point(272, 210);
+            this.btnText.Location = new System.Drawing.Point(272, 292);
             this.btnText.Name = "btnText";
             this.btnText.Size = new System.Drawing.Size(64, 26);
-            this.btnText.TabIndex = 6;
+            this.btnText.TabIndex = 10;
             //
             // lblButton
             //
-            this.lblButton.Location = new System.Drawing.Point(16, 246);
+            this.lblButton.Location = new System.Drawing.Point(16, 328);
             this.lblButton.Name = "lblButton";
             this.lblButton.Size = new System.Drawing.Size(84, 26);
             this.lblButton.Text = "登入按鈕";
@@ -160,48 +234,48 @@ namespace FormBuilder
             // btnButton
             //
             this.btnButton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnButton.Location = new System.Drawing.Point(106, 246);
+            this.btnButton.Location = new System.Drawing.Point(106, 328);
             this.btnButton.Name = "btnButton";
             this.btnButton.Size = new System.Drawing.Size(64, 26);
-            this.btnButton.TabIndex = 7;
+            this.btnButton.TabIndex = 11;
             //
             // btnDefaultColors
             //
-            this.btnDefaultColors.Location = new System.Drawing.Point(182, 245);
+            this.btnDefaultColors.Location = new System.Drawing.Point(182, 327);
             this.btnDefaultColors.Name = "btnDefaultColors";
             this.btnDefaultColors.Size = new System.Drawing.Size(154, 28);
-            this.btnDefaultColors.TabIndex = 8;
+            this.btnDefaultColors.TabIndex = 12;
             this.btnDefaultColors.Text = "顏色恢復預設";
             //
             // btnPreview
             //
-            this.btnPreview.Location = new System.Drawing.Point(16, 296);
+            this.btnPreview.Location = new System.Drawing.Point(16, 378);
             this.btnPreview.Name = "btnPreview";
             this.btnPreview.Size = new System.Drawing.Size(96, 32);
-            this.btnPreview.TabIndex = 9;
+            this.btnPreview.TabIndex = 13;
             this.btnPreview.Text = "預覽";
             //
             // btnSave
             //
-            this.btnSave.Location = new System.Drawing.Point(242, 296);
+            this.btnSave.Location = new System.Drawing.Point(242, 378);
             this.btnSave.Name = "btnSave";
             this.btnSave.Size = new System.Drawing.Size(96, 32);
-            this.btnSave.TabIndex = 10;
+            this.btnSave.TabIndex = 14;
             this.btnSave.Text = "儲存";
             //
             // btnCancel
             //
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(344, 296);
+            this.btnCancel.Location = new System.Drawing.Point(344, 378);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(96, 32);
-            this.btnCancel.TabIndex = 11;
+            this.btnCancel.TabIndex = 15;
             this.btnCancel.Text = "取消";
             //
             // BrandingForm
             //
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(456, 344);
+            this.ClientSize = new System.Drawing.Size(456, 426);
             this.Controls.Add(this.lblTitle);
             this.Controls.Add(this.txtTitle);
             this.Controls.Add(this.lblSubtitle);
@@ -212,6 +286,14 @@ namespace FormBuilder
             this.Controls.Add(this.picLogo);
             this.Controls.Add(this.btnLogo);
             this.Controls.Add(this.btnClearLogo);
+            this.Controls.Add(this.lblAppIcon);
+            this.Controls.Add(this.picAppIcon);
+            this.Controls.Add(this.btnAppIcon);
+            this.Controls.Add(this.btnClearAppIcon);
+            this.Controls.Add(this.lblFavicon);
+            this.Controls.Add(this.picFavicon);
+            this.Controls.Add(this.btnFavicon);
+            this.Controls.Add(this.btnClearFavicon);
             this.Controls.Add(this.lblBanner);
             this.Controls.Add(this.btnBanner);
             this.Controls.Add(this.lblText);
@@ -231,6 +313,8 @@ namespace FormBuilder
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             this.Text = "登入畫面（企業識別）";
             ((System.ComponentModel.ISupportInitialize)(this.picLogo)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.picAppIcon)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.picFavicon)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
         }
@@ -247,6 +331,14 @@ namespace FormBuilder
         private System.Windows.Forms.PictureBox picLogo;
         private FormBuilder.RoundButton btnLogo;
         private FormBuilder.RoundButton btnClearLogo;
+        private System.Windows.Forms.Label lblAppIcon;
+        private System.Windows.Forms.PictureBox picAppIcon;
+        private FormBuilder.RoundButton btnAppIcon;
+        private FormBuilder.RoundButton btnClearAppIcon;
+        private System.Windows.Forms.Label lblFavicon;
+        private System.Windows.Forms.PictureBox picFavicon;
+        private FormBuilder.RoundButton btnFavicon;
+        private FormBuilder.RoundButton btnClearFavicon;
         private System.Windows.Forms.Label lblBanner;
         private System.Windows.Forms.Button btnBanner;
         private System.Windows.Forms.Label lblText;

@@ -15,6 +15,7 @@ public partial class LoginForm : Form
     private LoginForm(SysConfig config, string productName, bool allowSetup, bool adminOnly, LoginBranding preview)
     {
         InitializeComponent();
+        defaultIcon = Icon;
         this.config = config;
         this.adminOnly = adminOnly;
         this.productName = productName;
@@ -29,6 +30,7 @@ public partial class LoginForm : Form
         }
         // 企業識別：先用這台電腦上次讀到的馬上顯示，再到系統資料庫讀最新的（不卡住登入畫面）
         ApplyBranding(LoginBranding.FromJson(config.LoginBrandingCache));
+        LoginBranding.UseAsDefaultFormIcon(Icon == defaultIcon ? null : Icon);     // 之後開的視窗也用企業的圖示
         Shown += async (s, e) => await RefreshBranding();
         txtUser.Text = config.LastUser ?? "";
         btnLogin.Click += (s, e) => DoLogin();
@@ -45,6 +47,8 @@ public partial class LoginForm : Form
     private readonly bool adminOnly;
     private readonly string productName;
     private readonly bool allowSetup;
+    /// <summary>程式原本的視窗圖示（企業識別沒有設定圖示時用它）</summary>
+    private readonly Icon defaultIcon;
 
     /// <summary>預覽企業識別（ERP Studio 編輯時用）：跟真正的登入畫面一樣，但按「登入」只會關閉</summary>
     public static void Preview(IWin32Window owner, LoginBranding branding, string productName)
@@ -65,6 +69,7 @@ public partial class LoginForm : Form
         catch (Exception) { return; }           // 連不上就用快取的（登入時會再顯示連線錯誤）
         if (IsDisposed || json == (config.LoginBrandingCache ?? new LoginBranding().ToJson())) return;
         ApplyBranding(LoginBranding.FromJson(json));
+        LoginBranding.UseAsDefaultFormIcon(Icon == defaultIcon ? null : Icon);
         config.LoginBrandingCache = json;
         try { config.Save(); } catch (Exception) { }
     }
@@ -72,6 +77,7 @@ public partial class LoginForm : Form
     /// <summary>套用企業識別：橫幅顏色、標誌（有標誌時標題靠左放在標誌右邊）、標題、副標題、登入按鈕顏色、頁尾</summary>
     private void ApplyBranding(LoginBranding b)
     {
+        Icon = b.WindowIcon() ?? defaultIcon;
         pnlBanner.BackColor = b.Banner;
         lblTitle.ForeColor = lblSubtitle.ForeColor = b.Text;
         lblTitle.Text = string.IsNullOrWhiteSpace(b.Title) ? productName : b.Title.Trim();
