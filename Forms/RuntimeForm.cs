@@ -489,15 +489,26 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 }
                 else
                 {
+                    object value;
                     try
                     {
-                        Dialect.AddParam(cmd, $"q{i}", TypeHelper.Parse(text, f.DataType));
+                        value = TypeHelper.Parse(text, f.DataType);
                     }
                     catch (Exception)
                     {
                         throw new FormatException($"「{f.Label}」的查詢條件格式不正確：{text}");
                     }
-                    where.Add($"{col} = {q}");
+                    // 日期只輸入到日（畫面也只顯示日期）：只比對日期部分，不管時間
+                    if (TypeHelper.IsDate(f.DataType) && DateTime.TryParse(text, out var day) && day.TimeOfDay == TimeSpan.Zero)
+                    {
+                        Dialect.AddParam(cmd, $"q{i}", day);
+                        where.Add($"{Dialect.DateOnly(col)} = {q}");
+                    }
+                    else
+                    {
+                        Dialect.AddParam(cmd, $"q{i}", value);
+                        where.Add($"{col} = {q}");
+                    }
                 }
                 i++;
             }

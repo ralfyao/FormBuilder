@@ -66,7 +66,7 @@ public static class GridCells
     private static DataGridViewTextBoxColumn CreateTextBox(GridColumnDefinition c)
     {
         var col = new DataGridViewTextBoxColumn();
-        if (TypeHelper.IsDate(c.DataType)) col.DefaultCellStyle.Format = c.DataType == "date" ? "yyyy/MM/dd" : "yyyy/MM/dd HH:mm:ss";
+        if (TypeHelper.IsDate(c.DataType)) col.DefaultCellStyle.Format = "yyyy/MM/dd";       // 日期欄位一律只顯示日期，不顯示時分秒
         if (TypeHelper.IsString(c.DataType) && c.MaxLength > 0) col.MaxInputLength = c.MaxLength;
         return col;
     }
@@ -239,8 +239,7 @@ public class CalendarColumn : DataGridViewColumn
     {
         bool nativeDate = TypeHelper.IsDate(c.DataType);
         StorageFormat = nativeDate ? null : string.IsNullOrWhiteSpace(c.CellOptions) ? "yyyyMMdd" : c.CellOptions.Trim();
-        bool hasTime = nativeDate ? c.DataType != "date" : StorageFormat.Contains('H') || StorageFormat.Contains('h') || StorageFormat.Contains("mm");
-        DisplayFormat = hasTime ? "yyyy/MM/dd HH:mm" : "yyyy/MM/dd";
+        // 一律只顯示日期（DisplayFormat 預設值），不顯示時分秒
     }
 
     public override DataGridViewCell CellTemplate
@@ -296,6 +295,8 @@ public class CalendarCell : DataGridViewTextBoxCell
         if (!DateTime.TryParseExact(text, DisplayFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
             && !DateTime.TryParse(text, out date))
             throw new FormatException("日期格式不正確：" + text);
+        // 畫面只顯示日期：原本有時間的話保留原本的時間，改日期不會把時間變成 00:00
+        if (RowIndex >= 0 && ToDate(GetValue(RowIndex)) is { } old) date = date.Date + old.TimeOfDay;
         string format = Column?.StorageFormat;
         if (format == null) return date;
         string stored = date.ToString(format, CultureInfo.InvariantCulture);

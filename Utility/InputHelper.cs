@@ -90,6 +90,11 @@ public static class InputHelper
     private const string DefaultDateFormat = "yyyyMMdd";
 
     /// <summary>
+    /// 文字框裡的日期只顯示日期；記住原本的值，使用者沒改文字時取回原本的值（datetime 欄位的時間不會被存成 00:00）
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, Tuple<string, DateTime>> shownDates = new();
+
+    /// <summary>
     /// 日期選擇。date、datetime 欄位直接用日期；文字、數字欄位依「日期格式」轉成文字存取（Tag 放格式），
     /// 文字、數字欄位可以是空的，所以一定有「沒有日期」的勾選框
     /// </summary>
@@ -97,11 +102,11 @@ public static class InputHelper
     {
         bool nativeDate = TypeHelper.IsDate(f.DataType);
         string textFormat = string.IsNullOrWhiteSpace(f.DateFormat) ? DefaultDateFormat : f.DateFormat.Trim();
-        bool hasTime = nativeDate ? f.DataType != "date" : textFormat.Contains('H') || textFormat.Contains('h') || textFormat.Contains("mm");
         return new DateTimePicker
         {
+            // 一律只顯示日期；datetime 欄位原本的時間還留在 Value 裡，存檔時不會變成 00:00
             Format = DateTimePickerFormat.Custom,
-            CustomFormat = hasTime ? "yyyy/MM/dd HH:mm:ss" : "yyyy/MM/dd",
+            CustomFormat = "yyyy/MM/dd",
             ShowCheckBox = nativeDate ? f.IsNullable : true,       // 取消勾選代表沒有日期
             Tag = nativeDate ? null : textFormat,
         };
@@ -188,6 +193,7 @@ public static class InputHelper
                      : combo.DropDownStyle == ComboBoxStyle.DropDown ? combo.Text : "";
                 break;
             default:
+                if (shownDates.TryGetValue(c, out var shown) && shown.Item1 == c.Text && TypeHelper.IsDate(f.DataType)) return shown.Item2;
                 text = c.Text;
                 break;
         }
@@ -261,7 +267,13 @@ public static class InputHelper
                 break;
             }
             default:
-                c.Text = isNull ? "" : Convert.ToString(value);
+                shownDates.Remove(c);
+                if (value is DateTime dateValue)
+                {
+                    c.Text = dateValue.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture);
+                    shownDates.Add(c, Tuple.Create(c.Text, dateValue));
+                }
+                else c.Text = isNull ? "" : Convert.ToString(value);
                 break;
         }
     }
