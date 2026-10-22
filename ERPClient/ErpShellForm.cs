@@ -26,6 +26,7 @@ public partial class ErpShellForm : Form
         // 使用者端不顯示資料庫連線（伺服器、資料庫、帳號），只顯示登入時間
         lblServer.Text = $"登入時間：{DateTime.Now:yyyy/MM/dd HH:mm}";
         lblVersion.Text = "版本 " + Updater.CurrentVersion;
+        ApplyBranding();
 
         // ---- 選單 ----
         treeMenu.NodeMouseDoubleClick += (s, e) => OpenNode(e.Node);
@@ -87,6 +88,41 @@ public partial class ErpShellForm : Form
         LoadMenu();
     }
 
+    /// <summary>基調顏色（選單資料夾、標題文字、分頁上的色條），跟登入畫面的橫幅顏色一樣</summary>
+    private Color accent = LoginBranding.DefaultBanner;
+
+    /// <summary>
+    /// 套用登入畫面設定的企業識別：上方橫幅的底色、文字顏色、標題、標誌，以及整個畫面的基調顏色。
+    /// 讀不到系統資料庫的設定時，用登入畫面快取在這台電腦的那一份
+    /// </summary>
+    private void ApplyBranding()
+    {
+        LoginBranding b;
+        try { b = LoginBranding.Load(SysContext.Connection); }
+        catch (Exception) { b = LoginBranding.FromJson(config.LoginBrandingCache); }
+
+        accent = b.Banner;
+        header.BackColor = accent;
+        lblProduct.ForeColor = lblUser.ForeColor = b.Text;
+        if (!string.IsNullOrWhiteSpace(b.Title)) Text = lblProduct.Text = b.Title.Trim();
+        lblProduct.Width = Math.Max(lblProduct.Width, TextRenderer.MeasureText(lblProduct.Text, lblProduct.Font).Width + 16);
+        if (b.LogoImage() is { } logo)
+        {
+            var pic = new PictureBox { Image = logo, SizeMode = PictureBoxSizeMode.Zoom, Dock = DockStyle.Left, Width = 44, Padding = new Padding(0, 0, 8, 0) };
+            header.Controls.Add(pic);
+            pic.SendToBack();          // 停靠順序排最前面 = 放在標題左邊
+        }
+        lblUser.BringToFront();        // Fill 要最後停靠，才只佔剩下的空間，不會蓋到標題
+
+        // 選單區的淡色背景跟著基調顏色微微帶色
+        var light = Blend(accent, Color.White, 0.94);
+        split.Panel1.BackColor = treeMenu.BackColor = collapsedBar.BackColor = light;
+        lblMenuCaption.ForeColor = btnCollapse.ForeColor = btnExpand.ForeColor = lblWelcome.ForeColor = accent;
+    }
+
+    private static Color Blend(Color a, Color b, double toB) =>
+        Color.FromArgb((int)(a.R + (b.R - a.R) * toB), (int)(a.G + (b.G - a.G) * toB), (int)(a.B + (b.B - a.B) * toB));
+
     /// <summary>Ctrl+W 關閉目前的分頁、Ctrl+F 搜尋功能</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
@@ -125,7 +161,7 @@ public partial class ErpShellForm : Form
             {
                 if (n.IsFolder)
                 {
-                    var folder = new TreeNode(n.Title) { Tag = n, NodeFont = new Font(treeMenu.Font, FontStyle.Bold), ForeColor = Color.FromArgb(31, 58, 96) };
+                    var folder = new TreeNode(n.Title) { Tag = n, NodeFont = new Font(treeMenu.Font, FontStyle.Bold), ForeColor = accent };
                     Add(folder.Nodes, n.Id);
                     if (folder.Nodes.Count > 0) target.Add(folder);
                 }
@@ -228,8 +264,8 @@ public partial class ErpShellForm : Form
         var page = tabs.TabPages[e.Index];
         var rect = tabs.GetTabRect(e.Index);
         bool selected = e.Index == tabs.SelectedIndex;
-        using (var back = new SolidBrush(selected ? Color.White : Color.FromArgb(232, 236, 242))) e.Graphics.FillRectangle(back, rect);
-        if (selected) using (var accent = new SolidBrush(Color.FromArgb(0, 120, 215))) e.Graphics.FillRectangle(accent, rect.Left, rect.Top, rect.Width, 3);
+        using (var back = new SolidBrush(selected ? Color.White : Blend(accent, Color.White, 0.9))) e.Graphics.FillRectangle(back, rect);
+        if (selected) using (var bar = new SolidBrush(accent)) e.Graphics.FillRectangle(bar, rect.Left, rect.Top, rect.Width, 3);
         var textRect = new Rectangle(rect.Left + 8, rect.Top, rect.Width - (e.Index == 0 ? 16 : 30), rect.Height);
         TextRenderer.DrawText(e.Graphics, page.Text, e.Font, textRect, selected ? Color.Black : Color.DimGray,
             TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
