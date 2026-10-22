@@ -105,7 +105,7 @@ namespace FormBuilder
             // miBranding
             //
             this.miBranding.Name = "miBranding";
-            this.miBranding.Text = "登入畫面（企業識別：標題、標誌、顏色）";
+            this.miBranding.Text = "登入畫面（企業識別：標題、標誌、圖示、顏色）";
             //
             // miSetup
             //

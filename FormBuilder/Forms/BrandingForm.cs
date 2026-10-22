@@ -26,8 +26,15 @@ public partial class BrandingForm : Form
         ShowLogo();
         ShowColors();
 
-        btnLogo.Click += (s, e) => PickLogo();
+        btnLogo.Click += (s, e) => PickImage("選擇標誌圖片", 256, branding.SetLogo);
         btnClearLogo.Click += (s, e) => { branding.SetLogo(null); ShowLogo(); };
+        btnAppIcon.Click += (s, e) => PickImage("選擇視窗圖示（工作列、Alt+Tab）", 256, branding.SetAppIcon);
+        btnClearAppIcon.Click += (s, e) => { branding.SetAppIcon(null); ShowLogo(); };
+        btnFavicon.Click += (s, e) => PickImage("選擇小圖示（標題列）", 32, branding.SetFavicon);
+        btnClearFavicon.Click += (s, e) => { branding.SetFavicon(null); ShowLogo(); };
+        var tips = new ToolTip();
+        tips.SetToolTip(picAppIcon, "工作列、Alt+Tab 顯示的圖示；建議正方形、256×256 的 PNG 或 .ico");
+        tips.SetToolTip(picFavicon, "視窗標題列左上角的小圖示（像網頁的 favicon）；沒設定時用視窗圖示縮小");
         btnBanner.Click += (s, e) => PickColor(c => branding.BannerColor = c, branding.Banner);
         btnText.Click += (s, e) => PickColor(c => branding.TextColor = c, branding.Text);
         btnButton.Click += (s, e) => PickColor(c => branding.ButtonColor = c, branding.Button ?? SystemColors.Control);
@@ -50,12 +57,20 @@ public partial class BrandingForm : Form
 
     private static string Blank(string s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    /// <summary>顯示標誌、視窗圖示、小圖示，沒有圖時「清除」不能按</summary>
     private void ShowLogo()
     {
-        var old = picLogo.Image;
-        picLogo.Image = branding.LogoImage();
-        old?.Dispose();
-        btnClearLogo.Enabled = picLogo.Image != null;
+        static void Show(PictureBox pic, Control clear, Image image)
+        {
+            var old = pic.Image;
+            pic.Image = image;
+            old?.Dispose();
+            clear.Enabled = image != null;
+        }
+        Show(picLogo, btnClearLogo, branding.LogoImage());
+        Show(picAppIcon, btnClearAppIcon, branding.AppIconImage());
+        Show(picFavicon, btnClearFavicon, branding.FaviconImage());
+        Icon = branding.WindowIcon() ?? Icon;     // 這個視窗也直接換上，看得到標題列的效果
     }
 
     private void ShowColors()
@@ -74,14 +89,15 @@ public partial class BrandingForm : Form
         ShowColors();
     }
 
-    private void PickLogo()
+    /// <param name="size">.ico 檔要取的尺寸（圖示檔裡有好幾張大小不同的圖）</param>
+    private void PickImage(string title, int size, Action<Image> set)
     {
-        using var dlg = new OpenFileDialog { Title = "選擇標誌圖片", Filter = "圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico|所有檔案|*.*" };
+        using var dlg = new OpenFileDialog { Title = title, Filter = "圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico|所有檔案|*.*" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            using var image = Image.FromFile(dlg.FileName);
-            branding.SetLogo(image);
+            using var image = LoginBranding.LoadImageFile(dlg.FileName, size);
+            set(image);
             ShowLogo();
         }
         catch (Exception ex)

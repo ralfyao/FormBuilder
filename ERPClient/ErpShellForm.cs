@@ -101,6 +101,11 @@ public partial class ErpShellForm : Form
         try { b = LoginBranding.Load(SysContext.Connection); }
         catch (Exception) { b = LoginBranding.FromJson(config.LoginBrandingCache); }
 
+        if (b.WindowIcon() is { } icon)
+        {
+            Icon = icon;
+            LoginBranding.UseAsDefaultFormIcon(icon);      // 從分頁另外開的視窗、編輯視窗也用同一個圖示
+        }
         accent = b.Banner;
         header.BackColor = accent;
         lblProduct.ForeColor = lblUser.ForeColor = b.Text;

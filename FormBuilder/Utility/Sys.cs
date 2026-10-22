@@ -108,26 +108,120 @@ public class LoginBranding
 
     public static string ToHtml(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
-    public Image LogoImage()
+    /// <summary>視窗圖示（工作列、Alt+Tab 用的大圖示，PNG，Base64）；沒設定小圖示時標題列也用它</summary>
+    public string AppIcon { get; set; }
+    /// <summary>小圖示（標題列左上角的 16～24 像素圖示，類似網頁的 favicon，PNG，Base64）；沒設定時用視窗圖示縮小</summary>
+    public string Favicon { get; set; }
+
+    public Image LogoImage() => FromPng(Logo);
+    public Image AppIconImage() => FromPng(AppIcon);
+    public Image FaviconImage() => FromPng(Favicon);
+
+    /// <summary>設定標誌：太大的圖縮到 256 像素以內再存成 PNG（系統資料庫和每台電腦的快取都不會太大）</summary>
+    public void SetLogo(Image image) => Logo = ToPng(image);
+    public void SetAppIcon(Image image) => AppIcon = ToPng(image);
+    public void SetFavicon(Image image) => Favicon = ToPng(image);
+
+    private static Image FromPng(string base64)
     {
-        if (string.IsNullOrEmpty(Logo)) return null;
+        if (string.IsNullOrEmpty(base64)) return null;
         try
         {
-            using var ms = new MemoryStream(Convert.FromBase64String(Logo));
+            using var ms = new MemoryStream(Convert.FromBase64String(base64));
             return new Bitmap(Image.FromStream(ms));       // 複製一份，串流關掉後圖片還能用
         }
         catch (Exception) { return null; }
     }
 
-    /// <summary>設定標誌：太大的圖縮到 256 像素以內再存成 PNG（系統資料庫和每台電腦的快取都不會太大）</summary>
-    public void SetLogo(Image image)
+    private static string ToPng(Image image)
     {
-        if (image == null) { Logo = null; return; }
+        if (image == null) return null;
         double scale = Math.Min(1.0, 256.0 / Math.Max(image.Width, image.Height));
         using var bmp = new Bitmap(image, Math.Max(1, (int)(image.Width * scale)), Math.Max(1, (int)(image.Height * scale)));
         using var ms = new MemoryStream();
         bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-        Logo = Convert.ToBase64String(ms.ToArray());
+        return Convert.ToBase64String(ms.ToArray());
+    }
+
+    /// <summary>
+    /// 讀圖示檔：.ico 取裡面最接近 size 的那一張（直接用 Image.FromFile 只會拿到其中一張，常常是最小的），其他格式照常讀
+    /// </summary>
+    public static Image LoadImageFile(string path, int size)
+    {
+        if (Path.GetExtension(path).Equals(".ico", StringComparison.OrdinalIgnoreCase))
+        {
+            using var icon = new Icon(path, size, size);
+            return icon.ToBitmap();
+        }
+        using var image = Image.FromFile(path);
+        return new Bitmap(image);
+    }
+
+    /// <summary>
+    /// 視窗用的圖示：小尺寸（16～24，標題列）用小圖示、大尺寸（32 以上，工作列、Alt+Tab）用視窗圖示，
+    /// 只設定其中一個時兩種尺寸都用它；都沒設定 = null（用程式預設的圖示）
+    /// </summary>
+    public Icon WindowIcon()
+    {
+        using var large = AppIconImage();
+        using var small = FaviconImage();
+        if (large == null && small == null) return null;
+        try
+        {
+            var frames = new[] { 16, 20, 24, 32, 40, 48, 64, 256 }
+                .Select(size => (Size: size, Png: SquarePng(size <= 24 ? small ?? large : large ?? small, size))).ToList();
+            // ICO 檔：檔頭 + 每張一筆目錄 + 各張的 PNG（Windows Vista 以後支援 PNG 格式的圖示）
+            using var ms = new MemoryStream();
+            using (var w = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+            {
+                w.Write((short)0); w.Write((short)1); w.Write((short)frames.Count);
+                int offset = 6 + 16 * frames.Count;
+                foreach (var (size, png) in frames)
+                {
+                    w.Write((byte)(size >= 256 ? 0 : size)); w.Write((byte)(size >= 256 ? 0 : size));
+                    w.Write((byte)0); w.Write((byte)0); w.Write((short)1); w.Write((short)32);
+                    w.Write(png.Length); w.Write(offset);
+                    offset += png.Length;
+                }
+                foreach (var (_, png) in frames) w.Write(png);
+            }
+            ms.Position = 0;
+            return new Icon(ms);
+        }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>把圖等比例縮進 size × size 的透明正方形，置中</summary>
+    private static byte[] SquarePng(Image image, int size)
+    {
+        using var bmp = new Bitmap(size, size);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            double scale = Math.Min((double)size / image.Width, (double)size / image.Height);
+            int w = Math.Max(1, (int)Math.Round(image.Width * scale)), h = Math.Max(1, (int)Math.Round(image.Height * scale));
+            g.DrawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+        }
+        using var ms = new MemoryStream();
+        bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// 把圖示設成所有視窗的預設圖示（之後開的畫面、編輯視窗、對話框都會用它）。
+    /// WinForms 沒有公開的設定方式，用反射改 Form 的預設圖示；改不了就只有有指定圖示的視窗會換
+    /// </summary>
+    public static void UseAsDefaultFormIcon(Icon icon)
+    {
+        if (icon == null) return;
+        try
+        {
+            var field = typeof(Form).GetField("s_defaultIcon", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                        ?? typeof(Form).GetField("defaultIcon", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            field?.SetValue(null, icon);
+        }
+        catch (Exception) { }
     }
 
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
