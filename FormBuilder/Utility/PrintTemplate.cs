@@ -367,7 +367,7 @@ public static class PrintRenderer
         return img;
     }
 
-    /// <summary>欄位值轉成要印的文字（有設格式用格式；日期沒設格式時，沒有時間就只印日期）</summary>
+    /// <summary>欄位值轉成要印的文字（有設格式用格式；日期沒設格式時只印日期）</summary>
     public static string FormatValue(object value, string format)
     {
         if (value == null || value == DBNull.Value) return "";
@@ -375,7 +375,7 @@ public static class PrintRenderer
         {
             try { return f.ToString(format, CultureInfo.CurrentCulture); } catch (FormatException) { }
         }
-        if (value is DateTime d) return d.TimeOfDay == TimeSpan.Zero ? d.ToString("yyyy/MM/dd") : d.ToString("yyyy/MM/dd HH:mm");
+        if (value is DateTime d) return d.ToString("yyyy/MM/dd");
         if (value is bool b) return b ? "是" : "否";
         return Convert.ToString(value, CultureInfo.CurrentCulture)?.TrimEnd();
     }
