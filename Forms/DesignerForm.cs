@@ -343,8 +343,7 @@ public partial class DesignerForm : Form
         var existing = def.Fields.FirstOrDefault(f => f.Column == data.Column.Name);
         if (existing != null)
         {
-            SelectBox(canvas.Controls.OfType<FieldBox>().First(b => b.Field == existing));
-            UpdateStatus($"欄位 {existing.Column} 已經在畫面上了");
+            AddQueryCopy(existing, location);
             return;
         }
 
@@ -367,6 +366,26 @@ public partial class DesignerForm : Form
         SelectBox(AddBox(field));
         ApplyCanvasSize();
         UpdateStatus();
+    }
+
+    /// <summary>
+    /// 已經在畫面上的欄位再放一個：複本只當查詢條件（查詢時可以輸入，新增、修改不能輸入、不存檔），
+    /// 例如條件畫面放好幾個「產品編號」輸入不同關鍵字
+    /// </summary>
+    private void AddQueryCopy(FieldDefinition existing, Point location)
+    {
+        var copy = existing.Clone();
+        copy.QueryOnly = true;
+        copy.IsKey = false;                                        // 主鍵、公式、編號、預設值都只屬於原本那個欄位
+        copy.Formula = null;
+        copy.NumberRule = null;
+        copy.DefaultValue = null;
+        copy.X = location.X;
+        copy.Y = location.Y;
+        def.Fields.Add(copy);
+        SelectBox(AddBox(copy));
+        ApplyCanvasSize();
+        UpdateStatus($"已再放一個「{existing.Label}」（{existing.Column}）：只當查詢條件，新增、修改時不能輸入、不存檔");
     }
 
     /// <summary>決定這個畫面的單頭資料表（第一個放上來的欄位，或空白畫面上第一個拖進來的整個資料表）</summary>
@@ -395,8 +414,7 @@ public partial class DesignerForm : Form
             var existing = def.Fields.FirstOrDefault(f => f.JoinAlias == join.Alias && string.Equals(f.SourceColumn, data.Column.Name, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
-                SelectBox(canvas.Controls.OfType<FieldBox>().First(b => b.Field == existing));
-                UpdateStatus($"欄位 {join.TableName}.{existing.SourceColumn} 已經在畫面上了（{existing.Column}）");
+                AddQueryCopy(existing, location);
                 return;
             }
             var c = data.Column;

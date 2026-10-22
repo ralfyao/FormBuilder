@@ -20,6 +20,15 @@ public partial class JoinDialog : Form
     /// <summary>列印樣板的單身：一筆單頭本來就對到多筆單身，不用提醒主鍵沒放進條件</summary>
     private readonly bool forDetail;
 
+    // 單頭 JOIN（ForMaster）：資料表已經決定，預先選好；修改既有的 JOIN 時帶入原本的關聯條件
+    private bool forMaster;
+    private (string Schema, string Name)? presetTable;
+    private string presetPick;
+    private string presetLinks;
+    private HashSet<string> placedSources = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>條件左邊的名稱：Grid 或 單頭</summary>
+    private string LocalName => forMaster ? "單頭" : "Grid";
+
     public GridJoinDefinition Join { get; private set; }
     public List<GridColumnDefinition> NewColumns { get; } = new();
 
@@ -55,6 +64,26 @@ public partial class JoinDialog : Form
         Load += (s, e) => LoadTables();
     }
 
+    /// <summary>
+    /// 單頭 JOIN：資料表就是從左邊拖過來的那個欄位所屬的資料表（預先選好，不能換），預先勾好拖過來的欄位。
+    /// linkText 有值 = 修改既有的 JOIN（帶入原本的條件）；placedSources = 已經放在畫面上的欄位，不再列出來勾選
+    /// </summary>
+    public void ForMaster(string schema, string table, string pickColumn, string linkText = null, IEnumerable<string> placedSources = null)
+    {
+        forMaster = true;
+        presetTable = (schema, table);
+        presetPick = pickColumn;
+        presetLinks = linkText;
+        if (placedSources != null) this.placedSources = new HashSet<string>(placedSources, StringComparer.OrdinalIgnoreCase);
+        Text = linkText == null ? $"單頭 JOIN {schema}.{table}：設定關聯條件、勾選要放到單頭的欄位" : $"單頭 JOIN {schema}.{table}：修改關聯條件";
+        lblTables.Text = "1. 要 JOIN 的資料表（拖過來的欄位所屬的資料表）";
+        txtFilter.Enabled = lstTables.Enabled = false;
+        linkGroup.Text = "2. 關聯條件（單頭的欄位 = 關聯資料表的欄位，可以多組）";
+        colLocal.HeaderText = "單頭欄位";
+        pickGroup.Text = linkText == null ? "3. 勾選要放到單頭的欄位（都是只顯示，不會寫回資料庫）" : "3. 要再放到單頭的欄位（可以不勾，只改關聯條件）";
+        lblHint.Text = "LEFT JOIN：單頭的每一筆都會顯示，對不到關聯資料的欄位是空白";
+    }
+
     private void LoadTables()
     {
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -77,6 +106,9 @@ public partial class JoinDialog : Form
             Cursor = Cursors.Default;
         }
         FillTables();
+        if (presetTable is { } preset)
+            lstTables.SelectedItem = lstTables.Items.Cast<TableItem>()
+                .FirstOrDefault(t => t.Schema.Equals(preset.Schema, StringComparison.OrdinalIgnoreCase) && t.Name.Equals(preset.Name, StringComparison.OrdinalIgnoreCase));
     }
 
     private sealed record TableItem(string Schema, string Name)
@@ -117,15 +149,31 @@ public partial class JoinDialog : Form
         colRemote.Items.Clear();
         colRemote.Items.AddRange(remoteColumns.Select(c => c.Name).ToArray());
         linkTable.Clear();
-        foreach (var (local, remote) in GridDefinition.ParseLinks(DesignerForm.GuessLinks(localColumns, remoteColumns)))
+        foreach (var (local, remote) in GridDefinition.ParseLinks(presetLinks ?? GuessLinks()))
             linkTable.Rows.Add(local, remote);
 
         pickTable.Clear();
-        foreach (var c in remoteColumns)
+        foreach (var c in remoteColumns.Where(c => !placedSources.Contains(c.Name)))
         {
             string type = c.MaxLength > 0 ? $"{c.DataType}({c.MaxLength})" : c.MaxLength == -1 ? $"{c.DataType}(max)" : c.DataType;
-            pickTable.Rows.Add(false, c.Name, type, string.IsNullOrWhiteSpace(c.Description) ? c.Name : c.Description);
+            bool pick = presetPick != null && c.Name.Equals(presetPick, StringComparison.OrdinalIgnoreCase);
+            pickTable.Rows.Add(pick, c.Name, type, string.IsNullOrWhiteSpace(c.Description) ? c.Name : c.Description);
         }
+    }
+
+    /// <summary>
+    /// 推測關聯條件：跟新增單身一樣（同名欄位、ERP 命名規則）。
+    /// 單頭 JOIN 通常是用代號帶出名稱（例如 廠商編號 帶出 廠商名稱），先用關聯資料表的主鍵找本身同名的欄位
+    /// </summary>
+    private string GuessLinks()
+    {
+        if (forMaster)
+        {
+            var lookup = GridDefinition.ParseLinks(DesignerForm.GuessLinks(remoteColumns, localColumns));
+            if (lookup.Count > 0 && remoteColumns.Any(c => c.IsPrimaryKey))
+                return string.Join(", ", lookup.Select(l => $"{l.Detail}={l.Master}"));
+        }
+        return DesignerForm.GuessLinks(localColumns, remoteColumns);
     }
 
     private void Apply()
@@ -143,19 +191,19 @@ public partial class JoinDialog : Form
             .ToList();
         if (links.Count == 0)
         {
-            MessageBox.Show("請設定至少一組關聯條件（Grid 欄位 = 關聯資料表欄位）。", "提醒");
+            MessageBox.Show($"請設定至少一組關聯條件（{LocalName} 欄位 = 關聯資料表欄位）。", "提醒");
             return;
         }
         var picked = pickTable.Rows.Cast<DataRow>().Where(r => (bool)r["Pick"]).ToList();
-        if (picked.Count == 0)
+        if (picked.Count == 0 && presetLinks == null)          // 修改既有單頭 JOIN 時可以只改條件
         {
             MessageBox.Show("請勾選至少一個要帶進來的欄位。", "提醒");
             return;
         }
-        // 關聯資料表的主鍵沒有全部放進條件，一筆可能對到多筆，Grid 的列會重複
+        // 關聯資料表的主鍵沒有全部放進條件，一筆可能對到多筆，Grid 的列（單頭的資料）會重複
         var primaryKeys = remoteColumns.Where(c => c.IsPrimaryKey).Select(c => c.Name).ToList();
         if (!forDetail && primaryKeys.Count > 0 && !primaryKeys.All(k => links.Any(l => l.Remote.Equals(k, StringComparison.OrdinalIgnoreCase))) &&
-            MessageBox.Show($"關聯資料表的主鍵（{string.Join("、", primaryKeys)}）沒有全部放進關聯條件，同一筆可能對到多筆資料，造成 Grid 的列重複。\n\n仍要加入嗎？",
+            MessageBox.Show($"關聯資料表的主鍵（{string.Join("、", primaryKeys)}）沒有全部放進關聯條件，同一筆可能對到多筆資料，造成{(forMaster ? "單頭的資料" : " Grid 的列")}重複。\n\n仍要加入嗎？",
                             "提醒", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
             return;
 
