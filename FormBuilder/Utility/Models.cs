@@ -112,6 +112,10 @@ public class FormDefinition
     [Browsable(false)]
     public List<ButtonDefinition> Buttons { get; set; } = new();
 
+    /// <summary>單頭 JOIN 的其他資料表（帶進唯讀欄位，例如用廠商編號帶出廠商名稱）；欄位的 JoinAlias 指向它。舊的畫面檔沒有這項 = 空的</summary>
+    [Browsable(false)]
+    public List<GridJoinDefinition> Joins { get; set; } = new();
+
     /// <summary>這個定義是從哪個檔案讀進來的（「開啟畫面」按鈕用來找同資料夾的其他畫面）</summary>
     [Browsable(false), JsonIgnore]
     public string SourcePath { get; set; }
@@ -125,7 +129,7 @@ public class FormDefinition
     /// </summary>
     [Browsable(false), JsonIgnore]
     public List<KeyColumn> MasterKeys =>
-        Fields.Where(f => f.IsKey).Select(f => new KeyColumn(f.Column, f.IsIdentity))
+        Fields.Where(f => f.IsKey && !f.IsJoin && !f.IsCalculated).Select(f => new KeyColumn(f.Column, f.IsIdentity))
             .Concat(Grids.Where(g => g.IsMasterList).SelectMany(g => g.Columns).Where(c => c.IsKey).Select(c => new KeyColumn(c.Column, c.IsIdentity)))
             .DistinctBy(k => k.Column, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -210,6 +214,37 @@ public class FieldDefinition
 
     [Category("資料"), DisplayName("主鍵"), Description("修改、刪除時用來找到這筆資料的欄位；沒有主鍵的畫面只能新增")]
     public bool IsKey { get; set; }
+
+    /// <summary>單頭 JOIN 帶進來的欄位：這個欄位來自哪一個 JOIN（FormDefinition.Joins 的 Alias）；null = 單頭資料表本身的欄位</summary>
+    [Category("JOIN"), DisplayName("JOIN 別名"), ReadOnly(true),
+     Description("單頭 JOIN 其他資料表帶進來的欄位（只顯示，不會寫回資料庫）。要改關聯條件：選這個欄位，按「編輯 → 單頭 JOIN 關聯條件」")]
+    public string JoinAlias { get; set; }
+
+    /// <summary>JOIN 帶進來的欄位在關聯資料表裡的原始欄位名稱（Column 是顯示用的欄位名稱，不重複）</summary>
+    [Category("JOIN"), DisplayName("JOIN 來源欄位"), ReadOnly(true)]
+    public string SourceColumn { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool IsJoin => !string.IsNullOrEmpty(JoinAlias);
+
+    /// <summary>計算欄位（工具箱拖進來的）：不對應資料表的欄位，只依公式算出來顯示，不查詢、不存檔</summary>
+    [Category("計算"), DisplayName("計算欄位"), ReadOnly(true),
+     Description("True = 工具箱加入的計算欄位，不對應資料表的欄位，只顯示公式算出來的值，不會存檔。資料表本身的欄位也可以設公式，算出來的值會存進資料庫")]
+    public bool IsCalculated { get; set; }
+
+    [Category("計算"), DisplayName("公式"),
+     Description("用畫面上的欄位名稱和數字做 + - * /，可以用括號，例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。"
+               + "欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0。按右邊的「…」可以點選欄位插入。"
+               + "有公式的欄位不能輸入，畫面上的值改了就重新計算；資料表本身的欄位設公式時，算出來的值會存進資料庫"),
+     Editor("FormBuilder.FormulaEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string Formula { get; set; }
+
+    [Category("計算"), DisplayName("小數位數"), DefaultValue(-1),
+     Description("計算結果顯示到第幾位小數（四捨五入）；-1 = 自動（最多 4 位，去掉尾端的 0）。整數欄位一律取到整數")]
+    public int Decimals { get; set; } = -1;
+
+    [Browsable(false), JsonIgnore]
+    public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
 
     [Category("畫面"), DisplayName("標籤")]
     public string Label { get; set; }
@@ -512,13 +547,20 @@ public static class GridSql
     /// <summary>本身資料表的欄位（加上別名，避免跟 JOIN 的資料表欄位同名時不明確）</summary>
     public static string Base(DbDialect d, string column) => $"{d.Quote(BaseAlias)}.{d.Quote(column)}";
 
+    /// <summary>JOIN 帶進來的欄位（關聯資料表別名.原始欄位，不含 AS）</summary>
+    public static string Joined(DbDialect d, string alias, string sourceColumn) => $"{d.Quote(alias)}.{d.Quote(sourceColumn)}";
+
     private static string Expr(DbDialect d, GridColumnDefinition c) =>
-        c.IsJoin ? $"{d.Quote(c.JoinAlias)}.{d.Quote(c.SourceColumn)} AS {d.Quote(c.Column)}" : Base(d, c.Column);
+        c.IsJoin ? $"{Joined(d, c.JoinAlias, c.SourceColumn)} AS {d.Quote(c.Column)}" : Base(d, c.Column);
 
     /// <summary>FROM 子句：只 JOIN 有欄位被選到的資料表</summary>
-    public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns)
+    public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns) =>
+        From(d, fullTableName, joins, columns.Where(c => c.IsJoin).Select(c => c.JoinAlias));
+
+    /// <summary>FROM 子句：只 JOIN usedAliases 裡的資料表（單頭 JOIN 也用這個）</summary>
+    public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<string> usedAliases)
     {
-        var used = columns.Where(c => c.IsJoin).Select(c => c.JoinAlias).ToHashSet();
+        var used = usedAliases.ToHashSet();
         var sql = new System.Text.StringBuilder(fullTableName + d.TableAlias(BaseAlias));
         foreach (var j in joins.Where(j => used.Contains(j.Alias)))
             sql.Append($" LEFT JOIN {j.FullTableName(d)}{d.TableAlias(j.Alias)} ON "
@@ -608,6 +650,17 @@ public enum ButtonAction
     自訂查詢,
     /// <summary>依列印樣板預覽列印目前這筆（清單多選時每筆一頁）；設計畫面雙擊按鈕開啟列印樣板設計</summary>
     列印報表,
+    /// <summary>開啟另一個設計好的畫面當查詢條件畫面：在那裡輸入條件按「查詢」，清空本畫面的清單後放入查詢結果</summary>
+    開啟查詢條件畫面,
+}
+
+/// <summary>查詢條件畫面上多個條件的組合方式</summary>
+public enum ConditionJoin
+{
+    /// <summary>有填的條件都要符合（AND）</summary>
+    全部符合,
+    /// <summary>有填的條件符合任一個就好（OR）</summary>
+    任一符合,
 }
 
 /// <summary>屬性面板「列印來源清單」的下拉清單：編輯視窗版面設計器把版面上的明細清單資料表放進 Available</summary>
@@ -626,8 +679,12 @@ public class ButtonDefinition
     public string Text { get; set; } = "按鈕";
 
     [Category("按鈕"), DisplayName("動作"),
-     Description("內建動作跟工具列的按鈕一樣；執行SQL、自訂查詢 要填下方的 SQL；開啟畫面 要填畫面定義檔")]
+     Description("內建動作跟工具列的按鈕一樣；執行SQL、自訂查詢 要填下方的 SQL；開啟畫面、開啟查詢條件畫面 要填畫面定義檔")]
     public ButtonAction Action { get; set; } = ButtonAction.查詢;
+
+    /// <summary>會開啟另一個畫面定義檔的按鈕（發布時一併發布、改代號時要提醒）</summary>
+    [JsonIgnore, Browsable(false)]
+    public bool OpensForm => Action is ButtonAction.開啟畫面 or ButtonAction.開啟查詢條件畫面;
 
     [Category("按鈕"), DisplayName("執行前確認訊息"), Description("有填才會先詢問使用者，按「是」才執行，例如：確定要停用這個客戶嗎？")]
     public string Confirm { get; set; }
@@ -635,14 +692,20 @@ public class ButtonDefinition
     [Category("執行SQL"), DisplayName("SQL"),
      Description("執行SQL：同一個交易執行，@欄位名稱 帶入目前這筆的值，例如 UPDATE C客戶設定 SET 停用 = 1 WHERE 識別 = @識別。"
                + "自訂查詢：按一下輸入條件、再按一下（或確定）查詢，@欄位名稱 帶入輸入框的值（文字沒填 = 空字串），"
-               + "例如 SELECT * FROM B廠商設定 WHERE 廠商名稱 LIKE '%' + @廠商名稱 + '%'"),
+               + "例如 SELECT * FROM B廠商設定 WHERE 廠商名稱 LIKE '%' + @廠商名稱 + '%'。"
+               + "開啟查詢條件畫面：可以空白（依條件畫面上的欄位自動組條件）；有填時改執行這個 SELECT，@欄位名稱 帶入條件畫面上的值"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string Sql { get; set; }
 
     [Category("開啟畫面"), DisplayName("畫面定義檔"),
-     Description("動作 = 開啟畫面 時開啟；只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Description("動作 = 開啟畫面 時開啟的畫面；動作 = 開啟查詢條件畫面 時當查詢條件畫面（欄位名稱跟本畫面的資料表欄位一樣的才能當條件）。"
+               + "只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string TargetForm { get; set; }
+
+    [Category("開啟畫面"), DisplayName("條件組合"),
+     Description("動作 = 開啟查詢條件畫面 時，多個條件預設要「全部符合」（AND）還是「任一符合」（OR）；使用者在條件畫面上也可以切換")]
+    public ConditionJoin ConditionJoin { get; set; }
 
     [Category("開啟畫面"), DisplayName("傳入參數"),
      Description("開啟時帶給對方畫面的值，用逗號分隔「對方欄位=@本畫面欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號。"

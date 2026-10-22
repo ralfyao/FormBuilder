@@ -224,6 +224,31 @@ public static class ButtonRunner
         }
     }
 
+    /// <summary>
+    /// 開啟查詢條件畫面（按鈕的畫面定義檔）：使用者輸入條件按「查詢」後帶回條件；取消或開不起來回傳 null。
+    /// 條件畫面只用來輸入條件、不讀寫資料，所以不檢查它的開啟權限（使用者有本畫面的權限就能用）
+    /// </summary>
+    public static ConditionResult AskConditions(ButtonDefinition b, string sourcePath, IWin32Window owner)
+    {
+        if (string.IsNullOrWhiteSpace(b.TargetForm))
+        {
+            MessageBox.Show($"按鈕「{b.Text}」還沒有設定查詢條件畫面（畫面定義檔）。", "提醒");
+            return null;
+        }
+        try
+        {
+            // 登入時從系統資料庫讀已發布的畫面（看檔名），沒登入從檔案讀
+            var target = FormStore.LoadForm(b.TargetForm, FolderOf(sourcePath));
+            using var dialog = RuntimeForm.ForConditions(target, b.ConditionJoin == ConditionJoin.任一符合);
+            return dialog.ShowDialog(owner) == DialogResult.OK ? dialog.ConditionResult : null;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("開啟查詢條件畫面失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return null;
+        }
+    }
+
     /// <summary>檔名轉成完整路徑：只寫檔名時放在 folder（畫面定義檔的資料夾）；空白回傳 null</summary>
     public static string ResolvePath(string file, string folder)
     {
