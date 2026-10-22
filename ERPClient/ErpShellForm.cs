@@ -40,6 +40,12 @@ public partial class ErpShellForm : Form
             else treeMenu.Focus();
             e.SuppressKeyPress = true;
         };
+        // << 收起選單（畫面變寬），左邊留窄條，按 >> 再叫出來
+        var tips = new ToolTip();
+        tips.SetToolTip(btnCollapse, "收起功能選單");
+        tips.SetToolTip(btnExpand, "展開功能選單");
+        btnCollapse.Click += (s, e) => SetMenuCollapsed(true);
+        btnExpand.Click += (s, e) => SetMenuCollapsed(false);
 
         // ---- 分頁：自己畫標題和 ×，點 × 關閉 ----
         tabs.DrawItem += (s, e) => DrawTab(e);
@@ -138,6 +144,14 @@ public partial class ErpShellForm : Form
 
     private static IEnumerable<TreeNode> AllNodes(TreeNodeCollection nodes) =>
         nodes.Cast<TreeNode>().SelectMany(n => new[] { n }.Concat(AllNodes(n.Nodes)));
+
+    /// <summary>收起 / 展開左邊的功能選單：收起時選單區隱藏，左邊留一條有 >> 的窄條</summary>
+    private void SetMenuCollapsed(bool collapsed)
+    {
+        split.Panel1Collapsed = collapsed;
+        collapsedBar.Visible = collapsed;
+        if (!collapsed) txtSearch.Focus();
+    }
 
     private void OpenNode(TreeNode node)
     {

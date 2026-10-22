@@ -23,6 +23,10 @@ namespace ERPClient
             this.treeMenu = new System.Windows.Forms.TreeView();
             this.txtSearch = new System.Windows.Forms.TextBox();
             this.lblMenuCaption = new System.Windows.Forms.Label();
+            this.menuCaptionBar = new System.Windows.Forms.Panel();
+            this.btnCollapse = new System.Windows.Forms.Button();
+            this.collapsedBar = new System.Windows.Forms.Panel();
+            this.btnExpand = new System.Windows.Forms.Button();
             this.tabs = new System.Windows.Forms.TabControl();
             this.tabHome = new System.Windows.Forms.TabPage();
             this.lblWelcome = new System.Windows.Forms.Label();
@@ -31,6 +35,8 @@ namespace ERPClient
             this.lblServer = new System.Windows.Forms.ToolStripStatusLabel();
             this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel();
             this.header.SuspendLayout();
+            this.menuCaptionBar.SuspendLayout();
+            this.collapsedBar.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.split)).BeginInit();
             this.split.Panel1.SuspendLayout();
             this.split.Panel2.SuspendLayout();
@@ -98,7 +104,7 @@ namespace ERPClient
             this.split.Panel1.BackColor = System.Drawing.Color.FromArgb(243, 246, 250);
             this.split.Panel1.Controls.Add(this.treeMenu);
             this.split.Panel1.Controls.Add(this.txtSearch);
-            this.split.Panel1.Controls.Add(this.lblMenuCaption);
+            this.split.Panel1.Controls.Add(this.menuCaptionBar);
             this.split.Panel1.Padding = new System.Windows.Forms.Padding(8);
             //
             // split.Panel2
@@ -128,9 +134,53 @@ namespace ERPClient
             this.txtSearch.PlaceholderText = "搜尋功能…";
             this.txtSearch.TabIndex = 0;
             //
+            // menuCaptionBar（「功能選單」標題 + 右邊的 << 收起按鈕）
+            //
+            this.menuCaptionBar.Controls.Add(this.lblMenuCaption);
+            this.menuCaptionBar.Controls.Add(this.btnCollapse);
+            this.menuCaptionBar.Dock = System.Windows.Forms.DockStyle.Top;
+            this.menuCaptionBar.Name = "menuCaptionBar";
+            this.menuCaptionBar.Size = new System.Drawing.Size(244, 28);
+            //
+            // btnCollapse
+            //
+            this.btnCollapse.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnCollapse.Dock = System.Windows.Forms.DockStyle.Right;
+            this.btnCollapse.FlatAppearance.BorderSize = 0;
+            this.btnCollapse.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnCollapse.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F, System.Drawing.FontStyle.Bold);
+            this.btnCollapse.ForeColor = System.Drawing.Color.FromArgb(31, 58, 96);
+            this.btnCollapse.Name = "btnCollapse";
+            this.btnCollapse.Size = new System.Drawing.Size(32, 28);
+            this.btnCollapse.TabStop = false;
+            this.btnCollapse.Text = "<<";
+            //
+            // collapsedBar（選單收起時左邊留的窄條，按 >> 展開）
+            //
+            this.collapsedBar.BackColor = System.Drawing.Color.FromArgb(243, 246, 250);
+            this.collapsedBar.Controls.Add(this.btnExpand);
+            this.collapsedBar.Dock = System.Windows.Forms.DockStyle.Left;
+            this.collapsedBar.Name = "collapsedBar";
+            this.collapsedBar.Padding = new System.Windows.Forms.Padding(0, 8, 0, 0);
+            this.collapsedBar.Size = new System.Drawing.Size(32, 670);
+            this.collapsedBar.Visible = false;
+            //
+            // btnExpand
+            //
+            this.btnExpand.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnExpand.Dock = System.Windows.Forms.DockStyle.Top;
+            this.btnExpand.FlatAppearance.BorderSize = 0;
+            this.btnExpand.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnExpand.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F, System.Drawing.FontStyle.Bold);
+            this.btnExpand.ForeColor = System.Drawing.Color.FromArgb(31, 58, 96);
+            this.btnExpand.Name = "btnExpand";
+            this.btnExpand.Size = new System.Drawing.Size(32, 28);
+            this.btnExpand.TabStop = false;
+            this.btnExpand.Text = ">>";
+            //
             // lblMenuCaption
             //
-            this.lblMenuCaption.Dock = System.Windows.Forms.DockStyle.Top;
+            this.lblMenuCaption.Dock = System.Windows.Forms.DockStyle.Fill;
             this.lblMenuCaption.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F, System.Drawing.FontStyle.Bold);
             this.lblMenuCaption.ForeColor = System.Drawing.Color.FromArgb(31, 58, 96);
             this.lblMenuCaption.Name = "lblMenuCaption";
@@ -201,6 +251,7 @@ namespace ERPClient
             //
             this.ClientSize = new System.Drawing.Size(1280, 744);
             this.Controls.Add(this.split);
+            this.Controls.Add(this.collapsedBar);
             this.Controls.Add(this.header);
             this.Controls.Add(this.statusStrip);
             this.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F);
@@ -210,6 +261,8 @@ namespace ERPClient
             this.Text = "ERP 系統";
             this.WindowState = System.Windows.Forms.FormWindowState.Maximized;
             this.header.ResumeLayout(false);
+            this.menuCaptionBar.ResumeLayout(false);
+            this.collapsedBar.ResumeLayout(false);
             this.split.Panel1.ResumeLayout(false);
             this.split.Panel1.PerformLayout();
             this.split.Panel2.ResumeLayout(false);
@@ -234,6 +287,10 @@ namespace ERPClient
         private System.Windows.Forms.TreeView treeMenu;
         private System.Windows.Forms.TextBox txtSearch;
         private System.Windows.Forms.Label lblMenuCaption;
+        private System.Windows.Forms.Panel menuCaptionBar;
+        private System.Windows.Forms.Button btnCollapse;
+        private System.Windows.Forms.Panel collapsedBar;
+        private System.Windows.Forms.Button btnExpand;
         private System.Windows.Forms.TabControl tabs;
         private System.Windows.Forms.TabPage tabHome;
         private System.Windows.Forms.Label lblWelcome;
