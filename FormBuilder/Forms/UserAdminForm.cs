@@ -5,7 +5,7 @@ namespace FormBuilder;
 /// <summary>
 /// 使用者、角色與權限（管理者用）：
 /// 「使用者」頁籤新增帳號、重設密碼（同時解鎖）、改姓名 / 管理者 / 啟用，右邊勾選所屬角色；
-/// 「角色與權限」頁籤管理角色，勾選每個角色對各個已發布畫面的開啟、新增、修改、刪除、列印權限
+/// 「角色與權限」頁籤管理角色，勾選每個角色對各個已發布畫面的開啟、編修（新增 / 修改 / 刪除）、核准、報表、輸出權限
 /// </summary>
 public partial class UserAdminForm : Form
 {
@@ -14,14 +14,12 @@ public partial class UserAdminForm : Form
     private readonly DataTable perms = new();
     private bool loadingRoles;
 
-    /// <summary>權限勾選欄：資料欄名稱、顯示名稱（編修 = 修改、報表 = 列印）</summary>
+    /// <summary>權限勾選欄：資料欄名稱、顯示名稱（編修 = 新增、修改、刪除；報表 = 列印）</summary>
     private static readonly (string Name, string Header, string Tip)[] PermFlags =
     {
         ("Open", "開啟", "可以在選單看到並開啟這個畫面"),
-        ("Insert", "新增", "新增資料"),
-        ("Modify", "編修", "修改資料、單身明細、執行SQL 按鈕"),
-        ("Delete", "刪除", "刪除資料（含批次刪除）"),
-        ("Approve", "核准", "生效 / 取消生效（含批次）"),
+        ("Modify", "編修", "新增、修改、刪除資料（含批次刪除）、單身明細、執行SQL 按鈕"),
+        ("Approve", "核准", "生效 / 取消生效（含批次）；系統管理者不受限"),
         ("Print", "報表", "列印、列印報表"),
         ("Export", "輸出", "清單匯出 Excel / CSV"),
     };
@@ -67,10 +65,10 @@ public partial class UserAdminForm : Form
         btnAllPerms.Click += (s, e) => SetAllPerms(true);
         btnNoPerms.Click += (s, e) => SetAllPerms(false);
         btnSavePerms.Click += (s, e) => SavePerms();
-        // 勾「新增 / 修改 / 刪除 / 列印」時自動勾「開啟」（沒有開啟權限其他都用不到）
+        // 勾「編修 / 核准 / 報表 / 輸出」時自動勾「開啟」（沒有開啟權限其他都用不到）
         dgvPerms.CellValueChanged += (s, e) =>
         {
-            if (e.RowIndex < 0 || dgvPerms.Columns[e.ColumnIndex].DataPropertyName is not ("Insert" or "Modify" or "Delete" or "Approve" or "Print" or "Export")) return;
+            if (e.RowIndex < 0 || dgvPerms.Columns[e.ColumnIndex].DataPropertyName is not ("Modify" or "Approve" or "Print" or "Export")) return;
             if (dgvPerms.Rows[e.RowIndex].DataBoundItem is DataRowView v && v[dgvPerms.Columns[e.ColumnIndex].DataPropertyName] is true) v["Open"] = true;
         };
         dgvPerms.CurrentCellDirtyStateChanged += (s, e) => { if (dgvPerms.IsCurrentCellDirty) dgvPerms.CommitEdit(DataGridViewDataErrorContexts.Commit); };
@@ -204,7 +202,7 @@ public partial class UserAdminForm : Form
         {
             var rp = current.GetValueOrDefault(f.FormKey) ?? new RolePermission(FormPermission.None, null, null);
             var p = rp.Permission;
-            perms.Rows.Add(f.FormKey, f.Title ?? f.FormKey, p.Open, p.Insert, p.Modify, p.Delete, p.Approve, p.Print, p.Export,
+            perms.Rows.Add(f.FormKey, f.Title ?? f.FormKey, p.Open, p.Modify, p.Approve, p.Print, p.Export,
                            (object)rp.Note ?? DBNull.Value, rp.ValidUntil.HasValue ? rp.ValidUntil.Value : DBNull.Value);
         }
         perms.AcceptChanges();
@@ -238,7 +236,8 @@ public partial class UserAdminForm : Form
         if (role == null) return;
         dgvPerms.EndEdit();
         var map = perms.Rows.Cast<DataRow>().ToDictionary(r => (string)r["FormKey"],
-            r => new RolePermission(new FormPermission((bool)r["Open"], (bool)r["Insert"], (bool)r["Modify"], (bool)r["Delete"], (bool)r["Print"],
+            // 新增、刪除跟著「編修」（資料庫的新增、刪除欄位存一樣的值）
+            r => new RolePermission(new FormPermission((bool)r["Open"], (bool)r["Modify"], (bool)r["Modify"], (bool)r["Modify"], (bool)r["Print"],
                                                        (bool)r["Approve"], (bool)r["Export"]),
                                     r["Note"] as string, r["ValidUntil"] as DateTime?));
         SysDb.SaveRolePermissions(Cs, role.Id, map);
@@ -252,7 +251,7 @@ public partial class UserAdminForm : Form
     private static string DescribePermission(RolePermission rp)
     {
         var p = rp.Permission;
-        var names = new (bool On, string Name)[] { (p.Open, "開啟"), (p.Insert, "新增"), (p.Modify, "編修"), (p.Delete, "刪除"), (p.Approve, "核准"), (p.Print, "報表"), (p.Export, "輸出") }
+        var names = new (bool On, string Name)[] { (p.Open, "開啟"), (p.Modify, "編修"), (p.Approve, "核准"), (p.Print, "報表"), (p.Export, "輸出") }
             .Where(x => x.On).Select(x => x.Name);
         return string.Join("、", names) + (rp.ValidUntil.HasValue ? $"（到 {rp.ValidUntil:yyyy/MM/dd}）" : "");
     }

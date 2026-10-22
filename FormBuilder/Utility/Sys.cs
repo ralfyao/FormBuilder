@@ -681,6 +681,40 @@ public static class SysDb
         return (int)cmd.ExecuteScalar();
     }
 
+    /// <summary>
+    /// 已發布的畫面改名稱（畫面標題、選單上的名稱）和代號（檔名）：畫面定義、選單、角色權限一起改，在同一個交易裡。
+    /// 新代號已經有別的畫面在用時丟 InvalidOperationException
+    /// </summary>
+    public static void RenameForm(string cs, string oldKey, string newKey, string newTitle)
+    {
+        using var conn = Open(cs);
+        using var tran = conn.BeginTransaction();
+        SqlCommand Run(string sql, params (string, object)[] ps)
+        {
+            var cmd = Cmd(conn, sql, ps);
+            cmd.Transaction = tran;
+            return cmd;
+        }
+        if (!newKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase))
+        {
+            using var exists = Run("SELECT COUNT(*) FROM dbo.SYS_Form WHERE FormKey = @f", ("@f", newKey));
+            if ((int)exists.ExecuteScalar() > 0) throw new InvalidOperationException($"代號「{newKey}」已經有別的畫面在用了。");
+        }
+        string content;
+        using (var read = Run("SELECT Content FROM dbo.SYS_Form WHERE FormKey = @f", ("@f", oldKey)))
+            content = read.ExecuteScalar() as string ?? throw new InvalidOperationException($"系統裡沒有畫面「{oldKey}」。");
+        var def = FormDefinition.FromJson(content);
+        def.Title = newTitle;                              // 畫面視窗的標題跟著改
+        using (var form = Run("UPDATE dbo.SYS_Form SET FormKey = @n, Title = @t, Content = @c WHERE FormKey = @o",
+                              ("@n", newKey), ("@t", newTitle), ("@c", def.ToJson()), ("@o", oldKey)))
+            form.ExecuteNonQuery();
+        using (var menu = Run("UPDATE dbo.SYS_Menu SET FormKey = @n, Title = @t WHERE FormKey = @o", ("@n", newKey), ("@t", newTitle), ("@o", oldKey)))
+            menu.ExecuteNonQuery();
+        using (var perm = Run("UPDATE dbo.SYS_Permission SET FormKey = @n WHERE FormKey = @o", ("@n", newKey), ("@o", oldKey)))
+            perm.ExecuteNonQuery();
+        tran.Commit();
+    }
+
     // ================= 系統設定值 =================
 
     /// <summary>讀一個系統設定值（例如登入畫面的企業識別）；沒有設定、或舊的系統資料庫還沒有這個資料表時回傳 null</summary>

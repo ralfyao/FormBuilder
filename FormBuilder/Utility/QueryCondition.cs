@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace FormBuilder;
 
@@ -39,6 +41,33 @@ public record QueryCondition(FieldDefinition Field, QueryOp Op, object Value)
         if (parts.Count == 0) return "";
         return matchAny ? "(" + string.Join(" OR ", parts) + ")" : string.Join(" AND ", parts);
     }
+
+    /// <summary>
+    /// 這個值符不符合條件（只放 SQL 清單的畫面在程式裡篩選用）；
+    /// 比對方式跟 SQL Server 預設一樣：文字不分大小寫、忽略字尾空白，NULL 不符合任何條件
+    /// </summary>
+    public bool Matches(object value)
+    {
+        if (value == null || value == DBNull.Value) return false;
+        switch (Op)
+        {
+            case QueryOp.Like:
+                // 值已經是 SQL 的萬用字元：% = 任意字、_ = 一個字
+                string pattern = "^" + Regex.Escape(Convert.ToString(Value) ?? "").Replace("%", ".*").Replace("_", ".") + "$";
+                return Regex.IsMatch(Text(value), pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            case QueryOp.SameDate:
+                return value is DateTime d && Value is DateTime day && d.Date == day.Date;
+            default:
+                if (IsNumber(value) && IsNumber(Value)) return Convert.ToDecimal(value) == Convert.ToDecimal(Value);
+                if (value is DateTime || Value is DateTime) return Equals(value, Value);
+                return string.Equals(Text(value), Text(Value), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string Text(object value) => (Convert.ToString(value, CultureInfo.InvariantCulture) ?? "").TrimEnd();
+
+    private static bool IsNumber(object value) =>
+        value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal;
 }
 
 /// <summary>查詢條件畫面按「查詢」帶回來的內容</summary>

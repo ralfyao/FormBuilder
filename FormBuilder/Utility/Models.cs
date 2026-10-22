@@ -129,7 +129,7 @@ public class FormDefinition
     /// </summary>
     [Browsable(false), JsonIgnore]
     public List<KeyColumn> MasterKeys =>
-        Fields.Where(f => f.IsKey && !f.IsJoin && !f.IsCalculated).Select(f => new KeyColumn(f.Column, f.IsIdentity))
+        Fields.Where(f => f.IsKey && !f.IsJoin && !f.IsCalculated && !f.QueryOnly).Select(f => new KeyColumn(f.Column, f.IsIdentity))
             .Concat(Grids.Where(g => g.IsMasterList).SelectMany(g => g.Columns).Where(c => c.IsKey).Select(c => new KeyColumn(c.Column, c.IsIdentity)))
             .DistinctBy(k => k.Column, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -327,6 +327,14 @@ public class FieldDefinition
     [Category("畫面"), DisplayName("唯讀"),
      Description("新增、修改時使用者不能改這個欄位，但值照樣存進資料庫（例如自動編號、帶入的預設值）；查詢時仍然可以輸入條件。跟「只顯示」的差別是：唯讀的值會存檔")]
     public bool IsReadOnly { get; set; }
+
+    [Category("畫面"), DisplayName("只當查詢條件"),
+     Description("True = 只用來輸入查詢條件：查詢時可以輸入，新增、修改時不能輸入、不存檔，也不顯示資料。"
+               + "同一個欄位可以放好幾個（例如多組關鍵字搭配「任一符合」），重複放上去的會自動設成 True")]
+    public bool QueryOnly { get; set; }
+
+    /// <summary>複製一份（同一個欄位再放一個當查詢條件用）</summary>
+    public FieldDefinition Clone() => (FieldDefinition)MemberwiseClone();
 
     [Category("外觀"), DisplayName("字體大小"), DefaultValue(0f),
      Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高，文字才不會被切掉")]

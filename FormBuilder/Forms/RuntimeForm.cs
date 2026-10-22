@@ -263,7 +263,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         try
         {
             conditions = CollectConditions();
-            foreach (var f in def.Fields.Where(f => !f.IsCalculated)) values[f.Column] = QueryParamValue(f, GetValue(f));
+            // 同一個欄位放了好幾個時，@欄位名稱 用第一個有填的值
+            foreach (var f in def.Fields.Where(f => !f.IsCalculated))
+            {
+                object value = QueryParamValue(f, GetValue(f));
+                if (!values.TryGetValue(f.Column, out var had) || had == DBNull.Value || had is string s && s == "")
+                    values[f.Column] = value;
+            }
         }
         catch (FormatException ex)
         {
@@ -364,8 +370,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             bool editable = mode switch
             {
                 Mode.Query => !f.IsCalculated,
-                Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly && !f.IsJoin && !f.HasFormula,
-                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly && !f.IsJoin && !f.HasFormula,
+                Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly && !f.IsJoin && !f.HasFormula && !f.QueryOnly,
+                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly && !f.IsJoin && !f.HasFormula && !f.QueryOnly,
                 _ => false,
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
@@ -547,7 +553,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var input = ButtonRunner.AskConditions(b, def.SourcePath, this);
         if (input == null) return;                                    // 取消
-        results = new DataTable();                                    // 先清空清單，查詢失敗時也不會留著上一次的結果
+        if (!HasMasterTable)
+        {
+            FilterSqlLists(b, input);
+            return;
+        }
+        results = new DataTable();                                   // 先清空清單，查詢失敗時也不會留著上一次的結果
         current = -1;
         ShowCurrent();
         SetMode(Mode.Browse);
@@ -557,6 +568,50 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
         RunQuery(cmd => QueryCondition.ToSql(input.Conditions, cmd, Dialect, c => ColumnExpr(c.Field.Column), input.MatchAny));
+    }
+
+    /// <summary>
+    /// 只放 SQL 清單的畫面：先清空清單，重查後只留下符合條件的資料列（條件畫面的欄位名稱要跟清單 SELECT 出來的欄位一樣）。
+    /// 在程式裡篩選，後台寫的 SELECT（GROUP BY、ORDER BY、@參數）不用改。按鈕有填 SQL 時改把那個 SELECT 的結果放到第一個清單
+    /// </summary>
+    private void FilterSqlLists(ButtonDefinition b, ConditionResult input)
+    {
+        foreach (var (_, grid) in sqlGrids) grid.DataSource = null;
+        if (!string.IsNullOrWhiteSpace(b.Sql))
+        {
+            try
+            {
+                sqlGrids[0].Grid.DataSource = SqlList.Load(def.ConnectionString, b.Sql, name => input.Values.TryGetValue(name, out var v) ? v : DBNull.Value);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("查詢失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        }
+        else
+        {
+            LoadSqlLists();
+            foreach (var (g, grid) in sqlGrids)
+            {
+                if (grid.DataSource is not DataTable table) continue;      // 讀取失敗（LoadSqlLists 已經提醒過）
+                var missing = input.Conditions.Select(c => c.Field.Column).Distinct(StringComparer.OrdinalIgnoreCase)
+                                   .Where(c => !table.Columns.Contains(c)).ToList();
+                if (missing.Count > 0)
+                {
+                    MessageBox.Show($"「{g.Title}」的 SQL 沒有這些欄位，不能當條件：{string.Join("、", missing)}", "提醒");
+                    grid.DataSource = table.Clone();
+                    continue;
+                }
+                var filtered = table.Clone();
+                foreach (DataRow row in table.Rows)
+                    if (input.Conditions.Count == 0
+                        || (input.MatchAny ? input.Conditions.Any(c => c.Matches(row[c.Field.Column])) : input.Conditions.All(c => c.Matches(row[c.Field.Column]))))
+                        filtered.ImportRow(row);
+                grid.DataSource = filtered;
+            }
+        }
+        if (sqlGrids.All(x => x.Grid.DataSource is not DataTable t || t.Rows.Count == 0)) MessageBox.Show("查無資料。", "查詢");
     }
 
     /// <summary>
@@ -669,7 +724,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
         ButtonAction.執行SQL => mode == Mode.Browse && perm.Modify,
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
-        ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && HasMasterTable,
+        ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && (HasMasterTable || sqlGrids.Count > 0),
         _ => mode == Mode.Browse,
     };
 
@@ -1093,7 +1148,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         RecalcFormulas();                                  // 有公式的欄位用最新的值存檔
         try
         {
-            foreach (var f in def.Fields.Where(f => !f.NoEntry && !f.IsIdentity && !f.IsJoin && !f.IsCalculated))   // 單頭 JOIN、計算欄位不寫回資料庫
+            foreach (var f in def.Fields.Where(f => !f.NoEntry && !f.IsIdentity && !f.IsJoin && !f.IsCalculated && !f.QueryOnly))   // 單頭 JOIN、計算欄位、只當查詢條件的欄位不寫回資料庫
                 values[f] = GetValue(f);
         }
         catch (FormatException ex)
@@ -1174,8 +1229,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 有單頭清單時，欄位只當查詢條件：點選清單不帶入，查詢完也清空（資料看清單、編輯用雙擊的編輯視窗）
         if (HasCurrent && listGrid == null)
             // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
+            // 只當查詢條件的欄位不顯示資料
             foreach (var f in def.Fields)
-                SetValue(f, results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
+                SetValue(f, !f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
         else
         {
             ClearInputs();
@@ -1220,7 +1276,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private bool FillParams()
     {
         bool any = false;
-        foreach (var f in def.Fields.Where(f => !f.IsJoin && !f.IsCalculated))
+        foreach (var f in def.Fields.Where(f => !f.IsJoin && !f.IsCalculated && !f.QueryOnly))
         {
             if (!openParams.TryGetValue(f.Column, out var value) || value == null || value == DBNull.Value) continue;
             SetValue(f, value);

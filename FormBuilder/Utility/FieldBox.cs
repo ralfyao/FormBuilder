@@ -53,8 +53,12 @@ public class FieldBox : DesignBox
         caption.Font = Field.LabelFontSize > 0 ? LabelGeometry.Font(Field, Font) : null;   // null = 跟畫面字型一樣
         caption.SetBounds(0, 0, labelWidth, LabelGeometry.Height(caption.Font));   // 跟執行時一樣：字放大時標籤跟著變高
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
-        input.Text = (string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
-                   + (Field.IsKey ? " [鍵]" : "") + (Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")
+        // 計算欄位顯示公式（沒有欄位名稱可以看）；資料表欄位設了公式就標 [公式]
+        input.Text = (Field.IsCalculated ? "= " + (Field.HasFormula ? Field.Formula : "（還沒設公式）")
+                      : string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
+                   + (Field.HasFormula && !Field.IsCalculated ? " [公式]" : "")
+                   + (Field.IsKey ? " [鍵]" : "") + (Field.IsJoin ? " [JOIN]" : Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")
+                   + (Field.QueryOnly ? " [查詢條件]" : "")
                    + Field.InputType switch
                    {
                        InputKind.下拉選單 => "  ▼",

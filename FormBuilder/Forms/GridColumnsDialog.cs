@@ -108,7 +108,7 @@ public partial class GridColumnsDialog : Form
         if (c.IsJoin)
         {
             var join = workJoins.FirstOrDefault(j => j.Alias == c.JoinAlias);
-            source = $"{c.JoinAlias}：{join?.TableName}.{c.SourceColumn}";
+            source = join == null ? $"單頭 JOIN {c.JoinAlias}：{c.SourceColumn}" : $"{c.JoinAlias}：{join.TableName}.{c.SourceColumn}";   // 單頭清單上的是單頭 JOIN 的欄位
         }
         columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions);
     }
