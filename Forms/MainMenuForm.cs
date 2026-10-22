@@ -53,6 +53,7 @@ public partial class MainMenuForm : Form
             var nodeMenu = new ContextMenuStrip();
             var miOpen = nodeMenu.Items.Add("開啟", null, (s, e) => OpenSelected());
             var miDesign = nodeMenu.Items.Add("設計這個畫面", null, (s, e) => OpenDesigner());
+            var miRename = nodeMenu.Items.Add("重新命名…", null, (s, e) => RenameSelected());
             var sepNew = new ToolStripSeparator();
             nodeMenu.Items.Add(sepNew);
             // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
@@ -64,8 +65,10 @@ public partial class MainMenuForm : Form
                 if (treeMenu.ClientRectangle.Contains(point) && treeMenu.GetNodeAt(point) == null) treeMenu.SelectedNode = null;
                 // 開啟、設計只對畫面；新增表單在哪裡按右鍵都有
                 bool onForm = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false };
-                miOpen.Visible = miDesign.Visible = sepNew.Visible = onForm;
+                miOpen.Visible = miDesign.Visible = onForm;
+                miRename.Visible = sepNew.Visible = treeMenu.SelectedNode?.Tag is MenuNode;     // 畫面、資料夾都可以改名
             };
+            treeMenu.KeyDown += (s, e) => { if (e.KeyCode == Keys.F2) RenameSelected(); };
             treeMenu.NodeMouseClick += (s, e) => { if (e.Button == MouseButtons.Right) treeMenu.SelectedNode = e.Node; };
             treeMenu.ContextMenuStrip = nodeMenu;
             EnableDragToMove();
@@ -201,6 +204,117 @@ public partial class MainMenuForm : Form
             MessageBox.Show("儲存選單失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         LoadMenu();
+    }
+
+    // ================= 管理者：重新命名 =================
+
+    /// <summary>
+    /// 重新命名（右鍵或 F2）：資料夾只改名稱；畫面可以改名稱（選單、畫面標題）和代號（檔名，權限、選單跟著改），
+    /// 本機 Forms 資料夾裡的畫面定義檔也一起改名。別的畫面的按鈕、開窗選取指到舊代號的，列出來提醒
+    /// </summary>
+    private void RenameSelected()
+    {
+        if (!SysContext.User.IsAdmin || treeMenu.SelectedNode?.Tag is not MenuNode node) return;
+        if (node.IsFolder)
+        {
+            var folder = PromptDialog.Ask(this, "重新命名資料夾", v => v[0] == "" ? "請輸入名稱。" : null, new PromptDialog.Field("名稱", node.Title));
+            if (folder == null || folder[0] == node.Title) return;
+            string old = node.Title;
+            node.Title = folder[0];
+            SaveMenuFromTree($"資料夾「{old}」改名為「{node.Title}」");
+            return;
+        }
+
+        string oldKey = node.FormKey;
+        var published = SysDb.LoadPublished(SysContext.Connection, "form");
+        var item = published.FirstOrDefault(p => p.FormKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase));
+        if (item == null)
+        {
+            MessageBox.Show($"系統裡沒有已發布的畫面「{oldKey}」。", "重新命名");
+            return;
+        }
+        var bad = Path.GetInvalidFileNameChars();
+        var v = PromptDialog.Ask(this, "重新命名畫面", values =>
+        {
+            if (values[0] == "") return "請輸入名稱。";
+            if (values[1] == "") return "請輸入代號。";
+            if (values[1].IndexOfAny(bad) >= 0) return "代號是檔名，不能有 \\ / : * ? \" < > | 這些符號。";
+            if (values[1].Length > 200) return "代號太長（最多 200 個字）。";
+            if (!values[1].Equals(oldKey, StringComparison.OrdinalIgnoreCase)
+                && published.Any(p => p.FormKey.Equals(values[1], StringComparison.OrdinalIgnoreCase)))
+                return $"代號「{values[1]}」已經有別的畫面在用了。";
+            return null;
+        }, new PromptDialog.Field("名稱", item.Title ?? oldKey), new PromptDialog.Field("代號（檔名）", oldKey));
+        if (v == null) return;
+        string title = v[0], newKey = v[1];
+        if (title == (item.Title ?? oldKey) && newKey == oldKey) return;
+
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            SysDb.RenameForm(SysContext.Connection, oldKey, newKey, title);
+            Audit.Write(newKey, null, "重新命名", "FormKey=" + oldKey, $"「{item.Title ?? oldKey}」（{oldKey}）→「{title}」（{newKey}）");
+            string note = RenameLocalFile(oldKey, newKey, title);
+            var refs = newKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase) ? new List<string>() : FormsReferencing(oldKey, published);
+            SysContext.ReloadPermissions();
+            LoadMenu();
+            if (note != null || refs.Count > 0)
+                MessageBox.Show("已重新命名。" + (note == null ? "" : Environment.NewLine + Environment.NewLine + note)
+                                + (refs.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + $"這些畫面的按鈕或開窗選取還指到舊代號「{oldKey}」，請到畫面設計改成「{newKey}」後重新發布："
+                                                          + Environment.NewLine + string.Join(Environment.NewLine, refs.Select(r => "　" + r))),
+                                "重新命名");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("重新命名失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+    }
+
+    /// <summary>本機 Forms 資料夾裡的畫面定義檔（畫面設計上次編輯的）跟著改檔名與標題；有問題時回傳提醒文字</summary>
+    private static string RenameLocalFile(string oldKey, string newKey, string title)
+    {
+        string folder = FormDefinition.DefaultFolder;
+        string oldPath = Path.Combine(folder, oldKey + ".json"), newPath = Path.Combine(folder, newKey + ".json");
+        if (!File.Exists(oldPath)) return null;
+        try
+        {
+            bool sameFile = oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase);
+            if (!sameFile && File.Exists(newPath)) return $"本機已經有 {newPath}，舊的 {Path.GetFileName(oldPath)} 沒有改名，請自己處理。";
+            var def = FormDefinition.Load(oldPath);
+            def.Title = title;
+            def.Save(oldPath);
+            if (!sameFile) File.Move(oldPath, newPath);    // 只改大小寫時不用改檔名（Windows 檔名不分大小寫）
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"本機的畫面定義檔 {oldPath} 沒有跟著改：{ex.Message}";
+        }
+    }
+
+    /// <summary>已發布的其他畫面裡，按鈕「開啟畫面」或欄位「開窗選取」指到這個代號的（回傳「名稱（代號）」）</summary>
+    private static List<string> FormsReferencing(string key, List<PublishedItem> published)
+    {
+        var result = new List<string>();
+        foreach (var p in published.Where(p => !p.FormKey.Equals(key, StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var def = FormDefinition.FromJson(SysDb.LoadContent(SysContext.Connection, p.FormKey));
+                if (DesignerForm.AllButtons(def).Any(b => b.OpensForm && !string.IsNullOrWhiteSpace(b.TargetForm)
+                                                          && Path.GetFileNameWithoutExtension(b.TargetForm.Trim()).Equals(key, StringComparison.OrdinalIgnoreCase)))
+                    result.Add($"{p.Title ?? p.FormKey}（{p.FormKey}）");
+            }
+            catch
+            {
+                // 讀不出來的畫面略過
+            }
+        }
+        return result;
     }
 
     /// <summary>

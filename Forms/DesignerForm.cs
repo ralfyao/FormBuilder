@@ -57,6 +57,8 @@ public partial class DesignerForm : Form
         backColorMenu.DropDownItems.Add("還原預設（灰色）", null, (s, e) => SetCanvasBackColor(Color.Empty));
         btnEditMenu.DropDownItems.Add(new ToolStripSeparator());
         btnEditMenu.DropDownItems.Add(backColorMenu);
+        // 單頭 JOIN：把其他資料表的欄位拖到畫面上時設定；之後要改關聯條件用這裡
+        btnEditMenu.DropDownItems.Add("單頭 JOIN 關聯條件…", null, (s, e) => EditMasterJoin());
         var canvasMenu = new ContextMenuStrip();
         canvasMenu.Items.Add("畫面背景色：選擇顏色…", null, (s, e) => PickBackColor());
         canvasMenu.Items.Add("畫面背景色：還原預設（灰色）", null, (s, e) => SetCanvasBackColor(Color.Empty));
@@ -71,6 +73,8 @@ public partial class DesignerForm : Form
 
         // ---- 左上「工具箱」頁籤 ----
         toolbox.AddEntry("SqlList", "SQL 清單（唯讀明細）");
+        toolbox.AddEntry("Calc", "計算欄位（公式）");
+        FormulaEditor.Fields = () => def.Fields;                // 屬性面板「公式」的編輯視窗列出畫面上的欄位
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // 分隔線位置要等視窗有實際大小後才能設定
@@ -129,7 +133,7 @@ public partial class DesignerForm : Form
         {
             foreach (var box in selection) box.RefreshFromModel();     // 多選時屬性面板會一次改全部
             ApplyCanvasSize();
-            UpdateStatus();
+            UpdateStatus(e.ChangedItem?.PropertyDescriptor?.Name == nameof(FieldDefinition.Formula) ? "公式已更新" : null);
         };
 
         SetConnection(null, DbKind.SqlServer);
@@ -328,18 +332,11 @@ public partial class DesignerForm : Form
     {
         if (data?.Column == null) return;
         if (def.TableName == null)
-        {
-            // 第一個放上來的欄位決定這個畫面的單頭資料表
-            def.TableSchema = data.Schema;
-            def.TableName = data.Table;
-            def.DatabaseType = databaseType;
-            def.ConnectionString = connectionString;
-            if (def.Title == "新畫面") def.Title = data.Table;
-            defTableColumns = (GetColumnsCached(data.Schema, data.Table) ?? new List<ColumnInfo>()).ToList();
-        }
+            SetMasterTable(data.Schema, data.Table);      // 第一個放上來的欄位決定這個畫面的單頭資料表
         else if (def.TableSchema != data.Schema || def.TableName != data.Table)
         {
-            MessageBox.Show($"單頭欄位只能來自同一個資料表，這個畫面的單頭是 {def.TableSchema}.{def.TableName}。\n要放其他資料表當單身，請把整個資料表（不是欄位）拖到畫面上。", "提醒");
+            // 其他資料表的欄位：用 JOIN 帶到單頭（只顯示）；要放其他資料表當單身，是把整個資料表拖到畫面上
+            AddJoinField(data, location);
             return;
         }
 
@@ -370,6 +367,155 @@ public partial class DesignerForm : Form
         SelectBox(AddBox(field));
         ApplyCanvasSize();
         UpdateStatus();
+    }
+
+    /// <summary>決定這個畫面的單頭資料表（第一個放上來的欄位，或空白畫面上第一個拖進來的整個資料表）</summary>
+    private void SetMasterTable(string schema, string table)
+    {
+        def.TableSchema = schema;
+        def.TableName = table;
+        def.DatabaseType = databaseType;
+        def.ConnectionString = connectionString;
+        if (def.Title == "新畫面") def.Title = table;
+        defTableColumns = (GetColumnsCached(schema, table) ?? new List<ColumnInfo>()).ToList();
+    }
+
+    // ================= 單頭 JOIN =================
+
+    /// <summary>
+    /// 把其他資料表的欄位放到單頭：用 LEFT JOIN 帶出來，只顯示、不寫回資料庫（例如用廠商編號帶出廠商名稱）。
+    /// 同一個資料表已經 JOIN 過就沿用原本的關聯條件；還沒有就先設定關聯條件（單頭欄位 = 關聯資料表欄位）
+    /// </summary>
+    private void AddJoinField(ColumnDragData data, Point location)
+    {
+        var join = def.Joins.FirstOrDefault(j => string.Equals(j.TableSchema, data.Schema, StringComparison.OrdinalIgnoreCase)
+                                              && string.Equals(j.TableName, data.Table, StringComparison.OrdinalIgnoreCase));
+        if (join != null)
+        {
+            var existing = def.Fields.FirstOrDefault(f => f.JoinAlias == join.Alias && string.Equals(f.SourceColumn, data.Column.Name, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                SelectBox(canvas.Controls.OfType<FieldBox>().First(b => b.Field == existing));
+                UpdateStatus($"欄位 {join.TableName}.{existing.SourceColumn} 已經在畫面上了（{existing.Column}）");
+                return;
+            }
+            var c = data.Column;
+            AddJoinFieldBox(join, UniqueFieldName(join.TableName, c.Name), string.IsNullOrWhiteSpace(c.Description) ? c.Name : c.Description, c, location);
+            UpdateStatus($"已加入 {join.TableName}.{c.Name}（沿用 JOIN {join.Alias} 的關聯條件：{join.LinkText}）");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("請先連線資料庫，再把其他資料表的欄位 JOIN 到單頭。", "提醒");
+            return;
+        }
+        int n = 1;
+        while (def.Joins.Any(j => j.Alias == $"J{n}")) n++;
+        using var dlg = new JoinDialog(connectionString, $"J{n}", MasterTableColumns(), UsedFieldNames());
+        dlg.ForMaster(data.Schema, data.Table, data.Column.Name);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        def.Joins.Add(dlg.Join);
+        AddJoinFieldBoxes(dlg.Join, dlg.NewColumns, location);
+        UpdateStatus($"已 JOIN {dlg.Join.TableName}（{dlg.Join.LinkText}），帶進來的欄位只顯示、不會存檔。要改關聯條件：選欄位後按「編輯 → 單頭 JOIN 關聯條件」");
+    }
+
+    /// <summary>「編輯 → 單頭 JOIN 關聯條件」：修改選取的 JOIN 欄位所屬 JOIN 的關聯條件，也可以再勾選要放到單頭的欄位</summary>
+    private void EditMasterJoin()
+    {
+        var field = selection.OfType<FieldBox>().Select(b => b.Field).FirstOrDefault(f => f.IsJoin);
+        var join = field == null ? null : def.Joins.FirstOrDefault(j => j.Alias == field.JoinAlias);
+        if (join == null)
+        {
+            MessageBox.Show("請先點選畫面上 JOIN 帶進來的欄位（標示 [JOIN] 的欄位），再修改它的關聯條件。", "提醒");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("請先連線資料庫。", "提醒");
+            return;
+        }
+        using var dlg = new JoinDialog(connectionString, join.Alias, MasterTableColumns(), UsedFieldNames());
+        dlg.ForMaster(join.TableSchema, join.TableName, null, join.LinkText, def.Fields.Where(f => f.JoinAlias == join.Alias).Select(f => f.SourceColumn));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        join.LinkText = dlg.Join.LinkText;
+        AddJoinFieldBoxes(join, dlg.NewColumns, NextFreePoint());
+        UpdateStatus($"JOIN {join.Alias}（{join.TableName}）的關聯條件：{join.LinkText}");
+    }
+
+    /// <summary>JOIN 設定視窗勾選的欄位放到單頭：第一個放在 location，其餘往下排</summary>
+    private void AddJoinFieldBoxes(GridJoinDefinition join, List<GridColumnDefinition> columns, Point location)
+    {
+        var remote = GetColumnsCached(join.TableSchema, join.TableName) ?? new List<ColumnInfo>();
+        foreach (var (c, i) in columns.Select((c, i) => (c, i)))
+        {
+            var info = remote.FirstOrDefault(r => r.Name == c.SourceColumn) ?? new ColumnInfo { Name = c.SourceColumn, DataType = c.DataType, MaxLength = c.MaxLength };
+            AddJoinFieldBox(join, c.Column, c.Header, info, new Point(location.X, location.Y + i * 30));
+        }
+    }
+
+    /// <summary>放一個 JOIN 帶進來的欄位到單頭（只顯示），畫面有單頭清單時也加到清單上</summary>
+    private void AddJoinFieldBox(GridJoinDefinition join, string name, string label, ColumnInfo c, Point location)
+    {
+        var field = new FieldDefinition
+        {
+            Column = name,
+            DataType = c.DataType,
+            MaxLength = c.MaxLength,
+            IsNullable = true,                                       // LEFT JOIN 對不到時是空白
+            NoEntry = true,                                          // 關聯資料表的欄位只顯示，不寫回資料庫
+            JoinAlias = join.Alias,
+            SourceColumn = c.Name,
+            Label = label,
+            X = location.X,
+            Y = location.Y,
+            Width = TypeHelper.SuggestWidth(c),
+        };
+        def.Fields.Add(field);
+        var list = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
+        if (list != null && list.Columns.All(x => !x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            var column = ToListColumn(field);
+            if (list.HasEditLayout) column.EditVisible = false;         // 編輯視窗版面設計過了，不要疊在左上角
+            list.Columns.Add(column);
+            canvas.Controls.OfType<GridBox>().FirstOrDefault(b => b.GridDef == list)?.RefreshFromModel();
+        }
+        SelectBox(AddBox(field));
+        ApplyCanvasSize();
+    }
+
+    /// <summary>單頭 JOIN 欄位放到單頭清單上的欄位（同樣只顯示）</summary>
+    private static GridColumnDefinition ToListColumn(FieldDefinition f) => new()
+    {
+        Column = f.Column,
+        DataType = f.DataType,
+        MaxLength = f.MaxLength,
+        IsNullable = true,
+        Header = f.Label,
+        Width = Math.Clamp(f.Width, 60, 200),
+        NoEntry = true,
+        JoinAlias = f.JoinAlias,
+        SourceColumn = f.SourceColumn,
+    };
+
+    /// <summary>單頭資料表的全部欄位（JOIN 關聯條件左邊的選項）</summary>
+    private List<ColumnInfo> MasterTableColumns() =>
+        defTableColumns.Count > 0 ? defTableColumns : GetColumnsCached(def.TableSchema, def.TableName) ?? new List<ColumnInfo>();
+
+    /// <summary>單頭已經用掉的欄位名稱（畫面欄位、單頭資料表欄位、單頭清單欄位），JOIN 帶進來的欄位不能重複</summary>
+    private List<string> UsedFieldNames() =>
+        def.Fields.Select(f => f.Column).Concat(MasterTableColumns().Select(c => c.Name))
+            .Concat(def.Grids.Where(g => g.IsMasterList && !g.IsSqlList).SelectMany(g => g.Columns).Select(c => c.Column))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    /// <summary>JOIN 欄位顯示用的名稱：重複時加上資料表名稱，還是重複就加編號（同 JoinDialog）</summary>
+    private string UniqueFieldName(string table, string source)
+    {
+        var used = new HashSet<string>(UsedFieldNames(), StringComparer.OrdinalIgnoreCase);
+        if (!used.Contains(source)) return source;
+        string name = $"{table}_{source}";
+        for (int n = 2; used.Contains(name); n++) name = $"{table}_{source}{n}";
+        return name;
     }
 
     private void AddAllColumns()
@@ -436,6 +582,39 @@ public partial class DesignerForm : Form
         else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
         else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
         else if (kind == "SqlList") AddSqlList(location);
+        else if (kind == "Calc") AddCalcField(location);
+    }
+
+    /// <summary>加入計算欄位：不對應資料表的欄位，依公式（畫面欄位、數字做加減乘除）算出來顯示，不會存檔</summary>
+    private void AddCalcField(Point location)
+    {
+        if (def.TableName == null)
+        {
+            MessageBox.Show("請先把單頭資料表的欄位拖到畫面上（決定單頭），再加入計算欄位。", "提醒");
+            return;
+        }
+        using var dlg = new FormulaDialog(null, def.Fields);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        int n = 1;
+        var used = new HashSet<string>(UsedFieldNames(), StringComparer.OrdinalIgnoreCase);
+        while (used.Contains($"計算{n}")) n++;
+        var field = new FieldDefinition
+        {
+            Column = $"計算{n}",
+            DataType = "decimal",
+            IsNullable = true,
+            NoEntry = true,                                          // 只顯示，不寫回資料庫
+            IsCalculated = true,
+            Formula = dlg.Formula == "" ? null : dlg.Formula,
+            Label = "計算欄位",
+            X = location.X,
+            Y = location.Y,
+            Width = 120,
+        };
+        def.Fields.Add(field);
+        SelectBox(AddBox(field));
+        ApplyCanvasSize();
+        UpdateStatus("已加入計算欄位：在屬性面板改「標籤」；要改公式按「公式」右邊的「…」");
     }
 
     /// <summary>加入 SQL 清單：資料來自自己寫的 SELECT（唯讀），可以用 @單頭欄位，切換單頭時重查</summary>
@@ -519,14 +698,15 @@ public partial class DesignerForm : Form
     /// <summary>
     /// 把整個資料表拖到畫面上產生 Grid，預設放入全部欄位：
     /// 拖的是單頭自己的資料表 → 單頭清單（列出查詢結果，點選切換單頭）；
-    /// 拖的是其他資料表 → 單身，並自動推測關聯欄位
+    /// 拖的是其他資料表 → 單身，並自動推測關聯欄位；
+    /// 還沒有單頭時（空白畫面）→ 這個資料表就當單頭，產生單頭清單（之後可以再拖欄位上來當查詢條件）
     /// </summary>
     private void AddGrid(TableDragData data, Point location)
     {
         if (def.TableName == null)
         {
-            MessageBox.Show("請先把單頭資料表的欄位拖到畫面上（決定單頭），再把資料表整個拖過來產生 Grid。", "提醒");
-            return;
+            if (GetColumnsCached(data.Schema, data.Table) == null) return;
+            SetMasterTable(data.Schema, data.Table);
         }
         bool isMasterList = def.TableSchema == data.Schema && def.TableName == data.Table;
         if (def.Grids.Any(g => !g.IsSqlList && g.IsMasterList == isMasterList))
@@ -564,10 +744,12 @@ public partial class DesignerForm : Form
                 NoEntry = c.IsIdentity,
             }).ToList(),
         };
+        // 單頭清單也列出單頭 JOIN 帶進來的欄位
+        if (isMasterList) grid.Columns.AddRange(def.Fields.Where(f => f.IsJoin).Select(ToListColumn));
         def.Grids.Add(grid);
         SelectBox(AddGridBox(grid));
         ApplyCanvasSize();
-        UpdateStatus(isMasterList ? "已加入單頭清單 Grid：使用者查詢後會列出結果，點選一列切換單頭"
+        UpdateStatus(isMasterList ? "已加入單頭清單 Grid：使用者查詢後會列出結果（畫面上沒有單頭欄位時，打開就列出資料），雙擊一列開啟編輯視窗"
                    : grid.Links.Count == 0 ? "推測不出關聯欄位，請點一下 Grid 設定"
                    : $"已自動帶入關聯欄位（請確認是否正確）：{grid.LinkText}");
     }
@@ -700,6 +882,7 @@ public partial class DesignerForm : Form
             // 單頭欄位、單身都移除了，畫面可以改綁別的資料表
             def.TableSchema = null;
             def.TableName = null;
+            def.Joins.Clear();
             defTableColumns = new List<ColumnInfo>();
         }
         UpdateStatus();
@@ -832,6 +1015,11 @@ public partial class DesignerForm : Form
             var missing = defTableColumns.Where(c => c.IsRequiredOnInsert && def.Fields.All(f => f.Column != c.Name)).Select(c => c.Name).ToList();
             if (missing.Count > 0) notes.Add("注意：這些必填欄位沒放到畫面上，新增資料會失敗：" + string.Join(", ", missing));
             if (def.MasterKeys.Count == 0) notes.Add("注意：單頭欄位與單頭清單都沒有主鍵，使用者只能新增，不能修改、刪除");
+            foreach (var f in def.Fields.Where(f => f.HasFormula))
+            {
+                string error = Formula.Check(f.Formula, def.Fields.Where(x => x != f).Select(x => x.Column));
+                if (error != null) notes.Add($"注意：「{f.Label}」的{error}");
+            }
             foreach (var g in def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList))
             {
                 if (g.Links.Count == 0) notes.Add($"注意：單身 {g.TableName} 沒有設定關聯欄位");
@@ -989,7 +1177,7 @@ public partial class DesignerForm : Form
     }
 
     /// <summary>畫面上所有的按鈕（主畫面 + 編輯視窗），欄位的開窗選取也當成「開啟畫面」按鈕</summary>
-    private static List<ButtonDefinition> AllButtons(FormDefinition form) =>
+    internal static List<ButtonDefinition> AllButtons(FormDefinition form) =>
         form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
             .Concat(form.Fields.Select(ButtonRunner.PickerButton))
             .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
@@ -1024,7 +1212,7 @@ public partial class DesignerForm : Form
         {
             var (form, path) = queue.Dequeue();
             string folder = Path.GetDirectoryName(path);
-            foreach (var b in AllButtons(form).Where(b => b.Action == ButtonAction.開啟畫面 && !string.IsNullOrWhiteSpace(b.TargetForm)))
+            foreach (var b in AllButtons(form).Where(b => b.OpensForm && !string.IsNullOrWhiteSpace(b.TargetForm)))
             {
                 string key = Path.GetFileNameWithoutExtension(b.TargetForm.Trim());
                 if (!seen.Add(key)) continue;
@@ -1085,9 +1273,9 @@ public partial class DesignerForm : Form
 
     private void SaveForm(bool saveAs)
     {
-        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList))       // 只放 SQL 清單（唯讀明細）的畫面不需要欄位
+        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList || g.IsMasterList))       // 只放 SQL 清單、單頭清單的畫面不需要欄位
         {
-            MessageBox.Show("畫面上還沒有欄位（或 SQL 清單）。", "提醒");
+            MessageBox.Show("畫面上還沒有欄位（或清單）。", "提醒");
             return;
         }
         if (saveAs || currentFilePath == null)
@@ -1115,9 +1303,9 @@ public partial class DesignerForm : Form
 
     private void Preview()
     {
-        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList))       // 只放 SQL 清單（唯讀明細）的畫面不需要欄位
+        if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList || g.IsMasterList))       // 只放 SQL 清單、單頭清單的畫面不需要欄位
         {
-            MessageBox.Show("畫面上還沒有欄位（或 SQL 清單）。", "提醒");
+            MessageBox.Show("畫面上還沒有欄位（或清單）。", "提醒");
             return;
         }
         new RuntimeForm(def).Show(this);

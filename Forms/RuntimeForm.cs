@@ -44,18 +44,32 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private readonly Dictionary<string, object> openParams;
     /// <summary>選取視窗模式下使用者選的那筆</summary>
     public DataRow PickedRow { get; private set; }
+    /// <summary>查詢條件畫面模式（別的畫面的「開啟查詢條件畫面」按鈕）：輸入條件按「查詢」就關閉，把條件帶回去，不在這裡查</summary>
+    private readonly bool conditionMode;
+    /// <summary>查詢條件畫面上的「全部符合 / 任一符合」</summary>
+    private ToolStripComboBox cboMatch;
+    /// <summary>查詢條件畫面模式下使用者按「查詢」帶回的條件</summary>
+    public ConditionResult ConditionResult { get; private set; }
     /// <summary>目前使用者對這個畫面的權限（沒登入 = 全開）</summary>
     private FormPermission perm = FormPermission.All;
 
     public RuntimeForm(FormDefinition definition) : this(definition, null, false) { }
 
-    public RuntimeForm(FormDefinition definition, IDictionary<string, object> parameters, bool pickMode)
+    /// <summary>開成查詢條件畫面；matchAny = 預設「任一符合」（OR）</summary>
+    public static RuntimeForm ForConditions(FormDefinition definition, bool matchAny) =>
+        new(definition, null, pickMode: false, conditionMode: true, matchAny: matchAny);
+
+    public RuntimeForm(FormDefinition definition, IDictionary<string, object> parameters, bool pickMode,
+                       bool conditionMode = false, bool matchAny = false)
     {
         InitializeComponent();
         this.pickMode = pickMode;
+        this.conditionMode = conditionMode;
         openParams = parameters == null ? new(StringComparer.OrdinalIgnoreCase) : new(parameters, StringComparer.OrdinalIgnoreCase);
         def = definition;
-        perm = SysContext.PermissionFor(def.FormKey);                        // 登入時依角色權限；沒登入 = 全開
+        perm = SysContext.PermissionFor(def.FormKey);                        // 登入時依角色權限；沒登入、系統管理者 = 全開
+        // 「編修」權限 = 新增、修改、刪除（主畫面、編輯視窗的按鈕都看這裡；舊資料的新增、刪除勾選不再使用）
+        perm = perm with { Insert = perm.Modify, Delete = perm.Modify };
         Text = def.Title;
 
         // 工具列按鈕在 Designer.cs
@@ -95,6 +109,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         // 欄位的開窗選取：瀏覽時不開（跟選取視窗按鈕一樣，輸入中、查詢中才能用）
         ButtonRunner.AttachPickers(inputs, b => { if (mode != Mode.Browse) OpenOtherForm(b); });
+        HookJoinRefresh();
+        HookFormulas();
 
         // 後台從工具箱拖進來的按鈕
         foreach (var b in def.Buttons)
@@ -155,11 +171,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 item.Visible = false;
 
         if (pickMode) SetupPickMode();
+        if (conditionMode) SetupConditionMode(matchAny);
         ShowCurrent();
         SetMode(Mode.Browse);
+        // 查詢條件畫面：打開就是輸入條件
+        if (conditionMode)
+            Shown += (s, e) => BeginQuery();
         // 有傳入參數時，打開後用同名的欄位當條件自動查詢
-        if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
+        else if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
             Shown += (s, e) => QueryByParams();
+        // 只放單頭清單、沒有可以輸入查詢條件的單頭欄位：打開就列出資料
+        else if (HasMasterTable && listDef != null && def.Fields.All(f => f.IsCalculated))
+            Shown += (s, e) => RunQuery();
     }
 
     /// <summary>選取視窗：工具列最前面加「選取帶回」，視窗標題加上「選取：」</summary>
@@ -204,6 +227,51 @@ public partial class RuntimeForm : Form, IRecordNavigator
         toolStrip.Items.Insert(0, btnPick);
         toolStrip.Items.Insert(1, new ToolStripSeparator());
         btnExit.Text = "取消";
+    }
+
+    /// <summary>查詢條件畫面：工具列只留「查詢」（確定）、「取消」與條件組合，視窗標題加上「查詢條件：」</summary>
+    private void SetupConditionMode(bool matchAny)
+    {
+        Text = "查詢條件：" + def.Title;
+        ShowInTaskbar = false;
+        MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterParent;
+        foreach (ToolStripItem item in toolStrip.Items) item.Visible = false;
+        btnOk.Visible = btnCancel.Visible = true;
+        btnOk.Text = "查詢";
+        btnOk.ToolTipText = "依輸入的條件查詢，結果放到原來畫面的清單（Enter）";
+        btnCancel.ToolTipText = "不查詢，關閉這個視窗（Esc）";
+        cboMatch = new ToolStripComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            AutoSize = false,
+            Size = new Size(160, 28),
+            ToolTipText = "有填多個條件時：全部都要符合（AND），還是符合任一個就好（OR）",
+        };
+        cboMatch.Items.AddRange(new object[] { "全部符合（AND）", "任一符合（OR）" });
+        cboMatch.SelectedIndex = matchAny ? 1 : 0;
+        toolStrip.Items.Add(new ToolStripSeparator());
+        toolStrip.Items.Add(new ToolStripLabel("條件："));
+        toolStrip.Items.Add(cboMatch);
+    }
+
+    /// <summary>查詢條件畫面按「查詢」：把有填的條件與每個欄位的值帶回去，關閉視窗</summary>
+    private void ReturnConditions()
+    {
+        var values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        List<QueryCondition> conditions;
+        try
+        {
+            conditions = CollectConditions();
+            foreach (var f in def.Fields.Where(f => !f.IsCalculated)) values[f.Column] = QueryParamValue(f, GetValue(f));
+        }
+        catch (FormatException ex)
+        {
+            MessageBox.Show(ex.Message, "提醒");
+            return;
+        }
+        ConditionResult = new ConditionResult { Conditions = conditions, MatchAny = cboMatch.SelectedIndex == 1, Values = values };
+        DialogResult = DialogResult.OK;
     }
 
     /// <summary>選取目前這筆，關閉選取視窗</summary>
@@ -292,12 +360,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         foreach (var f in def.Fields)
         {
-            // 查詢時每個欄位都能下條件；新增、修改時 NOENTRY、唯讀與自動編號不能輸入（唯讀的值照樣存檔），修改時主鍵也不能改
+            // 查詢時每個欄位都能下條件（計算欄位除外）；新增、修改時 NOENTRY、唯讀、自動編號、單頭 JOIN 與有公式的欄位不能輸入（唯讀、公式的值照樣存檔），修改時主鍵也不能改
             bool editable = mode switch
             {
-                Mode.Query => true,
-                Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly,
-                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly,
+                Mode.Query => !f.IsCalculated,
+                Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly && !f.IsJoin && !f.HasFormula,
+                Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly && !f.IsJoin && !f.HasFormula,
                 _ => false,
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
@@ -306,6 +374,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         lblMode.Text = mode switch
         {
+            Mode.Query when conditionMode => "輸入查詢條件（文字可用 * 或 ? 萬用字元），按「查詢」或 Enter 帶回原畫面查詢，Esc 取消",
             Mode.Query when customQuery != null => $"查詢：輸入條件後，再按一次「{customQuery.Text}」、「確定」或 Enter 開始查詢，Esc 取消",
             Mode.Query => "查詢：輸入條件（文字可用 * 或 ? 萬用字元），按「確定」或 Enter 開始查詢，Esc 取消",
             Mode.Insert => "新增：輸入資料後按「確定」存檔，Esc 取消",
@@ -317,6 +386,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action);
+        RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         if (mode == Mode.Detail) detailGrid.Focus();
         else if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
     }
@@ -338,7 +408,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ClearDetail();
         DefaultValue.FillInputs(inputs);                                          // 欄位的預設值
         NumberRule.FillInputs(inputs, def.ConnectionString, def.FullTableName);   // 有編號規則的欄位自動帶入下一個編號
+        FillParams();                                                             // 別的畫面開啟時帶進來的值（例如廠商編號）直接帶入
         SetMode(Mode.Insert);
+        QueueJoinRefresh(def.Joins);                                              // 預設值帶到關聯欄位時，JOIN 欄位跟著帶出來
     }
 
     /// <summary>輸入查詢條件或新單頭時，先清掉上一筆的單身，避免看起來像是這筆的明細</summary>
@@ -366,6 +438,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         switch (mode)
         {
+            case Mode.Query when conditionMode: ReturnConditions(); break;
             case Mode.Query when customQuery != null: RunCustomQuery(customQuery); break;
             case Mode.Query: RunQuery(); break;
             case Mode.Insert: InsertRecord(); break;
@@ -377,6 +450,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>取消：放棄輸入，回到原本顯示的那筆</summary>
     private void CancelEdit()
     {
+        if (conditionMode)                                 // 查詢條件畫面：取消 = 不查詢，關閉
+        {
+            DialogResult = DialogResult.Cancel;
+            return;
+        }
         ShowCurrent();
         SetMode(Mode.Browse);
     }
@@ -392,13 +470,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
     // ================= 查詢 =================
 
     /// <summary>有輸入的欄位當條件，查出符合的資料，顯示第一筆</summary>
-    private void RunQuery()
+    private void RunQuery() => RunQuery(BuildQueryCondition);
+
+    /// <summary>buildWhere 組出條件（不含 WHERE；格式不對丟 FormatException），查出符合的資料，顯示第一筆</summary>
+    private void RunQuery(Func<DbCommand, string> buildWhere)
     {
         using var cmd = Dialect.CreateCommand();
         string where;
         try
         {
-            where = BuildQueryCondition(cmd);
+            where = buildWhere(cmd);
         }
         catch (FormatException ex)
         {
@@ -406,10 +487,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
 
-        var orderColumns = HasKey ? def.MasterKeys.Select(k => k.Column).ToList() : def.Fields.Take(1).Select(f => f.Column).ToList();
-        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns()} FROM {def.FullTableName}"
+        // 排序：主鍵；沒有主鍵用第一個單頭欄位，畫面上沒有單頭欄位（只放單頭清單）時用清單的第一個欄位
+        var orderColumns = HasKey ? def.MasterKeys.Select(k => GridSql.Base(Dialect, k.Column)).ToList()
+            : def.Fields.Where(f => !f.IsCalculated).Take(1).Select(MasterExpr)
+                 .Concat(listDef?.Columns.Where(c => !c.IsJoin).Take(1).Select(c => GridSql.Base(Dialect, c.Column)) ?? Enumerable.Empty<string>())
+                 .Take(1).ToList();
+        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns()} FROM {MasterFrom()}"
                         + (where != "" ? " WHERE " + where : "")
-                        + " ORDER BY " + string.Join(", ", orderColumns.Select(Dialect.Quote))
+                        + (orderColumns.Count > 0 ? " ORDER BY " + string.Join(", ", orderColumns) : "")
                         + Dialect.Limit(5000);
         LoadResults(cmd);
     }
@@ -425,17 +510,22 @@ public partial class RuntimeForm : Form, IRecordNavigator
             MessageBox.Show($"按鈕「{b.Text}」還沒有設定 SQL。", "提醒");
             return;
         }
-        var (sql, parameters) = Dialect.PrepareUserSql(b.Sql);       // @欄位名稱 轉成這個資料庫的參數寫法
+        RunSelect(b.Sql, name =>
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return field == null ? DBNull.Value : QueryParamValue(field, GetValue(field));
+        });
+    }
+
+    /// <summary>執行使用者寫的 SELECT，結果放到單頭（清單）；@名稱 的值由 valueOf 提供（格式不對丟 FormatException）</summary>
+    private void RunSelect(string userSql, Func<string, object> valueOf)
+    {
+        var (sql, parameters) = Dialect.PrepareUserSql(userSql);     // @欄位名稱 轉成這個資料庫的參數寫法
         using var cmd = Dialect.CreateCommand(sql: sql);
         try
         {
             foreach (var (name, parameter) in parameters)
-            {
-                var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                object value = field != null ? GetValue(field) : DBNull.Value;
-                if (value == DBNull.Value && field != null && TypeHelper.IsString(field.DataType)) value = "";
-                Dialect.AddParam(cmd, parameter, value);
-            }
+                Dialect.AddParam(cmd, parameter, valueOf(name));
         }
         catch (FormatException ex)
         {
@@ -443,6 +533,42 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
         LoadResults(cmd);
+    }
+
+    /// <summary>查詢用的 @參數值：文字欄位沒填 = 空字串（LIKE '%' + @x + '%' 才會查全部），其他型別沒填 = NULL</summary>
+    private static object QueryParamValue(FieldDefinition field, object value) =>
+        value == DBNull.Value && TypeHelper.IsString(field.DataType) ? "" : value;
+
+    /// <summary>
+    /// 開啟查詢條件畫面：在條件畫面輸入條件按「查詢」後，先清空清單，再依條件查本畫面的資料表。
+    /// 按鈕有填 SQL 時改執行那個 SELECT，@欄位名稱 帶入條件畫面上的值
+    /// </summary>
+    private void QueryByConditionForm(ButtonDefinition b)
+    {
+        var input = ButtonRunner.AskConditions(b, def.SourcePath, this);
+        if (input == null) return;                                    // 取消
+        results = new DataTable();                                    // 先清空清單，查詢失敗時也不會留著上一次的結果
+        current = -1;
+        ShowCurrent();
+        SetMode(Mode.Browse);
+        if (!string.IsNullOrWhiteSpace(b.Sql))
+        {
+            RunSelect(b.Sql, name => input.Values.TryGetValue(name, out var v) ? v : DBNull.Value);
+            return;
+        }
+        RunQuery(cmd => QueryCondition.ToSql(input.Conditions, cmd, Dialect, c => ColumnExpr(c.Field.Column), input.MatchAny));
+    }
+
+    /// <summary>
+    /// 條件畫面的欄位名稱對到本畫面的寫法：本畫面的單頭欄位（含單頭 JOIN）、單頭清單的 JOIN 欄位，都沒有就當單頭資料表的欄位
+    /// </summary>
+    private string ColumnExpr(string column)
+    {
+        var field = def.Fields.FirstOrDefault(f => !f.IsCalculated && f.Column.Equals(column, StringComparison.OrdinalIgnoreCase));
+        if (field != null) return MasterExpr(field);
+        var listColumn = listDef?.Columns.FirstOrDefault(c => c.IsJoin && c.Column.Equals(column, StringComparison.OrdinalIgnoreCase));
+        if (listColumn != null) return GridSql.Joined(Dialect, listColumn.JoinAlias, listColumn.SourceColumn);
+        return GridSql.Base(Dialect, column);
     }
 
     /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆</summary>
@@ -465,27 +591,30 @@ public partial class RuntimeForm : Form, IRecordNavigator
         current = table.Rows.Count > 0 ? 0 : -1;
         ShowCurrent();
         SetMode(Mode.Browse);
-        if (table.Rows.Count == 0) MessageBox.Show("查無資料。", "查詢");
+        if (table.Rows.Count == 0)
+            MessageBox.Show(listGrid == null && def.Fields.Any(f => !f.IsJoin && openParams.ContainsKey(f.Column)) && perm.Insert
+                ? "查無資料。按「新增」可以建立一筆（帶進來的值會自動填入）。" : "查無資料。", "查詢");
         else if (table.Rows.Count >= 5000) MessageBox.Show("資料超過 5000 筆，只取前 5000 筆，請縮小查詢條件。", "查詢");
     }
 
-    /// <summary>組出查詢條件（類似 4GL 的 CONSTRUCT）：文字欄位有 * 或 ? 時用 LIKE，否則用 =</summary>
-    private string BuildQueryCondition(DbCommand cmd)
+    /// <summary>組出查詢條件（類似 4GL 的 CONSTRUCT）：文字欄位有 * 或 ? 時用 LIKE，否則用 =；單頭 JOIN 欄位用關聯資料表的欄位當條件</summary>
+    private string BuildQueryCondition(DbCommand cmd) =>
+        QueryCondition.ToSql(CollectConditions(), cmd, Dialect, c => MasterExpr(c.Field));
+
+    /// <summary>輸入框有填值的欄位轉成查詢條件；格式不對時丟 FormatException</summary>
+    private List<QueryCondition> CollectConditions()
     {
-        var where = new List<string>();
-        int i = 0;
-        foreach (var f in def.Fields)
+        var conditions = new List<QueryCondition>();
+        foreach (var f in def.Fields.Where(f => !f.IsCalculated))       // 計算欄位不是資料表的欄位，不能當條件
         {
             Control c = inputs[f];
-            string col = Dialect.Quote(f.Column), q = Dialect.Param($"q{i}");
             if (c is TextBox tb && tb.Text.Trim() != "")
             {
                 string text = tb.Text.Trim();
                 if (TypeHelper.IsString(f.DataType))
                 {
                     bool wildcard = text.Contains('*') || text.Contains('?');
-                    where.Add(wildcard ? $"{col} LIKE {q}" : $"{col} = {q}");
-                    Dialect.AddParam(cmd, $"q{i}", wildcard ? text.Replace('*', '%').Replace('?', '_') : text);
+                    conditions.Add(wildcard ? new(f, QueryOp.Like, text.Replace('*', '%').Replace('?', '_')) : new(f, QueryOp.Equal, text));
                 }
                 else
                 {
@@ -500,43 +629,24 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     }
                     // 日期只輸入到日（畫面也只顯示日期）：只比對日期部分，不管時間
                     if (TypeHelper.IsDate(f.DataType) && DateTime.TryParse(text, out var day) && day.TimeOfDay == TimeSpan.Zero)
-                    {
-                        Dialect.AddParam(cmd, $"q{i}", day);
-                        where.Add($"{Dialect.DateOnly(col)} = {q}");
-                    }
+                        conditions.Add(new(f, QueryOp.SameDate, day));
                     else
-                    {
-                        Dialect.AddParam(cmd, $"q{i}", value);
-                        where.Add($"{col} = {q}");
-                    }
+                        conditions.Add(new(f, QueryOp.Equal, value));
                 }
-                i++;
             }
             else if (c is DateTimePicker dtp && dtp.ShowCheckBox && dtp.Checked)
             {
-                if (TypeHelper.IsDate(f.DataType))
-                {
-                    where.Add($"{Dialect.DateOnly(col)} = {q}");
-                    Dialect.AddParam(cmd, $"q{i}", dtp.Value.Date);
-                }
-                else
-                {
-                    // 文字、數字欄位存的是日期格式文字（例如 yyyyMMdd），直接用同樣格式的文字比對
-                    where.Add($"{col} = {q}");
-                    Dialect.AddParam(cmd, $"q{i}", InputHelper.GetValue(f, c));
-                }
-                i++;
+                // 文字、數字欄位存的是日期格式文字（例如 yyyyMMdd），直接用同樣格式的文字比對
+                conditions.Add(TypeHelper.IsDate(f.DataType) ? new(f, QueryOp.SameDate, dtp.Value.Date) : new(f, QueryOp.Equal, InputHelper.GetValue(f, c)));
             }
             else if ((c is ComboBox || c is RadioGroup) && InputHelper.GetValue(f, c) is var comboValue && comboValue != DBNull.Value
                      && !(comboValue is string cs && cs == ""))
             {
                 // 下拉選單有選值就當條件（選空白 = 不限）
-                where.Add($"{col} = {q}");
-                Dialect.AddParam(cmd, $"q{i}", comboValue);
-                i++;
+                conditions.Add(new(f, QueryOp.Equal, comboValue));
             }
         }
-        return string.Join(" AND ", where);
+        return conditions;
     }
 
     // ================= 後台設計的按鈕 =================
@@ -559,6 +669,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
         ButtonAction.執行SQL => mode == Mode.Browse && perm.Modify,
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
+        ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && HasMasterTable,
         _ => mode == Mode.Browse,
     };
 
@@ -588,6 +699,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.執行SQL: RunCustomSql(b); break;
             case ButtonAction.開啟畫面: OpenOtherForm(b); break;
             case ButtonAction.列印報表: PrintReport(b); break;
+            case ButtonAction.開啟查詢條件畫面: QueryByConditionForm(b); break;
         }
     }
 
@@ -638,13 +750,189 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return field != null ? GetValue(field) : null;
         }, values => ButtonRunner.FillFields(values, inputs));
 
-    /// <summary>單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位</summary>
-    private string SelectColumns() =>
-        string.Join(", ", def.Fields.Select(f => f.Column)
-            .Concat(gridDef?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
-            .Concat(listDef?.Columns.Select(c => c.Column) ?? Enumerable.Empty<string>())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(Dialect.Quote));
+    /// <summary>
+    /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。
+    /// 單頭資料表固定用別名 T0；單頭 JOIN 帶進來的欄位用「關聯資料表別名.原始欄位 AS 欄位名稱」
+    /// </summary>
+    private string SelectColumns()
+    {
+        var joins = def.Joins.Select(j => j.Alias).ToHashSet();
+        var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string name, string alias, string source)
+        {
+            if (string.IsNullOrEmpty(alias)) columns.TryAdd(name, GridSql.Base(Dialect, name));
+            else if (joins.Contains(alias)) columns.TryAdd(name, $"{GridSql.Joined(Dialect, alias, source)} AS {Dialect.Quote(name)}");
+        }
+        foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
+        foreach (var master in gridDef?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
+            if (!columns.ContainsKey(master)) Add(master, null, null);
+        foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>()) Add(c.Column, c.JoinAlias, c.SourceColumn);
+        return string.Join(", ", columns.Values);
+    }
+
+    /// <summary>單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表</summary>
+    private string MasterFrom() =>
+        GridSql.From(Dialect, def.FullTableName, def.Joins,
+                     def.Fields.Select(f => f.JoinAlias).Concat(listDef?.Columns.Select(c => c.JoinAlias) ?? Enumerable.Empty<string>()).Where(a => !string.IsNullOrEmpty(a)));
+
+    /// <summary>單頭欄位在 SELECT / WHERE 裡的寫法：本身的欄位加別名 T0，JOIN 欄位用關聯資料表的欄位</summary>
+    private string MasterExpr(FieldDefinition f) =>
+        f.IsJoin ? GridSql.Joined(Dialect, f.JoinAlias, f.SourceColumn) : GridSql.Base(Dialect, f.Column);
+
+    // ================= 計算欄位：公式用到的欄位改了就重算 =================
+
+    private bool recalculating;
+
+    /// <summary>公式用到的欄位（輸入、帶出、查詢顯示）有變動時重算</summary>
+    private void HookFormulas()
+    {
+        var used = def.Fields.Where(f => f.HasFormula).SelectMany(f => SafeNames(f.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (used.Count == 0) return;
+        foreach (var f in def.Fields.Where(f => used.Contains(f.Column)))
+        {
+            EventHandler changed = (s, e) => RecalcFormulas();
+            inputs[f].TextChanged += changed;
+            if (inputs[f] is DateTimePicker dtp) dtp.ValueChanged += changed;
+            if (inputs[f] is CheckBox cb) cb.CheckedChanged += changed;
+        }
+    }
+
+    private static List<string> SafeNames(string formula)
+    {
+        try { return Formula.Names(formula); }
+        catch (FormatException) { return new List<string>(); }
+    }
+
+    /// <summary>
+    /// 重算有公式的欄位：計算欄位每個模式都算（查詢時清空）；資料表欄位設了公式，只在新增、修改時算（瀏覽時顯示資料庫裡存的值）。
+    /// 有單頭清單時欄位只當查詢條件，計算欄位也不算
+    /// </summary>
+    private void RecalcFormulas()
+    {
+        if (recalculating) return;
+        recalculating = true;
+        try
+        {
+            bool editing = mode is Mode.Insert or Mode.Modify;
+            bool showing = editing || (mode == Mode.Browse && HasCurrent && listGrid == null);
+            var cache = new Dictionary<FieldDefinition, decimal?>();
+            foreach (var f in def.Fields.Where(f => f.HasFormula && (f.IsCalculated || editing)))
+            {
+                decimal? value = showing ? Compute(f, cache, new HashSet<FieldDefinition>()) : null;
+                SetValue(f, value == null ? null : Formula.Format(value.Value, f.DataType is "int" or "bigint" or "smallint" or "tinyint" ? 0 : f.Decimals));
+            }
+        }
+        finally
+        {
+            recalculating = false;
+        }
+    }
+
+    /// <summary>算一個有公式的欄位；用到其他有公式的欄位時先算它（循環參照 = 算不出來）</summary>
+    private decimal? Compute(FieldDefinition f, Dictionary<FieldDefinition, decimal?> cache, HashSet<FieldDefinition> visiting)
+    {
+        if (cache.TryGetValue(f, out var done)) return done;
+        if (!visiting.Add(f)) throw new FormatException("公式循環參照");
+        decimal? result = Formula.Evaluate(f.Formula, name =>
+        {
+            var source = def.Fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (source == null) throw new FormatException($"公式裡的欄位「{name}」不在畫面上");
+            if (source.HasFormula && (source.IsCalculated || mode is Mode.Insert or Mode.Modify))
+                return Compute(source, cache, visiting) ?? throw new FormatException("算不出來");
+            return GetValue(source);
+        });
+        cache[f] = result;
+        return result;
+    }
+
+    // ================= 單頭 JOIN：關聯欄位改了，重新帶出 JOIN 欄位 =================
+
+    /// <summary>新增、修改時改了關聯欄位（例如廠商編號），停一下再查，不要每打一個字就查一次</summary>
+    private readonly System.Windows.Forms.Timer joinTimer = new() { Interval = 300 };
+    private readonly HashSet<GridJoinDefinition> pendingJoins = new();
+
+    /// <summary>單頭 JOIN 的關聯欄位（在畫面上的）有變動時，排程重新帶出那個 JOIN 的欄位</summary>
+    private void HookJoinRefresh()
+    {
+        var usedJoins = def.Joins.Where(j => def.Fields.Any(f => f.JoinAlias == j.Alias)).ToList();
+        if (usedJoins.Count == 0) return;
+        joinTimer.Tick += (s, e) =>
+        {
+            joinTimer.Stop();
+            RefreshJoinFields();
+        };
+        FormClosed += (s, e) => joinTimer.Dispose();
+        foreach (var f in def.Fields.Where(f => !f.IsJoin))
+        {
+            var joins = usedJoins.Where(j => j.Links.Any(l => l.Master.Equals(f.Column, StringComparison.OrdinalIgnoreCase))).ToList();
+            if (joins.Count == 0) continue;
+            EventHandler changed = (s, e) => QueueJoinRefresh(joins);
+            inputs[f].TextChanged += changed;            // 文字框、下拉選單；開窗選取帶回的值也會觸發
+            if (inputs[f] is DateTimePicker dtp) dtp.ValueChanged += changed;
+            if (inputs[f] is CheckBox cb) cb.CheckedChanged += changed;
+        }
+    }
+
+    private void QueueJoinRefresh(IEnumerable<GridJoinDefinition> joins)
+    {
+        if (mode is not (Mode.Insert or Mode.Modify)) return;      // 瀏覽時的值是查詢帶出來的，查詢條件不用帶
+        pendingJoins.UnionWith(joins.Where(j => def.Fields.Any(f => f.JoinAlias == j.Alias)));
+        if (pendingJoins.Count == 0) return;
+        joinTimer.Stop();
+        joinTimer.Start();
+    }
+
+    /// <summary>
+    /// 依關聯欄位目前的值重新帶出 JOIN 欄位；關聯欄位沒填或對不到資料 = JOIN 欄位空白。
+    /// joins = null：排程中的 JOIN（新增、修改時才帶）；force = 瀏覽時也帶（查無資料時顯示傳入參數對應的資料）
+    /// </summary>
+    private void RefreshJoinFields(IEnumerable<GridJoinDefinition> joinsToRefresh = null, bool force = false)
+    {
+        var joins = (joinsToRefresh ?? pendingJoins).ToList();
+        if (joinsToRefresh == null) pendingJoins.Clear();
+        if (!force && mode is not (Mode.Insert or Mode.Modify)) return;
+        var d = Dialect;
+        foreach (var j in joins)
+        {
+            var fields = def.Fields.Where(f => f.JoinAlias == j.Alias).ToList();
+            var links = j.Links;
+            if (links.Count == 0 || fields.Count == 0) continue;
+            try
+            {
+                var values = links.Select(l => MasterValue(l.Master)).ToList();
+                DataRow row = null;
+                if (values.All(v => v != null && v != DBNull.Value && !(v is string s && s.Trim() == "")))
+                {
+                    using var conn = d.Open(def.ConnectionString);
+                    using var cmd = d.CreateCommand(conn);
+                    for (int i = 0; i < links.Count; i++) d.AddParam(cmd, $"j{i}", values[i]);
+                    cmd.CommandText = $"SELECT {d.Top(1)}{string.Join(", ", fields.Select(f => $"{GridSql.Joined(d, j.Alias, f.SourceColumn)} AS {d.Quote(f.Column)}"))} "
+                                    + $"FROM {j.FullTableName(d)}{d.TableAlias(j.Alias)} WHERE "
+                                    + string.Join(" AND ", links.Select((l, i) => $"{GridSql.Joined(d, j.Alias, l.Detail)} = {d.Param($"j{i}")}"))
+                                    + d.Limit(1);
+                    var table = d.Fill(cmd);
+                    row = table.Rows.Count > 0 ? table.Rows[0] : null;
+                }
+                foreach (var f in fields) SetValue(f, row?[f.Column]);
+            }
+            catch (Exception)
+            {
+                // 帶不出來只是少了顯示，不影響存檔
+            }
+        }
+    }
+
+    /// <summary>單頭欄位目前的值：畫面上有這個欄位就用輸入的值（格式不對 = null），沒有就用目前這筆的值</summary>
+    private object MasterValue(string column)
+    {
+        var field = def.Fields.FirstOrDefault(f => !f.IsJoin && f.Column.Equals(column, StringComparison.OrdinalIgnoreCase));
+        if (field != null)
+        {
+            try { return GetValue(field); }
+            catch (FormatException) { return null; }
+        }
+        return mode == Mode.Modify && HasCurrent && results.Columns.Contains(column) ? results.Rows[current][column] : null;
+    }
 
     // ================= 新增、修改、刪除 =================
 
@@ -802,9 +1090,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private Dictionary<FieldDefinition, object> CollectValues()
     {
         var values = new Dictionary<FieldDefinition, object>();
+        RecalcFormulas();                                  // 有公式的欄位用最新的值存檔
         try
         {
-            foreach (var f in def.Fields.Where(f => !f.NoEntry && !f.IsIdentity))
+            foreach (var f in def.Fields.Where(f => !f.NoEntry && !f.IsIdentity && !f.IsJoin && !f.IsCalculated))   // 單頭 JOIN、計算欄位不寫回資料庫
                 values[f] = GetValue(f);
         }
         catch (FormatException ex)
@@ -840,7 +1129,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         using var conn = Dialect.Open(def.ConnectionString);
         using var cmd = Dialect.CreateCommand(conn);
-        cmd.CommandText = $"SELECT {SelectColumns()} FROM {def.FullTableName} WHERE " + AddKeyCondition(cmd, key);
+        cmd.CommandText = $"SELECT {SelectColumns()} FROM {MasterFrom()} WHERE " + AddKeyCondition(cmd, key, GridSql.BaseAlias);
         var table = Dialect.Fill(cmd);
         return table.Rows.Count > 0 ? table.Rows[0] : null;
     }
@@ -864,14 +1153,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
     }
 
-    /// <summary>組出「主鍵 = 值」條件，參數名稱用 k0、k1…</summary>
-    private string AddKeyCondition(DbCommand cmd, Dictionary<string, object> key)
+    /// <summary>組出「主鍵 = 值」條件，參數名稱用 k0、k1…；tableAlias = 查詢單頭（有別名 T0）時加在欄位前面</summary>
+    private string AddKeyCondition(DbCommand cmd, Dictionary<string, object> key, string tableAlias = null)
     {
         var conditions = new List<string>();
         int i = 0;
         foreach (var k in key)
         {
-            conditions.Add($"{Dialect.Quote(k.Key)} = {Dialect.Param($"k{i}")}");
+            conditions.Add($"{(tableAlias != null ? Dialect.Quote(tableAlias) + "." : "")}{Dialect.Quote(k.Key)} = {Dialect.Param($"k{i}")}");
             Dialect.AddParam(cmd, $"k{i}", k.Value);
             i++;
         }
@@ -888,7 +1177,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
             foreach (var f in def.Fields)
                 SetValue(f, results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
         else
+        {
             ClearInputs();
+            // 別的畫面開啟時帶進來的參數（例如廠商編號）：查無資料時也顯示在欄位上，JOIN 欄位跟著帶出，至少看得到單頭是誰
+            if (!HasCurrent && listGrid == null && FillParams()) RefreshJoinFields(def.Joins, force: true);
+        }
+        RecalcFormulas();
         LoadDetail();
         LoadSqlLists();
         SyncList();
@@ -920,6 +1214,19 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void ClearInputs()
     {
         foreach (var f in def.Fields) SetValue(f, null);
+    }
+
+    /// <summary>開啟時帶進來的參數填到同名的單頭欄位（JOIN、計算欄位除外）；有填到任何欄位回傳 true</summary>
+    private bool FillParams()
+    {
+        bool any = false;
+        foreach (var f in def.Fields.Where(f => !f.IsJoin && !f.IsCalculated))
+        {
+            if (!openParams.TryGetValue(f.Column, out var value) || value == null || value == DBNull.Value) continue;
+            SetValue(f, value);
+            any = true;
+        }
+        return any;
     }
 
     // ================= 單身 =================
