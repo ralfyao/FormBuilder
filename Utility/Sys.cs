@@ -31,6 +31,8 @@ public class SysConfig
     public string UpdateSource { get; set; }
     /// <summary>上次登入的帳號（登入畫面預先帶入）</summary>
     public string LastUser { get; set; }
+    /// <summary>上次從系統資料庫讀到的登入畫面企業識別（JSON），登入畫面先用它馬上顯示，不用等資料庫</summary>
+    public string LoginBrandingCache { get; set; }
 
     public string GetConnection()
     {
@@ -69,6 +71,77 @@ public class SysConfig
         Directory.CreateDirectory(Path.GetDirectoryName(MachinePath));
         File.WriteAllText(MachinePath, JsonSerializer.Serialize(this, JsonOptions));
     }
+}
+
+/// <summary>
+/// 登入畫面的企業識別：標題、副標題、標誌、橫幅與按鈕顏色、頁尾文字。
+/// 存在系統資料庫（SYS_Setting），由 ERP Studio「系統管理 → 登入畫面（企業識別）」編輯，所有電腦共用
+/// </summary>
+public class LoginBranding
+{
+    public const string SettingKey = "LoginBranding";
+    public static readonly Color DefaultBanner = Color.FromArgb(31, 58, 96);
+    private static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    /// <summary>大標題（公司或系統名稱），空白 = 產品名稱</summary>
+    public string Title { get; set; }
+    public string Subtitle { get; set; }
+    /// <summary>頁尾文字（例如版權宣告、客服電話）</summary>
+    public string Footer { get; set; }
+    /// <summary>標誌圖片（PNG，Base64）</summary>
+    public string Logo { get; set; }
+    /// <summary>顏色用 #RRGGBB，空白 = 預設</summary>
+    public string BannerColor { get; set; }
+    public string TextColor { get; set; }
+    public string ButtonColor { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore] public Color Banner => ParseColor(BannerColor) ?? DefaultBanner;
+    [System.Text.Json.Serialization.JsonIgnore] public Color Text => ParseColor(TextColor) ?? Color.White;
+    [System.Text.Json.Serialization.JsonIgnore] public Color? Button => ParseColor(ButtonColor);
+
+    public static Color? ParseColor(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        try { return ColorTranslator.FromHtml(html); }
+        catch (Exception) { return null; }
+    }
+
+    public static string ToHtml(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    public Image LogoImage()
+    {
+        if (string.IsNullOrEmpty(Logo)) return null;
+        try
+        {
+            using var ms = new MemoryStream(Convert.FromBase64String(Logo));
+            return new Bitmap(Image.FromStream(ms));       // 複製一份，串流關掉後圖片還能用
+        }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>設定標誌：太大的圖縮到 256 像素以內再存成 PNG（系統資料庫和每台電腦的快取都不會太大）</summary>
+    public void SetLogo(Image image)
+    {
+        if (image == null) { Logo = null; return; }
+        double scale = Math.Min(1.0, 256.0 / Math.Max(image.Width, image.Height));
+        using var bmp = new Bitmap(image, Math.Max(1, (int)(image.Width * scale)), Math.Max(1, (int)(image.Height * scale)));
+        using var ms = new MemoryStream();
+        bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+        Logo = Convert.ToBase64String(ms.ToArray());
+    }
+
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
+    public static LoginBranding FromJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new LoginBranding();
+        try { return JsonSerializer.Deserialize<LoginBranding>(json, JsonOptions) ?? new LoginBranding(); }
+        catch (Exception) { return new LoginBranding(); }
+    }
+
+    public static LoginBranding Load(string cs) => FromJson(SysDb.LoadSetting(cs, SettingKey));
+
+    public void Save(string cs, string userId) => SysDb.SaveSetting(cs, SettingKey, ToJson(), userId);
 }
 
 /// <summary>
@@ -299,6 +372,9 @@ public static class SysDb
                     Action nvarchar(20) NOT NULL, KeyText nvarchar(400) NULL, Detail nvarchar(max) NULL);
                 CREATE INDEX IX_SYS_AuditLog_LogTime ON dbo.SYS_AuditLog(LogTime);
             END
+            IF OBJECT_ID('dbo.SYS_Setting') IS NULL CREATE TABLE dbo.SYS_Setting(
+                SettingKey nvarchar(100) NOT NULL PRIMARY KEY, Value nvarchar(max) NULL,
+                UpdatedBy nvarchar(30) NULL, UpdatedAt datetime2 NOT NULL DEFAULT SYSDATETIME());
             """;
         Execute(cs, sql);
     }
@@ -509,6 +585,26 @@ public static class SysDb
             SELECT Version FROM dbo.SYS_Form WHERE FormKey = @f
             """, ("@f", formKey), ("@k", kind), ("@t", title), ("@c", content), ("@u", userId));
         return (int)cmd.ExecuteScalar();
+    }
+
+    // ================= 系統設定值 =================
+
+    /// <summary>讀一個系統設定值（例如登入畫面的企業識別）；沒有設定、或舊的系統資料庫還沒有這個資料表時回傳 null</summary>
+    public static string LoadSetting(string cs, string key)
+    {
+        var t = Query(cs, "IF OBJECT_ID('dbo.SYS_Setting') IS NOT NULL SELECT Value FROM dbo.SYS_Setting WHERE SettingKey = @k", ("@k", key));
+        return t.Rows.Count == 0 || t.Rows[0][0] == DBNull.Value ? null : (string)t.Rows[0][0];
+    }
+
+    public static void SaveSetting(string cs, string key, string value, string userId)
+    {
+        EnsureSchema(cs);          // 舊的系統資料庫自動補上 SYS_Setting
+        Execute(cs, """
+            IF EXISTS (SELECT 1 FROM dbo.SYS_Setting WHERE SettingKey = @k)
+                UPDATE dbo.SYS_Setting SET Value = @v, UpdatedBy = @u, UpdatedAt = SYSDATETIME() WHERE SettingKey = @k
+            ELSE
+                INSERT INTO dbo.SYS_Setting(SettingKey, Value, UpdatedBy) VALUES (@k, @v, @u)
+            """, ("@k", key), ("@v", value), ("@u", userId));
     }
 
     // ================= 稽核紀錄 =================

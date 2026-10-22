@@ -23,6 +23,7 @@ namespace FormBuilder
             this.miUsers = new System.Windows.Forms.ToolStripMenuItem();
             this.miMenuEditor = new System.Windows.Forms.ToolStripMenuItem();
             this.miAudit = new System.Windows.Forms.ToolStripMenuItem();
+            this.miBranding = new System.Windows.Forms.ToolStripMenuItem();
             this.miSetup = new System.Windows.Forms.ToolStripMenuItem();
             this.sepUser = new System.Windows.Forms.ToolStripSeparator();
             this.btnPassword = new System.Windows.Forms.ToolStripButton();
@@ -76,6 +77,7 @@ namespace FormBuilder
             this.miUsers,
             this.miMenuEditor,
             this.miAudit,
+            this.miBranding,
             this.miSetup});
             this.btnAdmin.Name = "btnAdmin";
             this.btnAdmin.Text = "系統管理";
@@ -99,6 +101,11 @@ namespace FormBuilder
             //
             this.miAudit.Name = "miAudit";
             this.miAudit.Text = "稽核紀錄";
+            //
+            // miBranding
+            //
+            this.miBranding.Name = "miBranding";
+            this.miBranding.Text = "登入畫面（企業識別：標題、標誌、顏色）";
             //
             // miSetup
             //
@@ -184,6 +191,7 @@ namespace FormBuilder
         private System.Windows.Forms.ToolStripMenuItem miUsers;
         private System.Windows.Forms.ToolStripMenuItem miMenuEditor;
         private System.Windows.Forms.ToolStripMenuItem miAudit;
+        private System.Windows.Forms.ToolStripMenuItem miBranding;
         private System.Windows.Forms.ToolStripMenuItem miSetup;
         private System.Windows.Forms.ToolStripSeparator sepUser;
         private System.Windows.Forms.ToolStripButton btnPassword;

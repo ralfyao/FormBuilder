@@ -73,6 +73,7 @@ public partial class MainMenuForm : Form
         miUsers.Click += (s, e) => { using var dlg = new UserAdminForm(); dlg.ShowDialog(this); };
         miMenuEditor.Click += (s, e) => { using var dlg = new MenuEditorForm(); if (dlg.ShowDialog(this) == DialogResult.OK) LoadMenu(); };
         miAudit.Click += (s, e) => new AuditLogForm().Show(this);
+        miBranding.Click += (s, e) => { using var dlg = new BrandingForm(); dlg.ShowDialog(this); };
         miSetup.Click += (s, e) => { using var dlg = new SysSetupForm(config); dlg.ShowDialog(this); };
 
         LoadMenu();

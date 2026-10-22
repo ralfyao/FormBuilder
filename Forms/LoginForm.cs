@@ -9,13 +9,27 @@ public partial class LoginForm : Form
     /// <param name="allowSetup">false = 使用者端：不顯示「系統設定」和系統資料庫的狀態</param>
     /// <param name="adminOnly">true = 只有系統管理者能登入（ERP Studio）</param>
     public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true, bool adminOnly = false)
+        : this(config, productName, allowSetup, adminOnly, preview: null) { }
+
+    /// <param name="preview">不是 null = ERP Studio 編輯企業識別時的預覽：只顯示，不能登入</param>
+    private LoginForm(SysConfig config, string productName, bool allowSetup, bool adminOnly, LoginBranding preview)
     {
         InitializeComponent();
         this.config = config;
         this.adminOnly = adminOnly;
-        lblTitle.Text = productName;
+        this.productName = productName;
+        this.allowSetup = allowSetup;
         lnkSetup.Visible = lblServer.Visible = allowSetup;
         Text = $"登入　{productName} {Updater.CurrentVersion}";
+        if (preview != null)
+        {
+            ApplyBranding(preview);
+            btnLogin.Click += (s, e) => Close();
+            return;
+        }
+        // 企業識別：先用這台電腦上次讀到的馬上顯示，再到系統資料庫讀最新的（不卡住登入畫面）
+        ApplyBranding(LoginBranding.FromJson(config.LoginBrandingCache));
+        Shown += async (s, e) => await RefreshBranding();
         txtUser.Text = config.LastUser ?? "";
         btnLogin.Click += (s, e) => DoLogin();
         lnkSetup.LinkClicked += (s, e) =>
@@ -29,6 +43,64 @@ public partial class LoginForm : Form
     }
 
     private readonly bool adminOnly;
+    private readonly string productName;
+    private readonly bool allowSetup;
+
+    /// <summary>預覽企業識別（ERP Studio 編輯時用）：跟真正的登入畫面一樣，但按「登入」只會關閉</summary>
+    public static void Preview(IWin32Window owner, LoginBranding branding, string productName)
+    {
+        using var form = new LoginForm(new SysConfig(), productName, allowSetup: false, adminOnly: false, preview: branding);
+        form.ShowDialog(owner);
+    }
+
+    private async Task RefreshBranding()
+    {
+        string cs = config.GetConnection();
+        if (cs == null) return;
+        string json;
+        try
+        {
+            json = (await Task.Run(() => LoginBranding.Load(cs))).ToJson();
+        }
+        catch (Exception) { return; }           // 連不上就用快取的（登入時會再顯示連線錯誤）
+        if (IsDisposed || json == (config.LoginBrandingCache ?? new LoginBranding().ToJson())) return;
+        ApplyBranding(LoginBranding.FromJson(json));
+        config.LoginBrandingCache = json;
+        try { config.Save(); } catch (Exception) { }
+    }
+
+    /// <summary>套用企業識別：橫幅顏色、標誌（有標誌時標題靠左放在標誌右邊）、標題、副標題、登入按鈕顏色、頁尾</summary>
+    private void ApplyBranding(LoginBranding b)
+    {
+        pnlBanner.BackColor = b.Banner;
+        lblTitle.ForeColor = lblSubtitle.ForeColor = b.Text;
+        lblTitle.Text = string.IsNullOrWhiteSpace(b.Title) ? productName : b.Title.Trim();
+        // 畫面還沒顯示前子控制項的 Visible 讀起來都是 false，所以用自己的變數判斷
+        lblSubtitle.Text = b.Subtitle?.Trim() ?? "";
+        bool hasSubtitle = lblSubtitle.Text != "";
+        lblSubtitle.Visible = hasSubtitle;
+
+        var old = picLogo.Image;
+        picLogo.Image = b.LogoImage();
+        old?.Dispose();
+        bool hasLogo = picLogo.Image != null;
+        picLogo.Visible = hasLogo;
+        int left = hasLogo ? picLogo.Right + 12 : 16;
+        var align = hasLogo ? ContentAlignment.MiddleLeft : ContentAlignment.MiddleCenter;
+        lblTitle.SetBounds(left, hasSubtitle ? 12 : 26, pnlBanner.Width - left - 16, 40);
+        lblSubtitle.SetBounds(left, 54, pnlBanner.Width - left - 16, 24);
+        lblTitle.TextAlign = lblSubtitle.TextAlign = align;
+
+        btnLogin.Look = b.Button is Color c ? new ButtonLook { BackColor = c, ForeColor = c.GetBrightness() > 0.6f ? Color.Black : Color.White } : null;
+
+        // 下方：系統資料庫狀態（只有 ERP Studio）、頁尾文字，沒有的不佔位置
+        int y = btnLogin.Bottom + 14;
+        if (allowSetup) { lblServer.Top = y; y = lblServer.Bottom + 2; }
+        lblFooter.Text = b.Footer?.Trim() ?? "";
+        lblFooter.Visible = lblFooter.Text != "";
+        if (lblFooter.Text != "") { lblFooter.Top = y; y = lblFooter.Bottom + 2; }
+        ClientSize = new Size(ClientSize.Width, Math.Max(y + 8, btnLogin.Bottom + 20));
+    }
 
     /// <summary>
     /// 「系統設定」會改這台電腦的系統資料庫連線，所以已經設定好時要先通過管理者驗證；
