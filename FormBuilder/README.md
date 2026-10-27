@@ -56,11 +56,11 @@
 | 程式 | 專案 | 誰用 | 內容 |
 |---|---|---|---|
 | ERP Studio | `FormBuilder`（本專案） | 系統管理者 | 畫面設計、列印樣板、使用者與權限、選單、稽核紀錄、系統設定 |
-| ERP 系統 | `ERPClient`（另一個專案，參考本專案） | 一般使用者 | 登入後依權限從選單開啟畫面（分頁顯示） |
+| ERP 系統 | `ERPClient`（和 FormBuilder 同一層的資料夾） | 一般使用者 | 登入後依權限從選單開啟畫面（分頁顯示） |
 
 兩個程式共用同一個系統資料庫和本機設定（`%ProgramData%\ERPStudio\config.json`）。
 
-> `ERPClient` 專案不在這個儲存庫裡，它放在原本大專案的 `ERPClient` 資料夾，用專案參考引用 FormBuilder。
+> `ERPClient` 直接用 `..\FormBuilder\` 的相對路徑編譯 FormBuilder 的原始檔（執行畫面、登入、權限等共用同一份程式碼），所以兩個資料夾要放在同一層。
 
 ## 系統需求
 
@@ -131,6 +131,34 @@ Visual Studio 的 `Properties/launchSettings.json` 已經有「ERP Studio」和�
 
 版本號在 `FormBuilder.csproj` 的 `<Version>`，自動更新靠它比對新舊版本。使用者電腦的「更新來源」設成 `-UpdateShare` 指定的共用資料夾，下次啟動就會自動更新。
 
+## 同步到 GitHub
+
+開發在公司的大儲存庫（YJF_Program_2024）進行，GitHub 的 [ralfyao/FormBuilder](https://github.com/ralfyao/FormBuilder) 只放 `FormBuilder/` 和 `ERPClient/` 兩個資料夾，保留兩個資料夾的提交歷史。
+
+`installer/split-github.sh` 會從大儲存庫的提交歷史裡，只抽出這兩個資料夾的變動，產生本機分支 `github-split`：
+
+- 不改工作目錄，也不動目前的分支。
+- 同樣的歷史每次產生的提交都一樣，所以推送是正常的往前推，不用強制推送。
+- 只有已經 commit 的內容會同步；還沒 commit 的修改不會上去。
+
+第一次使用時，在 YJF_Program_2024 根目錄加上 GitHub 的遠端：
+
+```bash
+git remote add formbuilder https://github.com/ralfyao/FormBuilder.git
+```
+
+之後每次在大儲存庫 commit 了 FormBuilder 或 ERPClient 的修改，在 YJF_Program_2024 根目錄（Git Bash）執行：
+
+```bash
+bash FormBuilder/installer/split-github.sh
+```
+
+```bash
+git push formbuilder github-split:main
+```
+
+`split-github.sh` 預設抽目前分支（HEAD）的歷史，也可以指定分支，例如 `bash FormBuilder/installer/split-github.sh 2025_NewBranch`。
+
 ## 專案結構
 
 ```
@@ -152,7 +180,7 @@ FormBuilder/
 │  ├─ Sys.cs              系統資料庫、本機設定、登入狀態
 │  ├─ Updater.cs          自動更新
 │  └─ DesignBox / FieldBox / GridBox / ButtonBox …   設計畫面上的元件
-├─ installer/             發布腳本與 Inno Setup 腳本
+├─ installer/             發布腳本、Inno Setup 腳本、同步到 GitHub 的 split-github.sh
 └─ docs/screenshots/      操作畫面截圖
 ```
 

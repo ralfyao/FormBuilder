@@ -1,0 +1,2 @@
+# bash 腳本一定要用 LF 換行，CRLF 會讓 bash 執行失敗
+*.sh text eol=lf
