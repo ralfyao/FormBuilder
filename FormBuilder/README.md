@@ -140,6 +140,7 @@ Visual Studio 的 `Properties/launchSettings.json` 已經有「ERP Studio」和�
 - 不改工作目錄，也不動目前的分支。
 - 同樣的歷史每次產生的提交都一樣，所以推送是正常的往前推，不用強制推送。
 - 只有已經 commit 的內容會同步；還沒 commit 的修改不會上去。
+- GitHub 首頁顯示的 README 是 `docs/README.github.md`，同步時會放到 GitHub 儲存庫的根目錄。要改 GitHub 首頁就改這個檔案。
 
 第一次使用時，在 YJF_Program_2024 根目錄加上 GitHub 的遠端：
 
