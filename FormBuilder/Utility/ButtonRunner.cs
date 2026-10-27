@@ -25,9 +25,13 @@ public static class ButtonRunner
     /// 對多筆資料各執行一次按鈕設定的 SQL（清單多選時），全部在同一個交易裡，任何一筆失敗就全部還原；
     /// rows 的每一個元素提供那一筆的 @欄位名稱 值
     /// </summary>
-    public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows, string formKey = null)
+    /// <param name="userSql">要執行的 SQL；null = 按鈕的「SQL」（「執行後動作」傳自己的 SQL）</param>
+    /// <param name="quiet">成功時不顯示「執行完成」（「執行後動作」成功後直接接著做後續動作）</param>
+    public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows, string formKey = null,
+                              string userSql = null, bool quiet = false)
     {
-        if (string.IsNullOrWhiteSpace(b.Sql))
+        userSql ??= b.Sql;
+        if (string.IsNullOrWhiteSpace(userSql))
         {
             MessageBox.Show($"按鈕「{b.Text}」還沒有設定 SQL。", "提醒");
             return false;
@@ -35,7 +39,7 @@ public static class ButtonRunner
         try
         {
             var d = DbDialect.Of(connectionString);
-            var (sql, parameters) = d.PrepareUserSql(b.Sql);      // @欄位名稱 轉成這個資料庫的參數寫法
+            var (sql, parameters) = d.PrepareUserSql(userSql);    // @欄位名稱 轉成這個資料庫的參數寫法
             using var conn = d.Open(connectionString);
             using var tran = conn.BeginTransaction();
             using var cmd = d.CreateCommand(conn, sql);
@@ -49,8 +53,9 @@ public static class ButtonRunner
                 affected += Math.Max(0, cmd.ExecuteNonQuery());
             }
             tran.Commit();
-            Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = b.Sql, 筆數 = rows.Count, 影響 = affected });
-            MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
+            Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = userSql, 筆數 = rows.Count, 影響 = affected });
+            if (!quiet)
+                MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
         }
         catch (FormatException ex)
@@ -63,6 +68,19 @@ public static class ButtonRunner
             MessageBox.Show("執行失敗（已全部還原）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 「執行前檢查」：rows 裡不符合 condition（DataTable 篩選寫法）的資料列，依原本順序；
+    /// 條件寫錯時丟 EvaluateException / SyntaxErrorException
+    /// </summary>
+    public static List<DataRow> FailingRows(IReadOnlyList<DataRow> rows, string condition)
+    {
+        if (rows.Count == 0) return new List<DataRow>();
+        var table = rows[0].Table.Clone();
+        foreach (var row in rows) table.ImportRow(row);
+        var passed = table.Select(condition).ToHashSet();
+        return Enumerable.Range(0, rows.Count).Where(i => !passed.Contains(table.Rows[i])).Select(i => rows[i]).ToList();
     }
 
     /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數不算）</summary>
@@ -174,10 +192,12 @@ public static class ButtonRunner
 
     /// <summary>
     /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
-    /// 「傳入參數」的 @欄位名稱 由 valueOf 取值；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn
+    /// 「傳入參數」的 @欄位名稱 由 valueOf 取值；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn。
+    /// 「存檔後關閉並重新整理」時開成獨立視窗，關閉後有存檔過就把最後存檔那筆的主鍵（刪除時是空的）交給 onSaved
     /// </summary>
     public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner,
-                                Func<string, object> valueOf = null, Action<IReadOnlyDictionary<string, object>> onReturn = null)
+                                Func<string, object> valueOf = null, Action<IReadOnlyDictionary<string, object>> onReturn = null,
+                                Action<IReadOnlyDictionary<string, object>> onSaved = null)
     {
         if (string.IsNullOrWhiteSpace(b.TargetForm))
         {
@@ -197,10 +217,24 @@ public static class ButtonRunner
             foreach (var (name, source) in ParsePairs(b.OpenParams))
                 parameters[name] = source.StartsWith('@') ? valueOf?.Invoke(source[1..]) ?? DBNull.Value : source;
             var returns = ParsePairs(b.ReturnMap).ToList();
+            if (returns.Count == 0 && b.RefreshAfterSave)
+            {
+                // 等使用者存檔（存檔成功會自動關閉）或關閉視窗，再讓原畫面重新整理
+                using var form = new RuntimeForm(target, parameters, pickMode: false)
+                {
+                    CloseAfterSave = true,
+                    ShowInTaskbar = false,
+                    StartPosition = FormStartPosition.CenterParent,
+                };
+                form.ShowDialog(owner);
+                if (form.Saved) onSaved?.Invoke(form.SavedKey ?? new Dictionary<string, object>());
+                return;
+            }
             if (returns.Count == 0)
             {
-                if (OpenInShell != null) OpenInShell(target, parameters);
-                else new RuntimeForm(target, parameters, pickMode: false).Show(owner);
+                if (OpenInShell != null && !b.OpenInNewWindow) OpenInShell(target, parameters);
+                // ERP 外框分頁裡的畫面不是頂層視窗，不能當擁有者：改用它所在的外框視窗
+                else new RuntimeForm(target, parameters, pickMode: false).Show((owner as Control)?.TopLevelControl ?? owner);
                 return;
             }
             // 選取視窗：使用者選一筆後關閉，依「回傳對應」把那筆的值帶回來

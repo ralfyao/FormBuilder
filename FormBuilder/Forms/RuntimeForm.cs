@@ -50,6 +50,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private ToolStripComboBox cboMatch;
     /// <summary>查詢條件畫面模式下使用者按「查詢」帶回的條件</summary>
     public ConditionResult ConditionResult { get; private set; }
+    /// <summary>新增、修改、刪除成功後自動關閉（別的畫面的「開啟畫面」按鈕設了「存檔後關閉並重新整理」）</summary>
+    public bool CloseAfterSave { get; set; }
+    /// <summary>這個視窗開著的期間有沒有存檔成功過（開啟它的畫面據此重新整理）</summary>
+    public bool Saved { get; private set; }
+    /// <summary>最後存檔那筆的主鍵（刪除時是 null）</summary>
+    public Dictionary<string, object> SavedKey { get; private set; }
+    /// <summary>上一次查詢的 SQL 與參數：別的畫面存檔後，用同樣的條件重新查詢</summary>
+    private (string Sql, List<(string Name, object Value)> Params)? lastQuery;
     /// <summary>目前使用者對這個畫面的權限（沒登入 = 全開）</summary>
     private FormPermission perm = FormPermission.All;
 
@@ -626,9 +634,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return GridSql.Base(Dialect, column);
     }
 
-    /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆</summary>
-    private void LoadResults(DbCommand cmd)
+    /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆；quiet = 不跳「查無資料」之類的提醒（重新整理用）</summary>
+    private void LoadResults(DbCommand cmd, bool quiet = false)
     {
+        // 記下這次的查詢，別的畫面存檔後用同樣的條件重新整理
+        lastQuery = (cmd.CommandText, cmd.Parameters.Cast<DbParameter>().Select(p => (p.ParameterName, p.Value)).ToList());
         DataTable table;
         try
         {
@@ -646,6 +656,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         current = table.Rows.Count > 0 ? 0 : -1;
         ShowCurrent();
         SetMode(Mode.Browse);
+        if (quiet) return;
         if (table.Rows.Count == 0)
             MessageBox.Show(listGrid == null && def.Fields.Any(f => !f.IsJoin && openParams.ContainsKey(f.Column)) && perm.Insert
                 ? "查無資料。按「新增」可以建立一筆（帶進來的值會自動填入）。" : "查無資料。", "查詢");
@@ -730,15 +741,27 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void RunButton(ButtonDefinition b)
     {
-        // 自訂查詢的第一下只是進入輸入條件，不用確認
-        bool startingQuery = b.Action == ButtonAction.自訂查詢 && !(mode == Mode.Query && customQuery == b);
+        // 自訂查詢的第一下只是進入輸入條件，不用確認；SQL 沒用到畫面上的欄位時沒有條件可輸入，按一下就查
+        bool oneStep = b.Action == ButtonAction.自訂查詢 && !UsesScreenFields(b.Sql);
+        bool startingQuery = b.Action == ButtonAction.自訂查詢 && !oneStep && !(mode == Mode.Query && customQuery == b);
+        if (!startingQuery && !PassesPreCheck(b)) return;
         if (!startingQuery && !ButtonRunner.Confirm(b)) return;
+        // 「執行後動作」：先對選取的資料執行 SQL，成功了才做後續的動作（例如開啟畫面）
+        if (!startingQuery && !string.IsNullOrWhiteSpace(b.PreActionSql))
+        {
+            if (!perm.Modify)
+            {
+                MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
+                return;
+            }
+            if (!RunSqlOnSelection(b, b.PreActionSql, quiet: true)) return;
+        }
         switch (b.Action)
         {
             case ButtonAction.查詢: BeginQuery(); break;
             case ButtonAction.自訂查詢:
-                if (mode == Mode.Query && customQuery == b) RunCustomQuery(b);   // 第二下：查詢
-                else BeginQuery(b);                                             // 第一下：輸入條件
+                if (oneStep || (mode == Mode.Query && customQuery == b)) RunCustomQuery(b);   // 第二下（或不用輸入條件）：查詢
+                else BeginQuery(b);                                                         // 第一下：輸入條件
                 break;
             case ButtonAction.新增: BeginInsert(); break;
             case ButtonAction.修改: BeginModify(); break;
@@ -759,29 +782,94 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>
+    /// 按鈕的「執行前檢查」：選取的資料每一筆都要符合條件才執行；沒有選取、不符合、條件寫錯時提醒並回傳 false
+    /// </summary>
+    private bool PassesPreCheck(ButtonDefinition b)
+    {
+        if (string.IsNullOrWhiteSpace(b.PreCheck)) return true;
+        var (rows, labelOf) = SelectedDataRows();
+        if (rows.Count == 0)
+        {
+            MessageBox.Show("請先在清單選取要處理的資料。", b.Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+        List<DataRow> failing;
+        try
+        {
+            failing = ButtonRunner.FailingRows(rows, b.PreCheck);
+        }
+        catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
+        {
+            MessageBox.Show($"按鈕「{b.Text}」的執行前檢查寫法有誤：{ex.Message}", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        if (failing.Count == 0) return true;
+        string message = string.IsNullOrWhiteSpace(b.PreCheckMessage) ? $"選取的資料不符合條件：{b.PreCheck}" : b.PreCheckMessage;
+        string names = string.Join("、", failing.Take(10).Select(labelOf)) + (failing.Count > 10 ? $" 等 {failing.Count} 筆" : "");
+        MessageBox.Show(message + Environment.NewLine + Environment.NewLine + "不符合的資料：" + names, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return false;
+    }
+
+    /// <summary>
+    /// 按鈕要處理的資料列：單頭清單選取的列（沒有清單時是目前這筆）；只放 SQL 清單的畫面是正在操作的清單上選取的列。
+    /// labelOf 是提醒訊息裡用來指出那一筆的文字（主鍵，沒有主鍵用第一個顯示的欄位）
+    /// </summary>
+    private (List<DataRow> Rows, Func<DataRow, string> LabelOf) SelectedDataRows()
+    {
+        if (HasMasterTable)
+        {
+            var indexes = listGrid != null ? SelectedRowIndexes() : HasCurrent ? new List<int> { current } : new List<int>();
+            var keys = def.MasterKeys.Select(k => k.Column).Where(results.Columns.Contains).ToList();
+            return (indexes.Select(i => results.Rows[i]).ToList(),
+                    r => keys.Count > 0 ? string.Join("/", keys.Select(k => Convert.ToString(r[k]))) : Convert.ToString(r[0]));
+        }
+        var grid = sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus).FirstOrDefault(g => g.SelectedCells.Count > 0);
+        if (grid == null) return (new List<DataRow>(), null);
+        var rows = grid.SelectedCells.Cast<DataGridViewCell>().Select(c => c.OwningRow).Distinct().OrderBy(r => r.Index)
+                       .Select(r => (r.DataBoundItem as DataRowView)?.Row).Where(r => r != null).ToList();
+        string first = grid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex)
+                           .Select(c => c.DataPropertyName).FirstOrDefault(n => !string.IsNullOrEmpty(n));
+        return (rows, r => first != null && r.Table.Columns.Contains(first) ? Convert.ToString(r[first]) : Convert.ToString(r[0]));
+    }
+
+    /// <summary>SQL 的 @參數有沒有用到畫面上的欄位（計算欄位不算）；沒有 = 不用先輸入條件</summary>
+    private bool UsesScreenFields(string sql) =>
+        !string.IsNullOrWhiteSpace(sql)
+        && ButtonRunner.ParameterNames(sql).Any(n => def.Fields.Any(f => !f.IsCalculated && f.Column.Equals(n, StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>
     /// 執行按鈕設定的 SQL。@欄位名稱 帶入目前這筆的值：
     /// 先找查詢結果裡的欄位，沒有就找畫面上的輸入欄位；都沒有就是 NULL
     /// </summary>
-    private void RunCustomSql(ButtonDefinition b)
+    private void RunCustomSql(ButtonDefinition b) => RunSqlOnSelection(b, b.Sql, quiet: false);
+
+    /// <summary>
+    /// 對選取的資料執行 SQL（同一個交易，失敗全部還原）：清單選了多筆時每一筆各執行一次，沒選就用目前這筆；
+    /// 只放 SQL 清單的畫面用 SQL 清單上選取的列。@欄位名稱 先找那一筆的欄位，沒有就找畫面上的輸入欄位、開啟時的傳入參數。
+    /// quiet = 成功時不顯示「執行完成」（按鈕的「執行後動作」）；回傳是否成功
+    /// </summary>
+    private bool RunSqlOnSelection(ButtonDefinition b, string sql, bool quiet)
     {
-        // 清單選了多筆時，每一筆各執行一次（同一個交易）；@欄位名稱 先找那一筆的資料，沒有就找畫面上的輸入欄位
-        var rows = SelectedRowIndexes();
-        if (rows.Count == 0 && HasCurrent) rows.Add(current);
-        Func<string, object> ValueOf(int? row) => name =>
+        object Other(string name)
         {
-            if (row != null && results.Columns.Contains(name)) return results.Rows[row.Value][name];
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (field != null) return GetValue(field);
             return openParams.TryGetValue(name, out var param) ? param : null;    // 別的畫面開啟時傳進來的參數
-        };
-        var valueOfs = rows.Count > 0 ? rows.Select(r => ValueOf(r)).ToList() : new List<Func<string, object>> { ValueOf(null) };
-        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey);
+        }
+        Func<string, object> ValueOf(DataRow row) => name => row != null && row.Table.Columns.Contains(name) ? row[name] : Other(name);
+
+        var indexes = SelectedRowIndexes();
+        if (indexes.Count == 0 && HasCurrent) indexes.Add(current);
+        var rows = HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
+        var valueOfs = rows.Count > 0 ? rows.Select(ValueOf).ToList() : new List<Func<string, object>> { ValueOf(null) };
+        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey, sql, quiet);
         // 資料可能被 SQL 改過，重讀執行過的那幾筆
-        if (ok && HasKey && rows.Count > 0)
+        if (ok && HasMasterTable && HasKey && indexes.Count > 0)
         {
-            RefreshRows(rows);
+            RefreshRows(indexes);
             SetMode(mode);
         }
+        return ok;
     }
 
     /// <summary>列印報表：印目前這筆；清單選了多筆時每筆一頁</summary>
@@ -802,8 +890,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (field != null && mode != Mode.Browse) return GetValue(field);
             if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            // 只放 SQL 清單的畫面：帶 SQL 清單上選取的那一列
+            if (!HasMasterTable && SelectedDataRows().Rows.FirstOrDefault() is { } row && row.Table.Columns.Contains(name)) return row[name];
             return field != null ? GetValue(field) : null;
-        }, values => ButtonRunner.FillFields(values, inputs));
+        }, values => ButtonRunner.FillFields(values, inputs), RefreshResults);    // 「存檔後關閉並重新整理」：開啟的畫面存檔後重新查詢
 
     /// <summary>
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。
@@ -1033,6 +1123,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             Audit.Write(def.FormKey, def.TableName, "新增", HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null,
                         values.ToDictionary(v => v.Key, v => Audit.Format(v.Value)));
             MessageBox.Show("新增完成。", "新增");
+            AfterSave(HasCurrent && HasKey ? CurrentKey() : null, closing: gridDef == null);   // 有單身時等單身存檔再關
             return true;
         }
         catch (Exception ex)
@@ -1088,6 +1179,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             ShowCurrent();
             SetMode(Mode.Browse);
             MessageBox.Show(doneMessage, Text);
+            AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
             return true;
         }
         catch (Exception ex)
@@ -1122,6 +1214,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             Audit.Write(def.FormKey, def.TableName, "刪除", Audit.KeyText(CurrentKey()), withDetail ? "連同單身明細" : null);
             RemoveCurrentRow();
             MessageBox.Show(rows > 0 ? "已刪除。" : "找不到這筆資料，可能已被其他人刪除。", "刪除");
+            AfterSave(null);
             return true;
         }
         catch (Exception ex)
@@ -1473,7 +1566,59 @@ public partial class RuntimeForm : Form, IRecordNavigator
         LoadDetail();
         SetMode(Mode.Browse);
         MessageBox.Show($"單身已儲存（{changed.Count} 筆異動）。", "單身");
+        AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
     }
+
+    /// <summary>
+    /// 存檔成功後：記下這筆的主鍵（開啟這個畫面的畫面重新整理時停在這筆）；
+    /// 「存檔後關閉並重新整理」時關閉視窗（等成功訊息關掉後才關）
+    /// </summary>
+    private void AfterSave(Dictionary<string, object> key, bool closing = true)
+    {
+        Saved = true;
+        SavedKey = key;
+        if (CloseAfterSave && closing) BeginInvoke(() => DialogResult = DialogResult.OK);
+    }
+
+    /// <summary>
+    /// 別的畫面（「存檔後關閉並重新整理」）存檔後：用上一次的條件重新查詢，停在 key 那筆；
+    /// 還沒查詢過就只查 key 那筆。只放 SQL 清單的畫面重查 SQL 清單
+    /// </summary>
+    private void RefreshResults(IReadOnlyDictionary<string, object> key)
+    {
+        if (!HasMasterTable)
+        {
+            LoadSqlLists();
+            return;
+        }
+        if (lastQuery is { } last)
+        {
+            using var cmd = Dialect.CreateCommand(sql: last.Sql);
+            foreach (var (name, value) in last.Params)
+            {
+                var p = cmd.CreateParameter();
+                p.ParameterName = name;
+                p.Value = value;
+                cmd.Parameters.Add(p);
+            }
+            LoadResults(cmd, quiet: true);
+        }
+        else if (key != null && key.Count > 0)
+            RunQuery(cmd => AddKeyCondition(cmd, key.ToDictionary(k => k.Key, k => k.Value), GridSql.BaseAlias));
+        // 停在剛存檔的那筆（刪除時 key 是空的，停在第一筆）
+        if (key == null || key.Count == 0 || !key.Keys.All(results.Columns.Contains)) return;
+        for (int i = 0; i < results.Rows.Count; i++)
+        {
+            if (!key.All(k => SameValue(results.Rows[i][k.Key], k.Value))) continue;
+            MoveTo(i);
+            return;
+        }
+    }
+
+    /// <summary>主鍵值相同（文字不分大小寫、忽略字尾空白，跟 SQL Server 比對一樣）</summary>
+    private static bool SameValue(object a, object b) =>
+        Equals(a, b) || (a is string || b is string)
+            && string.Equals(Convert.ToString(a)?.TrimEnd(), Convert.ToString(b)?.TrimEnd(), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>用資料列「改之前」的主鍵值組條件，參數名稱用 k0、k1…</summary>
     private string AddOriginalKeyCondition(DbCommand cmd, DataRow row, List<GridColumnDefinition> keys)
@@ -1746,6 +1891,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Audit.Write(def.FormKey, gridDef.TableName, "修改明細",
                             Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Column, row[k.Column]))), Audit.Changes(row, dlg.Values));
                 MessageBox.Show("明細修改完成。", "修改");
+                AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
             }
         }
         catch (Exception ex)
@@ -1928,6 +2074,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ShowCurrent();
         SetMode(Mode.Browse);
         MessageBox.Show(deleted == rows.Count ? $"已刪除 {deleted} 筆。" : $"已刪除 {deleted} 筆（有 {rows.Count - deleted} 筆找不到，可能已被其他人刪除）。", "刪除");
+        AfterSave(null);
     }
 
     /// <summary>清單上選取的資料一起生效（生效欄位改成 1）或取消生效（改成 0）</summary>

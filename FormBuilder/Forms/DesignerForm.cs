@@ -868,6 +868,10 @@ public partial class DesignerForm : Form
         selection.AddRange(list);
         foreach (var b in selection) b.IsSelected = true;
 
+        // 欄位屬性的「所屬資料表」：選到的是資料表欄位才有值（計算欄位等沒有，屬性面板就不顯示）
+        foreach (var f in selection.Select(b => b.Model).OfType<FieldDefinition>())
+            f.OwnerTable = def.TableOf(f);
+
         // 屬性面板：沒選欄位顯示畫面本身；選一個顯示它；選多個時只列共同屬性，改了會套用到全部
         if (selection.Count == 0) propertyGrid.SelectedObject = def;
         else if (selection.Count == 1) propertyGrid.SelectedObject = selection[0].Model;

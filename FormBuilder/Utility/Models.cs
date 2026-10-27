@@ -124,6 +124,24 @@ public class FormDefinition
     public string FullTableName => Dialect.Table(TableSchema, TableName);
 
     /// <summary>
+    /// 欄位所屬的資料表（Schema.資料表，給屬性面板顯示）：單頭 JOIN 的欄位是關聯資料表，其他是單頭資料表；
+    /// 計算欄位、找不到 JOIN 的欄位、畫面還沒綁資料表時回傳 null
+    /// </summary>
+    public string TableOf(FieldDefinition f)
+    {
+        if (f.IsCalculated) return null;
+        if (f.IsJoin)
+        {
+            var join = Joins.FirstOrDefault(j => string.Equals(j.Alias, f.JoinAlias, StringComparison.OrdinalIgnoreCase));
+            return join == null ? null : Display(join.TableSchema, join.TableName);
+        }
+        return Display(TableSchema, TableName);
+
+        static string Display(string schema, string table) =>
+            string.IsNullOrEmpty(table) ? null : string.IsNullOrEmpty(schema) ? table : $"{schema}.{table}";
+    }
+
+    /// <summary>
     /// 單頭主鍵：上方單頭欄位勾了主鍵的，加上單頭清單 Grid 裡的主鍵欄位。
     /// 主鍵（例如自動編號的識別碼）不一定會放在上方欄位，只放在清單裡也要算
     /// </summary>
@@ -194,9 +212,32 @@ public static class ColorText
     public static Color LabelColor(Color back) => ButtonLook.Contrast(BackOrDefault(back));
 }
 
+/// <summary>屬性面板顯示欄位屬性時：「所屬資料表」是空的（不屬於任何資料表，例如計算欄位）就不列出來</summary>
+public class FieldDefinitionConverter : TypeConverter
+{
+    public override bool GetPropertiesSupported(ITypeDescriptorContext context) => true;
+
+    public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value, Attribute[] attributes)
+    {
+        var all = TypeDescriptor.GetProperties(value, attributes, noCustomTypeDesc: true);
+        if (value is FieldDefinition { OwnerTable: { Length: > 0 } }) return all;
+        return new PropertyDescriptorCollection(all.Cast<PropertyDescriptor>()
+            .Where(p => p.Name != nameof(FieldDefinition.OwnerTable)).ToArray());
+    }
+}
+
 /// <summary>畫面上的一個欄位：對應資料表的一個欄位</summary>
+[TypeConverter(typeof(FieldDefinitionConverter))]
 public class FieldDefinition
 {
+    /// <summary>
+    /// 欄位所屬的資料表（Schema.資料表；單頭 JOIN 帶進來的欄位是關聯資料表）。
+    /// 由設計畫面選取欄位時填入（FormDefinition.TableOf），不存檔；空白（例如計算欄位）時屬性面板不顯示這一項
+    /// </summary>
+    [Category("資料"), DisplayName("所屬資料表"), ReadOnly(true), JsonIgnore,
+     Description("這個欄位來自哪一個資料表（Schema.資料表）；單頭 JOIN 帶進來的欄位顯示關聯資料表")]
+    public string OwnerTable { get; set; }
+
     [Category("資料"), DisplayName("欄位名稱"), ReadOnly(true)]
     public string Column { get; set; }
 
@@ -697,9 +738,27 @@ public class ButtonDefinition
     [Category("按鈕"), DisplayName("執行前確認訊息"), Description("有填才會先詢問使用者，按「是」才執行，例如：確定要停用這個客戶嗎？")]
     public string Confirm { get; set; }
 
+    [Category("按鈕"), DisplayName("執行前檢查"),
+     Description("有填時，按下按鈕要先在清單選取資料（沒有清單的畫面檢查目前這筆），每一筆都符合這個條件才執行，否則顯示「檢查不符訊息」。"
+               + "寫法：欄位名稱有空白或符號時用 [ ]，文字用單引號；可用 = <> > < >= <= AND OR NOT、LIKE（* 或 % 只能放在頭尾）、IN ('A','B')、"
+               + "ISNULL(欄位, 值)、LEN(欄位)。例如：核准 = 'Y' AND 數量 > 0"),
+     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string PreCheck { get; set; }
+
+    [Category("按鈕"), DisplayName("檢查不符訊息"),
+     Description("「執行前檢查」不通過時顯示的訊息，後面會自動列出不符合的資料；空白 = 顯示檢查條件")]
+    public string PreCheckMessage { get; set; }
+
+    [Category("按鈕"), DisplayName("執行後動作"),
+     Description("按下按鈕（通過執行前檢查、確認）後先執行這段 SQL，成功了才接著做「動作」（例如開啟畫面）。"
+               + "同一個交易執行，@欄位名稱 帶入選取的資料（清單選多筆時每筆各執行一次），失敗就全部還原、不做後續動作；需要編修權限。"
+               + "例如：UPDATE A材料 SET 狀態 = '處理中' WHERE 產品編號 = @產品編號"),
+     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string PreActionSql { get; set; }
+
     [Category("執行SQL"), DisplayName("SQL"),
      Description("執行SQL：同一個交易執行，@欄位名稱 帶入目前這筆的值，例如 UPDATE C客戶設定 SET 停用 = 1 WHERE 識別 = @識別。"
-               + "自訂查詢：按一下輸入條件、再按一下（或確定）查詢，@欄位名稱 帶入輸入框的值（文字沒填 = 空字串），"
+               + "自訂查詢：按一下輸入條件、再按一下（或確定）查詢，@欄位名稱 帶入輸入框的值（文字沒填 = 空字串）；SQL 沒用到畫面上的欄位時按一下就查，"
                + "例如 SELECT * FROM B廠商設定 WHERE 廠商名稱 LIKE '%' + @廠商名稱 + '%'。"
                + "開啟查詢條件畫面：可以空白（依條件畫面上的欄位自動組條件）；有填時改執行這個 SELECT，@欄位名稱 帶入條件畫面上的值"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
@@ -726,6 +785,16 @@ public class ButtonDefinition
                + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string ReturnMap { get; set; }
+
+    [Category("開啟畫面"), DisplayName("存檔後關閉並重新整理"),
+     Description("True = 開啟的畫面在新增、修改、刪除（有單身時是單身存檔）成功後自動關閉，本畫面重新查詢並停在剛存檔的那筆。"
+               + "開啟的畫面會開成獨立的視窗（不放在 ERP 外框的分頁裡）；沒有回傳對應時才有作用")]
+    public bool RefreshAfterSave { get; set; }
+
+    [Category("開啟畫面"), DisplayName("開新視窗"),
+     Description("False = ERP 系統裡開在外框的分頁（設計工具、預覽沒有外框，一律開新視窗）；True = 一律開成獨立的新視窗。"
+               + "有回傳對應（選取視窗）或「存檔後關閉並重新整理」時本來就是獨立視窗")]
+    public bool OpenInNewWindow { get; set; }
 
     [Category("列印報表"), DisplayName("列印樣板檔"),
      Description("動作 = 列印報表 時使用的樣板（*.print.json）。在設計畫面上雙擊這個按鈕，就會開啟列印樣板設計（第一次儲存時會建立樣板檔）；只寫檔名時，會找跟目前畫面同一個資料夾的檔案")]
