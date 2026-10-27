@@ -44,7 +44,7 @@ public partial class RecordEditDialog : Form
         {
             var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
-        }, values => ButtonRunner.FillFields(values, inputs)));
+        }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString));
         // 後台在編輯視窗版面放的按鈕：明細編輯只支援確定、取消、離開、執行SQL、開啟畫面
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
@@ -74,11 +74,12 @@ public partial class RecordEditDialog : Form
                         {
                             var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
-                        }, values => ButtonRunner.FillFields(values, inputs));
+                        }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
                         break;
                 }
             };
             body.Controls.Add(button);
+            ButtonRunner.ApplyFont(b, button);              // 按鈕自己設的字型、大小
         }
         // 後台在編輯視窗版面放的明細清單（唯讀，依這筆的關聯欄位值列出明細）
         foreach (var l in lists ?? new List<EditListDefinition>())

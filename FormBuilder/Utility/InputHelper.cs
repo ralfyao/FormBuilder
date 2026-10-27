@@ -66,12 +66,12 @@ public static class InputHelper
     }
 
     /// <summary>
-    /// 套用後台設定的字體大小與底色（要在 RoundedStyle.Place 之前，文字框的高度才會依字體算）；
+    /// 套用後台設定的字型、字體大小與底色（要在 RoundedStyle.Place 之前，文字框的高度才會依字體算）；
     /// baseFont = 畫面的字型，放大時沿用同一個字型
     /// </summary>
     public static void ApplyLook(FieldDefinition f, Control input, Font baseFont)
     {
-        if (f.FontSize > 0) input.Font = new Font(baseFont.FontFamily, f.FontSize, baseFont.Style);
+        if (FontPick.IsSet(f.FontName, f.FontSize)) input.Font = FontPick.With(baseFont, f.FontName, f.FontSize);
         if (!f.BackColor.IsEmpty)
         {
             input.BackColor = f.BackColor;
@@ -291,6 +291,7 @@ public static class InputHelper
         Placeholder = c.EditPlaceholder,
         FontSize = c.EditFontSize,
         LabelFontSize = c.EditLabelFontSize,
+        FontName = c.EditFontName,
         BackColorHtml = c.EditBackColorHtml,
         LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
         InputType = c.EditInputType,

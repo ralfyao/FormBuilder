@@ -188,9 +188,32 @@ public static class LabelGeometry
 {
     public static int Height(Font font) => Math.Max(FieldDefinition.DefaultHeight, font.Height + 8);
 
-    /// <summary>標籤的字型：欄位有設「標籤字體大小」就用它，沒有就跟畫面字型一樣</summary>
-    public static Font Font(FieldDefinition f, Font baseFont) =>
-        f.LabelFontSize > 0 ? new Font(baseFont.FontFamily, Math.Clamp(f.LabelFontSize, 6, 72), baseFont.Style) : baseFont;
+    /// <summary>標籤的字型：欄位有設「字型」「標籤字體大小」就用它們，沒有就跟畫面字型一樣</summary>
+    public static Font Font(FieldDefinition f, Font baseFont) => FontPick.With(baseFont, f.FontName, f.LabelFontSize);
+}
+
+/// <summary>個別元件（欄位、按鈕）自己設的字型與大小</summary>
+public static class FontPick
+{
+    /// <summary>
+    /// name 空白（或這台電腦沒有這個字型）= 用 baseFont 的字型；size &lt;= 0 = 用 baseFont 的大小；
+    /// 兩個都沒設定時回傳 baseFont 本身
+    /// </summary>
+    public static Font With(Font baseFont, string name, float size)
+    {
+        bool hasName = !string.IsNullOrWhiteSpace(name);
+        if (!hasName && size <= 0) return baseFont;
+        FontFamily family = baseFont.FontFamily;
+        if (hasName)
+        {
+            try { family = new FontFamily(name.Trim()); }
+            catch (ArgumentException) { }                   // 字型不存在（例如別台電腦沒裝）就用畫面的字型
+        }
+        return new Font(family, size > 0 ? Math.Clamp(size, 6, 72) : baseFont.Size, baseFont.Style);
+    }
+
+    /// <summary>有沒有設定自己的字型或大小</summary>
+    public static bool IsSet(string name, float size) => !string.IsNullOrWhiteSpace(name) || size > 0;
 }
 
 /// <summary>顏色與文字互轉（定義檔存文字）；沒設定 = Color.Empty，代表用預設的底色</summary>
@@ -354,7 +377,7 @@ public class FieldDefinition
     public string PickerForm { get; set; }
 
     [Category("開窗選取"), DisplayName("傳入參數"),
-     Description("開窗時帶給對方畫面的值（同按鈕的「傳入參數」）：「對方欄位=@本畫面欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+     Description("開窗時帶給對方畫面的值（同按鈕的「傳入參數」）：「對方欄位=@本畫面欄位」、「對方欄位=SQL 運算式」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
     public string PickerParams { get; set; }
 
     [Category("開窗選取"), DisplayName("回傳對應"),
@@ -384,6 +407,10 @@ public class FieldDefinition
     [Category("外觀"), DisplayName("標籤字體大小"), DefaultValue(0f),
      Description("輸入框左邊標籤文字的大小（點），0 = 跟畫面的字型大小一樣。字放大時請一起把「標籤寬度」拉寬")]
     public float LabelFontSize { get; set; }
+
+    [Category("外觀"), DisplayName("字型"), TypeConverter(typeof(FontNameConverter)),
+     Description("這個欄位（標籤與輸入框）用的字型；空白 = 跟畫面的字型一樣。可以從清單挑選電腦上有的字型，別台電腦沒有這個字型時用畫面的字型")]
+    public string FontName { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設的白底
     [Browsable(false)]
@@ -775,7 +802,10 @@ public class ButtonDefinition
     public ConditionJoin ConditionJoin { get; set; }
 
     [Category("開啟畫面"), DisplayName("傳入參數"),
-     Description("開啟時帶給對方畫面的值，用逗號分隔「對方欄位=@本畫面欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號。"
+     Description("開啟時帶給對方畫面的值，用逗號或換行分隔，每項是「對方欄位=值」，值可以是：\n"
+               + "@本畫面欄位，例如：廠商編號=@廠商編號；\n"
+               + "SQL 運算式（含 @欄位 或括號，開啟時由資料庫算出），例如：產品編號=LEFT(@產品編號, 13) + (SELECT FORMAT(ISNULL(MAX(CONVERT(INT, RIGHT(產品編號, 2))), 0) + 1, '00') FROM 產品 WHERE 產品編號 LIKE LEFT(@產品編號, 13) + '%')；\n"
+               + "固定值，例如：狀態=新建（含括號的固定文字用單引號括起來）。\n"
                + "對方畫面上有同名的欄位時，會當成查詢條件自動查詢；對方的「執行SQL」也可以用 @名稱 取得"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string OpenParams { get; set; }
@@ -830,6 +860,17 @@ public class ButtonDefinition
 
     [Category("外觀"), DisplayName("圖示"), Description("文字左邊的圖示（Segoe 圖示字型）；文字留空就只顯示圖示")]
     public ButtonIcon Icon { get; set; }
+
+    [Category("外觀"), DisplayName("字型"), TypeConverter(typeof(FontNameConverter)),
+     Description("按鈕文字的字型；空白 = 跟畫面的字型一樣。可以從清單挑選電腦上有的字型")]
+    public string FontName { get; set; }
+
+    [Category("外觀"), DisplayName("字體大小"), DefaultValue(0f),
+     Description("按鈕文字的大小（點），0 = 跟畫面的字型大小一樣。字放大時請一起把按鈕拉大")]
+    public float FontSize { get; set; }
+
+    /// <summary>按鈕文字的字型：有設定字型、大小就用設定的，沒有就用 baseFont（畫面的字型）</summary>
+    public Font FontFor(Font baseFont) => FontPick.With(baseFont, FontName, FontSize);
 
     [Category("外觀"), DisplayName("圖片檔"),
      Description("自己的圖示檔（png、jpg、bmp、ico），有設定時優先於上面的圖示；建議用完整路徑"),
@@ -950,6 +991,8 @@ public class GridColumnDefinition
     public string EditBackColorHtml { get; set; }
     /// <summary>編輯視窗標籤的字體大小（同 FieldDefinition.LabelFontSize）</summary>
     public float EditLabelFontSize { get; set; }
+    /// <summary>編輯視窗欄位（標籤與輸入框）的字型（同 FieldDefinition.FontName）</summary>
+    public string EditFontName { get; set; }
 }
 
 /// <summary>從樹狀清單拖曳整個資料表時帶的資料</summary>

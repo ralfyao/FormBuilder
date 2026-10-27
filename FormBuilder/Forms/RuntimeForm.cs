@@ -127,6 +127,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             button.Click += (s, e) => RunButton(b);
             customButtons.Add((b, button));
             body.Controls.Add(button);
+            ButtonRunner.ApplyFont(b, button);              // 按鈕自己設的字型、大小
         }
 
         gridDef = def.Grids.FirstOrDefault(g => !g.IsMasterList && !g.IsSqlList);
@@ -893,7 +894,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             // 只放 SQL 清單的畫面：帶 SQL 清單上選取的那一列
             if (!HasMasterTable && SelectedDataRows().Rows.FirstOrDefault() is { } row && row.Table.Columns.Contains(name)) return row[name];
             return field != null ? GetValue(field) : null;
-        }, values => ButtonRunner.FillFields(values, inputs), RefreshResults);    // 「存檔後關閉並重新整理」：開啟的畫面存檔後重新查詢
+        }, values => ButtonRunner.FillFields(values, inputs), RefreshResults,     // 「存檔後關閉並重新整理」：開啟的畫面存檔後重新查詢
+           def.ConnectionString);                                                 // 傳入參數的 SQL 運算式用這個畫面的資料庫計算
 
     /// <summary>
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。

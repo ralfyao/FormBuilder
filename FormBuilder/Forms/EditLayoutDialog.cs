@@ -285,6 +285,7 @@ public partial class EditLayoutDialog : Form
             Placeholder = c.EditPlaceholder,
             FontSize = c.EditFontSize,
             LabelFontSize = c.EditLabelFontSize,
+            FontName = c.EditFontName,
             BackColorHtml = c.EditBackColorHtml,
             LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
             InputType = c.EditInputType,
@@ -737,6 +738,7 @@ public partial class EditLayoutDialog : Form
                 c.EditUncheckedValue = box.Field.UncheckedValue == "0" ? null : box.Field.UncheckedValue;
                 c.EditFontSize = box.Field.FontSize;
                 c.EditLabelFontSize = box.Field.LabelFontSize;
+                c.EditFontName = string.IsNullOrWhiteSpace(box.Field.FontName) ? null : box.Field.FontName.Trim();
                 c.EditBackColorHtml = box.Field.BackColorHtml;
             }
             else
@@ -819,7 +821,7 @@ public class EditFieldView
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string PickerForm { get => field.PickerForm; set => field.PickerForm = value; }
 
-    [DisplayName("開窗傳入參數"), Description("「對方欄位=@本視窗欄位」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+    [DisplayName("開窗傳入參數"), Description("「對方欄位=@本視窗欄位」、「對方欄位=SQL 運算式」（含 @欄位 或括號，由資料庫算出）或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
     public string PickerParams { get => field.PickerParams; set => field.PickerParams = value; }
 
     [DisplayName("開窗回傳對應"), Description("「本視窗欄位=對方欄位」，可以帶回多個欄位；空白 = 只帶回這個欄位（對方同名的欄位）；只寫對方的欄位名稱 = 把它帶回這個欄位")]
@@ -830,6 +832,9 @@ public class EditFieldView
 
     [DisplayName("標籤字體大小"), DefaultValue(0f), Description("標籤文字的大小（點），0 = 跟編輯視窗的字型大小一樣。字放大時請一起把「標籤寬度」拉寬")]
     public float LabelFontSize { get => field.LabelFontSize; set => field.LabelFontSize = Math.Clamp(value, 0, 72); }
+
+    [DisplayName("字型"), TypeConverter(typeof(FontNameConverter)), Description("這個欄位（標籤與輸入框）用的字型；空白 = 跟編輯視窗的字型一樣")]
+    public string FontName { get => field.FontName; set => field.FontName = string.IsNullOrWhiteSpace(value) ? null : value.Trim(); }
 
     [DisplayName("底色"), DefaultValue(typeof(Color), ""), Description("輸入框的底色；沒設定（Empty）就是預設的白底。在屬性上按右鍵選「重設」可以還原")]
     public Color BackColor { get => field.BackColor; set => field.BackColor = value; }

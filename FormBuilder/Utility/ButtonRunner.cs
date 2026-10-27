@@ -9,6 +9,12 @@ public static class ButtonRunner
     public static Button CreateControl(ButtonDefinition b) =>
         new RoundButton { Text = b.Text, Bounds = new Rectangle(b.X, b.Y, Math.Max(b.Width, 40), Math.Max(b.Height, 20)), Look = ButtonLook.From(b) };
 
+    /// <summary>套用按鈕自己設的字型、大小（要在加進畫面之後呼叫，沒設定的部分才會沿用畫面的字型）</summary>
+    public static void ApplyFont(ButtonDefinition b, Control button)
+    {
+        if (FontPick.IsSet(b.FontName, b.FontSize)) button.Font = b.FontFor(button.Font);
+    }
+
     /// <summary>有設定確認訊息就先詢問；回傳 true = 可以執行</summary>
     public static bool Confirm(ButtonDefinition b) =>
         string.IsNullOrWhiteSpace(b.Confirm) ||
@@ -88,14 +94,71 @@ public static class ButtonRunner
         Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
              .Distinct(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>解析「名稱=值」的清單（逗號、分號或換行分隔）；左右都去掉空白，沒有等號的略過</summary>
+    /// <summary>
+    /// 解析「名稱=值」的清單（逗號、分號或換行分隔）；左右都去掉空白，沒有等號的略過。
+    /// 括號、單引號裡的逗號不算分隔（傳入參數的值可以是 SQL 運算式，例如 LEFT(@產品編號, 13)）
+    /// </summary>
     public static IEnumerable<(string Left, string Right)> ParsePairs(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) yield break;
-        foreach (string part in text.Split(new[] { ',', '，', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (string raw in SplitTopLevel(text))
         {
+            string part = raw.Trim();
             int eq = part.IndexOf('=');
             if (eq > 0) yield return (part[..eq].Trim(), part[(eq + 1)..].Trim());
+        }
+    }
+
+    /// <summary>依逗號、分號、換行切開，但括號裡、單引號字串裡的不切</summary>
+    private static IEnumerable<string> SplitTopLevel(string text)
+    {
+        int depth = 0, start = 0;
+        bool quoted = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '\'') quoted = !quoted;                   // '' 連寫會切換兩次，結果不變
+            else if (quoted) continue;
+            else if (c == '(') depth++;
+            else if (c == ')') depth = Math.Max(0, depth - 1);
+            else if (depth == 0 && c is ',' or '，' or ';' or '\n' or '\r')
+            {
+                if (i > start) yield return text[start..i];
+                start = i + 1;
+            }
+        }
+        if (start < text.Length) yield return text[start..];
+    }
+
+    private static readonly Regex FieldRef = new(@"^@[\p{L}\p{N}_]+$", RegexOptions.Compiled);
+    private static readonly Regex HasFieldRef = new(@"(?<!@)@[\p{L}\p{N}_]", RegexOptions.Compiled);
+
+    /// <summary>
+    /// 傳入參數的值怎麼算：
+    ///   @欄位名稱                     → 本畫面這個欄位的值（valueOf 提供）
+    ///   含 @欄位名稱 或括號的運算式     → SQL 運算式，由資料庫算出（SELECT 運算式），@欄位名稱 用參數帶值，例如
+    ///                                    LEFT(@產品編號, 13) + (SELECT FORMAT(ISNULL(MAX(...), 0) + 1, '00') FROM ...)
+    ///   其他                          → 固定文字（要傳含括號的固定文字時用單引號括起來，例如 'A(1)'）
+    /// </summary>
+    public static object ParamValue(string name, string source, Func<string, object> valueOf, string connectionString)
+    {
+        if (FieldRef.IsMatch(source)) return valueOf?.Invoke(source[1..]) ?? DBNull.Value;
+        if (!HasFieldRef.IsMatch(source) && !source.Contains('(')) return source;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException($"傳入參數「{name}」是 SQL 運算式，但這個畫面沒有資料庫連線。");
+        var d = DbDialect.Of(connectionString);
+        var (sql, parameters) = d.PrepareUserSql("SELECT " + source + (d.Kind == DbKind.Oracle ? " FROM DUAL" : ""));
+        try
+        {
+            using var conn = d.Open(connectionString);
+            using var cmd = d.CreateCommand(conn, sql);
+            foreach (var (field, parameter) in parameters)
+                d.AddParam(cmd, parameter, valueOf?.Invoke(field));
+            return cmd.ExecuteScalar() ?? DBNull.Value;
+        }
+        catch (Exception ex) when (ex is not FormatException)
+        {
+            throw new InvalidOperationException($"傳入參數「{name}」的 SQL 執行失敗：{ex.Message}\n{source}", ex);
         }
     }
 
@@ -192,12 +255,12 @@ public static class ButtonRunner
 
     /// <summary>
     /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
-    /// 「傳入參數」的 @欄位名稱 由 valueOf 取值；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn。
+    /// 「傳入參數」的 @欄位名稱 由 valueOf 取值，SQL 運算式用 connectionString 的資料庫計算（見 ParamValue）；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn。
     /// 「存檔後關閉並重新整理」時開成獨立視窗，關閉後有存檔過就把最後存檔那筆的主鍵（刪除時是空的）交給 onSaved
     /// </summary>
     public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner,
                                 Func<string, object> valueOf = null, Action<IReadOnlyDictionary<string, object>> onReturn = null,
-                                Action<IReadOnlyDictionary<string, object>> onSaved = null)
+                                Action<IReadOnlyDictionary<string, object>> onSaved = null, string connectionString = null)
     {
         if (string.IsNullOrWhiteSpace(b.TargetForm))
         {
@@ -215,7 +278,7 @@ public static class ButtonRunner
             }
             var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, source) in ParsePairs(b.OpenParams))
-                parameters[name] = source.StartsWith('@') ? valueOf?.Invoke(source[1..]) ?? DBNull.Value : source;
+                parameters[name] = ParamValue(name, source, valueOf, connectionString);     // @欄位、SQL 運算式或固定值
             var returns = ParsePairs(b.ReturnMap).ToList();
             if (returns.Count == 0 && b.RefreshAfterSave)
             {

@@ -93,6 +93,7 @@ public partial class RecordNavigatorDialog : Form
             button.Click += (s, e) => RunButton(b);
             customButtons.Add((b, button));
             body.Controls.Add(button);
+            ButtonRunner.ApplyFont(b, button);              // 按鈕自己設的字型、大小
         }
         // 後台在編輯視窗版面放的明細清單（唯讀，顯示目前這筆的明細）
         foreach (var l in lists ?? new List<EditListDefinition>())
@@ -277,7 +278,7 @@ public partial class RecordNavigatorDialog : Form
                     if (f != null) return InputHelper.GetValue(f, inputs[f]);
                     DataRow row = nav.CurrentRow;
                     return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-                }, values => ButtonRunner.FillFields(values, inputs));
+                }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
                 break;
         }
     }
