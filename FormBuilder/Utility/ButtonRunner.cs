@@ -166,8 +166,11 @@ public static class ButtonRunner
         return values;
     }
 
+    /// <summary>有設定「執行後動作」的欄位：開窗選取帶回值後也要執行（見 AttachPickers）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, Action> afterSelectActions = new();
+
     /// <summary>
-    /// 下拉選單的「執行後動作」：使用者選了選項後執行 SQL，@名稱 先找「執行後動作傳入參數」，再用 valueOf 取畫面上任何欄位的值；
+    /// 下拉選單的「執行後動作」：使用者選了選項（或開窗選取帶回值）後執行 SQL，@名稱 先找「執行後動作傳入參數」，再用 valueOf 取畫面上任何欄位的值；
     /// SQL 查出資料時，依「執行後動作回傳對應」填進畫面上的欄位（空白 = 同名的欄位）
     /// </summary>
     public static void AttachAfterSelect(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString, Func<string, object> valueOf,
@@ -175,8 +178,8 @@ public static class ButtonRunner
     {
         foreach (var (f, input) in inputs)
         {
-            if (string.IsNullOrWhiteSpace(f.AfterSelectSql) || input is not ComboBox combo) continue;
-            combo.SelectionChangeCommitted += (s, e) =>
+            if (string.IsNullOrWhiteSpace(f.AfterSelectSql)) continue;
+            void Run()
             {
                 try
                 {
@@ -194,7 +197,9 @@ public static class ButtonRunner
                     MessageBox.Show($"下拉選單「{f.Label ?? f.Column}」的執行後動作失敗（已全部還原）：{ex.Message}", "錯誤",
                                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
-            };
+            }
+            afterSelectActions.AddOrUpdate(input, Run);
+            if (input is ComboBox combo) combo.SelectionChangeCommitted += (s, e) => Run();
         }
     }
 
@@ -355,7 +360,8 @@ public static class ButtonRunner
 
     /// <summary>
     /// 有設定「開窗畫面」的欄位：點下拉（下拉選單）或雙擊、按 F4（其他輸入框）就開選取視窗；
-    /// 欄位不能輸入（瀏覽中、唯讀）時不開。open 負責開啟（帶傳入參數、把回傳值填回）
+    /// 欄位不能輸入（瀏覽中、唯讀）時不開。open 負責開啟（帶傳入參數、把回傳值填回）；
+    /// 帶回值後這個欄位的值有變、又有設定「執行後動作」時，接著執行
     /// </summary>
     public static void AttachPickers(IReadOnlyDictionary<FieldDefinition, Control> inputs, Action<ButtonDefinition> open)
     {
@@ -369,7 +375,12 @@ public static class ButtonRunner
             {
                 if (busy || !input.Enabled || input is TextBoxBase { ReadOnly: true }) return;
                 busy = true;
-                try { open(b); }
+                try
+                {
+                    var before = InputHelper.GetValue(f, input);
+                    open(b);
+                    if (!Equals(before, InputHelper.GetValue(f, input)) && afterSelectActions.TryGetValue(input, out var after)) after();
+                }
                 finally { busy = false; }
             }
             if (input is ComboBox combo)

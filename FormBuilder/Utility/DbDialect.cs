@@ -73,7 +73,7 @@ public abstract class DbDialect
         }
     }
 
-    /// <summary>建立命令（conn 可以先不給，之後再設定 Connection）；預覽執行（Debug）時包成 DebugCommand，出錯時顯示 SQL</summary>
+    /// <summary>建立命令（conn 可以先不給，之後再設定 Connection）；預覽執行（Debug）時包成 DebugCommand，SQL 記到「SQL 紀錄」視窗</summary>
     public DbCommand CreateCommand(DbConnection conn = null, string sql = null)
     {
         var cmd = NewCommand(conn);
@@ -89,11 +89,12 @@ public abstract class DbDialect
     {
         var table = new DataTable();
         using var adapter = Factory.CreateDataAdapter();
-        // DataAdapter 只收這個資料庫自己的命令型別：Debug 時把真正的命令交給它，執行前先記下 SQL
+        // DataAdapter 只收這個資料庫自己的命令型別：Debug 時把真正的命令交給它，執行前後記到 SQL 紀錄
         var real = cmd is DebugCommand debug ? debug.Inner : cmd;
         SqlDebug.Executing(real);
         adapter.SelectCommand = real;
         adapter.Fill(table);
+        SqlDebug.Executed($"查到 {table.Rows.Count} 筆");
         return table;
     }
 

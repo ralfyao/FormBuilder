@@ -1375,7 +1375,7 @@ public partial class DesignerForm : Form
         return FormDefinition.DefaultFolder;
     }
 
-    /// <summary>預覽執行；debug = SQL 出錯時另外顯示出錯的 SQL 與參數值（從這個預覽開出去的畫面也一樣）</summary>
+    /// <summary>預覽執行；debug = 每個執行的 SQL（參數值、結果、錯誤）都顯示在「SQL 紀錄（Debug）」視窗（從這個預覽開出去的畫面也一樣）</summary>
     private void Preview(bool debug = false)
     {
         if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList || g.IsMasterList))       // 只放 SQL 清單、單頭清單的畫面不需要欄位

@@ -173,7 +173,7 @@ namespace FormBuilder
             btnPreviewDebug.Name = "btnPreviewDebug";
             btnPreviewDebug.Size = new Size(110, 22);
             btnPreviewDebug.Text = "預覽執行(Debug)";
-            btnPreviewDebug.ToolTipText = "跟預覽執行一樣，但 SQL 出錯時另外顯示出錯的 SQL 與參數值";
+            btnPreviewDebug.ToolTipText = "跟預覽執行一樣，另外把每個執行的 SQL、參數值與結果（含錯誤）顯示在「SQL 紀錄」視窗";
             // 
             // sepAlign
             // 
