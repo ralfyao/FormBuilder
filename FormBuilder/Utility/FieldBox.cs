@@ -47,14 +47,16 @@ public class FieldBox : DesignBox
 
     public override void RefreshFromModel()
     {
-        int labelWidth = Math.Clamp(Field.LabelWidth, 0, MaxLabelWidth);
+        int labelWidth = Field.IsTextLabel ? 0 : Math.Clamp(Field.LabelWidth, 0, MaxLabelWidth);     // 文字標籤沒有另外的標籤
+        caption.Visible = !Field.IsTextLabel;
+        input.Plain = Field.IsTextLabel;
         caption.Text = Field.Label;
         caption.ForeColor = ColorText.LabelColor(Parent?.BackColor ?? Color.Empty);     // 畫面底色深時標籤改白字
         caption.Font = FontPick.IsSet(Field.FontName, Field.LabelFontSize) ? LabelGeometry.Font(Field, Font) : null;   // null = 跟畫面字型一樣
         caption.SetBounds(0, 0, labelWidth, LabelGeometry.Height(caption.Font));   // 跟執行時一樣：字放大時標籤跟著變高
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
         // 計算欄位顯示公式（沒有欄位名稱可以看）；資料表欄位設了公式就標 [公式]
-        input.Text = (Field.IsCalculated ? "= " + (Field.HasFormula ? Field.Formula : "（還沒設公式）")
+        input.Text = Field.IsTextLabel ? $"{Field.Label}  [{Field.Column}]" : (Field.IsCalculated ? "= " + (Field.HasFormula ? Field.Formula : "（還沒設公式）")
                       : string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
                    + (Field.HasFormula && !Field.IsCalculated ? " [公式]" : "")
                    + (Field.IsKey ? " [鍵]" : "") + (Field.IsJoin ? " [JOIN]" : Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")
@@ -69,7 +71,8 @@ public class FieldBox : DesignBox
                    };
         input.Fill = Field.BackColor;
         input.Font = FontPick.With(Font, Field.FontName, Field.FontSize);
-        input.ForeColor = Field.BackColor.IsEmpty ? SystemColors.GrayText : ControlPaint.Dark(ButtonLook.Contrast(Field.BackColor), 0.1f);
+        input.ForeColor = Field.IsTextLabel ? caption.ForeColor
+                        : Field.BackColor.IsEmpty ? SystemColors.GrayText : ControlPaint.Dark(ButtonLook.Contrast(Field.BackColor), 0.1f);
         input.Invalidate();
         input.SetBounds(labelWidth + 4, 0, Math.Max(Field.Width, MinInputWidth), InputHeight);
         Size = new Size(labelWidth + 4 + input.Width + 2, Math.Max(InputHeight, caption.Height) + 2);

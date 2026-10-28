@@ -338,6 +338,9 @@ public class RoundedInputPreview : Label
     /// <summary>輸入框底色；Empty = 預設的白底</summary>
     public Color Fill { get; set; }
 
+    /// <summary>true = 只畫文字、不畫圓角框（文字標籤）</summary>
+    public bool Plain { get; set; }
+
     public RoundedInputPreview()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -349,6 +352,15 @@ public class RoundedInputPreview : Label
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Plain)
+        {
+            if (!Fill.IsEmpty) using (var brush = new SolidBrush(Fill)) e.Graphics.FillRectangle(brush, ClientRectangle);
+            using var pen = new Pen(Color.Silver) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };   // 設計時看得到範圍
+            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            TextRenderer.DrawText(e.Graphics, Text, Font, Rectangle.Inflate(ClientRectangle, -2, 0), ForeColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+            return;
+        }
         RoundedStyle.DrawBox(e.Graphics, ClientRectangle, Fill.IsEmpty ? SystemColors.Window : Fill, RoundedStyle.BorderColor);
         // 拉高的輸入框跟執行時一樣是多行輸入：文字從左上角開始，可以換行
         bool tall = RoundedStyle.IsTall(Height, Font);

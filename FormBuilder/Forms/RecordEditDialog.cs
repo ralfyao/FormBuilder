@@ -18,7 +18,8 @@ public partial class RecordEditDialog : Form
 
     public RecordEditDialog(string title, List<FieldDefinition> editFields, Func<string, object> currentValue, Size? bodySize = null,
                             string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
-                            List<EditListDefinition> lists = null, Color backColor = default, Font font = null)
+                            List<EditListDefinition> lists = null, Color backColor = default, Font font = null,
+                            FormPermission permission = null)
     {
         InitializeComponent();
         body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
@@ -55,7 +56,8 @@ public partial class RecordEditDialog : Form
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
-            button.Enabled = b.Action is ButtonAction.確定 or ButtonAction.取消 or ButtonAction.離開 or ButtonAction.執行SQL or ButtonAction.開啟畫面 or ButtonAction.列印報表;
+            button.Enabled = ButtonRunner.Allowed(b, permission)            // 按鈕「需要的權限」
+                && b.Action is ButtonAction.確定 or ButtonAction.取消 or ButtonAction.離開 or ButtonAction.執行SQL or ButtonAction.開啟畫面 or ButtonAction.列印報表;
             button.Click += (s, e) =>
             {
                 if (!ButtonRunner.Confirm(b)) return;

@@ -100,6 +100,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         Color labelColor = ColorText.LabelColor(def.BackColor);              // 底色深時標籤用白字
         foreach (var f in def.Fields)
         {
+            if (!f.IsTextLabel)                              // 文字標籤本身就是文字，不另外放標籤
             body.Controls.Add(new Label
             {
                 Text = f.Label,
@@ -110,7 +111,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f);
-            if (input is RadioGroup) input.ForeColor = labelColor;
+            if (input is RadioGroup || f.IsTextLabel) input.ForeColor = labelColor;
             InputHelper.ApplyLook(f, input, body.Font);      // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
@@ -381,7 +382,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnOk.Enabled = btnCancel.Enabled = !browsing;
         btnExit.Enabled = browsing;
 
-        foreach (var f in def.Fields)
+        foreach (var f in def.Fields.Where(f => !f.IsTextLabel))        // 文字標籤一直是顯示文字，不用切換能不能輸入
         {
             // 查詢時每個欄位都能下條件（計算欄位除外）；新增、修改時 NOENTRY、唯讀、自動編號、單頭 JOIN 與有公式的欄位不能輸入（唯讀、公式的值照樣存檔），修改時主鍵也不能改
             bool editable = mode switch
@@ -408,7 +409,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         lblPosition.Text = HasCurrent ? $"第 {current + 1} / {results.Rows.Count} 筆" : "";
         // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位
         foreach (var (b, button) in customButtons)
-            button.Enabled = ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action);
+            button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
+                && (ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         if (mode == Mode.Detail) detailGrid.Focus();
         else if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
@@ -750,6 +752,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void RunButton(ButtonDefinition b)
     {
+        if (!ButtonRunner.CheckAllowed(b, perm)) return;
         // 自訂查詢的第一下只是進入輸入條件，不用確認；SQL 沒用到畫面上的欄位時沒有條件可輸入，按一下就查
         bool oneStep = b.Action == ButtonAction.自訂查詢 && !UsesScreenFields(b.Sql);
         bool startingQuery = b.Action == ButtonAction.自訂查詢 && !oneStep && !(mode == Mode.Query && customQuery == b);
@@ -1336,7 +1339,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (HasCurrent && listGrid == null)
             // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
             // 只當查詢條件的欄位不顯示資料
-            foreach (var f in def.Fields)
+            foreach (var f in def.Fields.Where(f => !f.IsTextLabel))    // 文字標籤保留原本的文字（或 SQL 填進來的值）
                 SetValue(f, !f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
         else
         {
@@ -1375,7 +1378,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void ClearInputs()
     {
-        foreach (var f in def.Fields) SetValue(f, null);
+        foreach (var f in def.Fields.Where(f => !f.IsTextLabel)) SetValue(f, null);     // 文字標籤保留文字
     }
 
     /// <summary>開啟時帶進來的參數填到同名的單頭欄位（JOIN、計算欄位除外）；有填到任何欄位回傳 true</summary>
@@ -1777,6 +1780,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         public bool CanDelete => Main.CanDelete;
         public bool CanPrint => Main.CanPrint;
         public bool CanApprove => Main.CanApprove;
+        public FormPermission Permission => Main.Permission;
 
         public void MoveTo(int index)
         {
@@ -1829,6 +1833,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     bool IRecordNavigator.CanDelete => HasKey && perm.Delete;
     bool IRecordNavigator.CanPrint => perm.Print;
     bool IRecordNavigator.CanApprove => HasKey && perm.Approve;
+    FormPermission IRecordNavigator.Permission => perm;
     void IRecordNavigator.MoveTo(int index) => MoveTo(index);
     bool IRecordNavigator.Refresh()
     {
@@ -1872,7 +1877,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column) || (c.IsKey && !keyEditable)))
             .ToList();
         using var dlg = new RecordEditDialog($"{(inDetailMode ? "編輯" : "修改")}明細：{gridDef.Title ?? gridDef.TableName}", fields, col => row[col],
-                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, gridDef.EditFont(body.Font));
+                                             gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, gridDef.EditFont(body.Font), perm);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Values.Count == 0) return;
 
         if (inDetailMode)

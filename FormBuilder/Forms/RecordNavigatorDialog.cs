@@ -19,6 +19,8 @@ public interface IRecordNavigator
     bool CanPrint { get; }
     /// <summary>有核准權限（生效 / 取消生效）</summary>
     bool CanApprove { get; }
+    /// <summary>使用者對這個畫面的權限（按鈕「需要的權限」用）</summary>
+    FormPermission Permission { get; }
     void MoveTo(int index);
     /// <summary>重讀目前這筆；已被刪除時回傳 false</summary>
     bool Refresh();
@@ -212,7 +214,8 @@ public partial class RecordNavigatorDialog : Form
                          : "沒有資料，可以按「新增」";
         // 選取視窗按鈕（有回傳對應）要在新增、修改時才能按，帶回的值填進正在輸入的欄位
         foreach (var (b, button) in customButtons)
-            button.Enabled = ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action);
+            button.Enabled = ButtonRunner.Allowed(b, nav.Permission)       // 按鈕「需要的權限」：沒有就一直是灰的
+                && (ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action));
         if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
     }
 
@@ -239,6 +242,7 @@ public partial class RecordNavigatorDialog : Form
 
     private void RunButton(ButtonDefinition b)
     {
+        if (!ButtonRunner.CheckAllowed(b, nav.Permission)) return;
         if (!ButtonRunner.Confirm(b)) return;
         switch (b.Action)
         {

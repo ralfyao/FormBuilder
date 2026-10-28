@@ -16,6 +16,26 @@ public static class ButtonRunner
         if (FontPick.IsSet(b.FontName, b.FontSize)) button.Font = b.FontFor(button.Font);
     }
 
+    /// <summary>使用者對這個畫面的權限，有沒有按鈕「需要的權限」勾選的每一項（沒勾 = 不限制）</summary>
+    public static bool Allowed(ButtonDefinition b, FormPermission p)
+    {
+        var need = b.RequiredPermissions;
+        if (need == ButtonPermission.無 || p == null) return true;
+        return (!need.HasFlag(ButtonPermission.開啟) || p.Open)
+            && (!need.HasFlag(ButtonPermission.編修) || p.Modify)
+            && (!need.HasFlag(ButtonPermission.核准) || p.Approve)
+            && (!need.HasFlag(ButtonPermission.報表) || p.Print)
+            && (!need.HasFlag(ButtonPermission.輸出) || p.Export);
+    }
+
+    /// <summary>沒有權限時的提醒（按鈕變灰之外，萬一還是觸發了也擋下來）；回傳 true = 可以執行</summary>
+    public static bool CheckAllowed(ButtonDefinition b, FormPermission p)
+    {
+        if (Allowed(b, p)) return true;
+        MessageBox.Show($"你沒有按「{b.Text}」需要的權限（{b.RequiredPermissions}），請洽系統管理者。", "提醒");
+        return false;
+    }
+
     /// <summary>有設定確認訊息就先詢問；回傳 true = 可以執行</summary>
     public static bool Confirm(ButtonDefinition b) =>
         string.IsNullOrWhiteSpace(b.Confirm) ||

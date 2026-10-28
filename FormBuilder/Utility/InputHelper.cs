@@ -54,6 +54,9 @@ public static class InputHelper
                 return CreateCheckBox(f);
             case InputKind.日期選擇:
                 return CreateDatePicker(f);
+            case InputKind.文字標籤:
+                // 文字標籤：顯示「標籤」的文字，SQL 的回傳對應可以把值填進來（SetValue 改 Text）
+                return new Label { Text = f.Label ?? "", AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.Transparent };
         }
         if (TypeHelper.IsBool(f.DataType))
             return new CheckBox();
@@ -327,6 +330,7 @@ public static class InputHelper
         Color labelColor = ColorText.LabelColor(body.BackColor);       // 底色深時標籤用白字
         foreach (var f in fields)
         {
+            if (!f.IsTextLabel)                              // 文字標籤本身就是文字，不另外放標籤
             body.Controls.Add(new Label
             {
                 Text = f.Label,
@@ -337,7 +341,7 @@ public static class InputHelper
                 Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f, connectionString);
-            if (input is RadioGroup) input.ForeColor = labelColor;
+            if (input is RadioGroup || f.IsTextLabel) input.ForeColor = labelColor;
             ApplyLook(f, input, body.Font);                  // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;

@@ -235,7 +235,10 @@ public static class ColorText
     public static Color LabelColor(Color back) => ButtonLook.Contrast(BackOrDefault(back));
 }
 
-/// <summary>屬性面板顯示欄位屬性時：「所屬資料表」是空的（不屬於任何資料表，例如計算欄位）就不列出來</summary>
+/// <summary>
+/// 屬性面板顯示欄位屬性時：「所屬資料表」是空的（不屬於任何資料表，例如計算欄位）就不列出來；
+/// 「變數名稱」只有工具箱加入的元件（計算欄位、文字標籤）才列出來
+/// </summary>
 public class FieldDefinitionConverter : TypeConverter
 {
     public override bool GetPropertiesSupported(ITypeDescriptorContext context) => true;
@@ -243,9 +246,12 @@ public class FieldDefinitionConverter : TypeConverter
     public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value, Attribute[] attributes)
     {
         var all = TypeDescriptor.GetProperties(value, attributes, noCustomTypeDesc: true);
-        if (value is FieldDefinition { OwnerTable: { Length: > 0 } }) return all;
+        var f = value as FieldDefinition;
+        bool hideOwner = f is not { OwnerTable.Length: > 0 };
+        bool hideVariable = f is not { IsCalculated: true };       // 變數名稱只有工具箱加入的元件（計算欄位、文字標籤）可以改
         return new PropertyDescriptorCollection(all.Cast<PropertyDescriptor>()
-            .Where(p => p.Name != nameof(FieldDefinition.OwnerTable)).ToArray());
+            .Where(p => !(hideOwner && p.Name == nameof(FieldDefinition.OwnerTable))
+                     && !(hideVariable && p.Name == nameof(FieldDefinition.VariableName))).ToArray());
     }
 }
 
@@ -263,6 +269,27 @@ public class FieldDefinition
 
     [Category("資料"), DisplayName("欄位名稱"), ReadOnly(true)]
     public string Column { get; set; }
+
+    /// <summary>工具箱加入的元件（文字標籤、計算欄位）的名稱 = Column；SQL 的 @名稱、「回傳對應」、公式都用這個名稱</summary>
+    [Category("資料"), DisplayName("變數名稱"), JsonIgnore,
+     Description("這個元件的名稱：SQL 用 @變數名稱 取它的值，下拉選單、按鈕的「回傳對應」寫「變數名稱=SQL 欄位」就能把 SQL 查出來的值填進來。"
+               + "不能跟畫面上其他欄位同名")]
+    public string VariableName
+    {
+        get => Column;
+        set
+        {
+            string name = value?.Trim() ?? "";
+            if (name == "") throw new ArgumentException("變數名稱不能空白。");
+            if (name.IndexOfAny(new[] { '@', '=', ',', '，', ';', '[', ']', '\'', ' ' }) >= 0)
+                throw new ArgumentException("變數名稱不能有空白或 @ = , ; [ ] ' 這些符號。");
+            Column = name;
+        }
+    }
+
+    /// <summary>工具箱加入的文字標籤（只顯示文字，不對應資料表）</summary>
+    [Browsable(false), JsonIgnore]
+    public bool IsTextLabel => IsCalculated && InputType == InputKind.文字標籤;
 
     [Category("資料"), DisplayName("資料型別"), ReadOnly(true)]
     public string DataType { get; set; }
@@ -726,6 +753,20 @@ public enum InputKind
     勾選框,
     /// <summary>選項按鈕（RadioButton）：選項同下拉選單的固定選項 / 選項 SQL，一次只能選一個</summary>
     選項按鈕,
+    /// <summary>文字標籤（Label）：工具箱加入的，只顯示文字，不對應資料表；SQL 的「回傳對應」可以用變數名稱把值填進來</summary>
+    文字標籤,
+}
+
+/// <summary>按鈕需要的權限（對應「使用者、角色與權限」的五個勾選欄），可以複選</summary>
+[Flags]
+public enum ButtonPermission
+{
+    無 = 0,
+    開啟 = 1,
+    編修 = 2,
+    核准 = 4,
+    報表 = 8,
+    輸出 = 16,
 }
 
 /// <summary>按鈕按下去要做的事</summary>
@@ -789,6 +830,12 @@ public class ButtonDefinition
     [Category("按鈕"), DisplayName("檢查不符訊息"),
      Description("「執行前檢查」不通過時顯示的訊息，後面會自動列出不符合的資料；空白 = 顯示檢查條件")]
     public string PreCheckMessage { get; set; }
+
+    [Category("按鈕"), DisplayName("需要的權限"), DefaultValue(ButtonPermission.無),
+     Editor(typeof(FlagsCheckEditor), typeof(System.Drawing.Design.UITypeEditor)),
+     Description("按右邊的下拉箭頭勾選：使用者在「使用者、角色與權限」裡，對這個畫面要有勾選的每一項權限（開啟、編修、核准、報表、輸出）才能按這個按鈕，"
+               + "沒有權限時按鈕會變灰。不勾 = 不另外限制。系統管理者與沒登入（畫面設計的預覽執行）不受限")]
+    public ButtonPermission RequiredPermissions { get; set; }
 
     [Category("按鈕"), DisplayName("執行後動作"),
      Description("按下按鈕（通過執行前檢查、確認）後先執行這段 SQL，成功了才接著做「動作」（例如開啟畫面）。"

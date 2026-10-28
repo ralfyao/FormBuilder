@@ -74,6 +74,7 @@ public partial class DesignerForm : Form
         // ---- 左上「工具箱」頁籤 ----
         toolbox.AddEntry("SqlList", "SQL 清單（唯讀明細）");
         toolbox.AddEntry("Calc", "計算欄位（公式）");
+        toolbox.AddEntry("Label", "文字標籤 (Label)");
         FormulaEditor.Fields = () => def.Fields;                // 屬性面板「公式」的編輯視窗列出畫面上的欄位
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
@@ -131,6 +132,16 @@ public partial class DesignerForm : Form
             ControlPaint.DrawSizeGrip(e.Graphics, canvas.BackColor, canvas.ClientSize.Width - 16, canvas.ClientSize.Height - 16, 16, 16);
         propertyGrid.PropertyValueChanged += (s, e) =>
         {
+            // 變數名稱不能跟畫面上其他欄位（或單頭資料表的欄位）同名
+            if (e.ChangedItem?.PropertyDescriptor?.Name == nameof(FieldDefinition.VariableName)
+                && selection.FirstOrDefault()?.Model is FieldDefinition renamed
+                && (def.Fields.Any(f => f != renamed && f.Column.Equals(renamed.Column, StringComparison.OrdinalIgnoreCase))
+                    || MasterTableColumns().Any(c => c.Name.Equals(renamed.Column, StringComparison.OrdinalIgnoreCase))))
+            {
+                MessageBox.Show($"「{renamed.Column}」已經有其他欄位在用了，請換一個變數名稱。", "提醒");
+                renamed.Column = e.OldValue as string ?? renamed.Column;
+                propertyGrid.Refresh();
+            }
             foreach (var box in selection) box.RefreshFromModel();     // 多選時屬性面板會一次改全部
             ApplyCanvasSize();
             UpdateStatus(e.ChangedItem?.PropertyDescriptor?.Name == nameof(FieldDefinition.Formula) ? "公式已更新" : null);
@@ -601,6 +612,7 @@ public partial class DesignerForm : Form
         else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
         else if (kind == "SqlList") AddSqlList(location);
         else if (kind == "Calc") AddCalcField(location);
+        else if (kind == "Label") AddTextLabel(location);
     }
 
     /// <summary>加入計算欄位：不對應資料表的欄位，依公式（畫面欄位、數字做加減乘除）算出來顯示，不會存檔</summary>
@@ -633,6 +645,35 @@ public partial class DesignerForm : Form
         SelectBox(AddBox(field));
         ApplyCanvasSize();
         UpdateStatus("已加入計算欄位：在屬性面板改「標籤」；要改公式按「公式」右邊的「…」");
+    }
+
+    /// <summary>
+    /// 加入文字標籤：只顯示文字（屬性面板的「標籤」），不對應資料表；有「變數名稱」，
+    /// 下拉選單、按鈕的 SQL「回傳對應」寫「變數名稱=SQL 欄位」就能把查出來的值顯示在這裡
+    /// </summary>
+    private void AddTextLabel(Point location)
+    {
+        int n = 1;
+        var used = new HashSet<string>(UsedFieldNames(), StringComparer.OrdinalIgnoreCase);
+        while (used.Contains($"標籤{n}")) n++;
+        var field = new FieldDefinition
+        {
+            Column = $"標籤{n}",
+            DataType = "nvarchar",
+            IsNullable = true,
+            NoEntry = true,                                          // 只顯示，不寫回資料庫
+            IsCalculated = true,                                     // 不是資料表的欄位：不查詢、不存檔、不當條件
+            InputType = InputKind.文字標籤,
+            Label = "文字",
+            LabelWidth = 0,
+            X = location.X,
+            Y = location.Y,
+            Width = 120,
+        };
+        def.Fields.Add(field);
+        SelectBox(AddBox(field));
+        ApplyCanvasSize();
+        UpdateStatus($"已加入文字標籤「{field.Column}」：在屬性面板改「標籤」（顯示的文字）與「變數名稱」");
     }
 
     /// <summary>加入 SQL 清單：資料來自自己寫的 SELECT（唯讀），可以用 @單頭欄位，切換單頭時重查</summary>
