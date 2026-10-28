@@ -47,6 +47,13 @@ public partial class MainMenuForm : Form
         };
 
         miDesigner.Click += (s, e) => OpenDesigner();
+        // 全部發布：本機 Forms 資料夾裡的畫面定義檔全部發布到系統（放在「畫面設計」下面）
+        if (user.IsAdmin)
+            btnAdmin.DropDownItems.Insert(btnAdmin.DropDownItems.IndexOf(miDesigner) + 1,
+                new ToolStripMenuItem("全部發布（本機 Forms 資料夾的畫面）…", null, (s, e) => PublishAll())
+                {
+                    ToolTipText = "把 Forms 資料夾裡所有的畫面定義檔（*.json）連同用到的列印樣板發布到系統；內容跟系統裡一樣的略過",
+                });
         // 管理者：選單上按右鍵 → 開啟 / 設計這個畫面
         if (user.IsAdmin)
         {
@@ -60,6 +67,7 @@ public partial class MainMenuForm : Form
             nodeMenu.Items.Add(new ToolStripSeparator());
             // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
             nodeMenu.Items.Add("新增表單", null, (s, e) => new DesignerForm().Show());
+            nodeMenu.Items.Add("全部發布…", null, (s, e) => PublishAll());
             nodeMenu.Opening += (s, e) =>
             {
                 // 在空白處按右鍵：取消選取（新增資料夾會加在最上層）
@@ -324,6 +332,70 @@ public partial class MainMenuForm : Form
         {
             Cursor = Cursors.Default;
         }
+    }
+
+    // ================= 管理者：全部發布 =================
+
+    /// <summary>
+    /// 全部發布：本機 Forms 資料夾裡的畫面定義檔（*.json，列印樣板 *.print.json 除外）全部發布到系統，
+    /// 代號 = 檔名，按鈕用到的列印樣板一起發布（同畫面設計的「發布到系統」）；內容跟系統裡已發布的一樣就略過，不增加版本
+    /// </summary>
+    private void PublishAll()
+    {
+        if (!SysContext.User.IsAdmin) return;
+        string folder = FormDefinition.DefaultFolder;
+        var files = Directory.Exists(folder)
+            ? Directory.GetFiles(folder, "*.json").Where(f => !f.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f).ToList()
+            : new List<string>();
+        if (files.Count == 0)
+        {
+            MessageBox.Show($"{folder} 裡沒有畫面定義檔。", "全部發布");
+            return;
+        }
+        if (MessageBox.Show($"要把 {folder} 裡的 {files.Count} 個畫面定義檔全部發布到系統嗎？{Environment.NewLine}{Environment.NewLine}"
+                            + "代號 = 檔名；內容跟系統裡一樣的略過。第一次發布的畫面會出現在「未放進選單的畫面」。",
+                            "全部發布", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        var cs = SysContext.Connection;
+        var done = new List<string>();
+        var failed = new List<string>();
+        var notes = new List<string>();
+        int unchanged = 0;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            foreach (var file in files)
+            {
+                string key = Path.GetFileNameWithoutExtension(file);
+                try
+                {
+                    var form = FormDefinition.Load(file);
+                    // 跟發布時一樣先套用標題（沒改標題就用檔名），再跟系統裡的內容比較
+                    var publishing = FormDefinition.FromJson(form.ToJson());
+                    publishing.Title = DesignerForm.PublishTitle(form, key);
+                    if (SysDb.LoadContent(cs, key) == publishing.ToJson())
+                    {
+                        unchanged++;
+                        continue;
+                    }
+                    done.Add($"「{publishing.Title}」（{key}）第 {DesignerForm.PublishOne(cs, key, form, file, notes)} 版");
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"{key}：{ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+        LoadMenu();
+        string NewLines(IEnumerable<string> lines) => string.Join(Environment.NewLine, lines.Select(x => "　" + x));
+        MessageBox.Show($"已發布 {done.Count} 個畫面，{unchanged} 個沒有變更略過" + (failed.Count > 0 ? $"，{failed.Count} 個失敗" : "") + "。"
+                        + (done.Count > 0 ? Environment.NewLine + Environment.NewLine + NewLines(done) : "")
+                        + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "失敗：" + Environment.NewLine + NewLines(failed) : "")
+                        + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + NewLines(notes.Distinct()) : ""),
+                        "全部發布", MessageBoxButtons.OK, failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
     // ================= 管理者：重新命名 =================

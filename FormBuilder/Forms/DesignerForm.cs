@@ -858,7 +858,9 @@ public partial class DesignerForm : Form
         var masterColumns = def.Fields.Select(f => f.Column)
             .Concat(defTableColumns.Select(c => c.Name)).Distinct().ToList();
         // 版面設計器的「檔案 → 儲存」直接存這個畫面定義檔；畫面字型給版面設計器預覽用
-        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString, saveForm: () => SaveForm(false), screenFont: def.ScreenFont(Font));
+        // 單頭清單的 JOIN 加在單頭主查詢上（畫面的單頭 JOIN），帶進來的欄位名稱不能跟單頭欄位重複
+        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString, saveForm: () => SaveForm(false), screenFont: def.ScreenFont(Font),
+                                              masterList: box.GridDef.IsMasterList ? (def, UsedFieldNames()) : null);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         box.RefreshFromModel();
         propertyGrid.Refresh();
@@ -1246,11 +1248,11 @@ public partial class DesignerForm : Form
             .Where(b => b != null).ToList();
 
     /// <summary>發布時的畫面名稱：沒有改過標題（還是預設的「新畫面」或空白）就用檔名（不含副檔名）</summary>
-    private static string PublishTitle(FormDefinition form, string key) =>
+    internal static string PublishTitle(FormDefinition form, string key) =>
         string.IsNullOrWhiteSpace(form.Title) || form.Title == new FormDefinition().Title ? key : form.Title;
 
     /// <summary>發布一個畫面和它的按鈕用到的列印樣板，回傳畫面的版本</summary>
-    private static int PublishOne(string cs, string key, FormDefinition form, string path, List<string> notes)
+    internal static int PublishOne(string cs, string key, FormDefinition form, string path, List<string> notes)
     {
         string folder = Path.GetDirectoryName(path);
         string title = PublishTitle(form, key);

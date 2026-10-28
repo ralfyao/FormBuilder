@@ -17,19 +17,32 @@ public partial class GridColumnsDialog : Form
     private readonly HashSet<GridColumnDefinition> addedColumns = new();
     private readonly string connectionString;
     private string contextAlias;
+    /// <summary>單頭清單：JOIN 加在單頭（畫面的 Joins）上，單頭主查詢一起查；null = 一般 Grid，JOIN 加在 Grid 自己身上</summary>
+    private readonly List<GridJoinDefinition> masterJoins;
+    /// <summary>單頭清單：畫面上的單頭欄位還在用的 JOIN（不能在這裡移除）</summary>
+    private readonly HashSet<string> lockedAliases = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>單頭清單：單頭已經用掉的欄位名稱（JOIN 帶進來的欄位不能重複）</summary>
+    private readonly List<string> usedNames = new();
 
     /// <param name="connectionString">「JOIN 其他資料表」、「編輯視窗版面」設計器的「資料表」頁籤要用的連線字串</param>
     /// <param name="forEditList">true = 設定編輯視窗上的明細清單（沒有「編輯視窗版面」按鈕）</param>
     /// <param name="saveForm">編輯視窗版面設計器「檔案 → 儲存」要呼叫的存檔動作；null = 不能存檔</param>
     /// <param name="screenFont">畫面的字型（編輯視窗沒設定字型時跟它一樣）</param>
+    /// <param name="masterList">單頭清單才要傳：畫面定義（JOIN 寫到畫面的單頭 JOIN）與單頭已經用掉的欄位名稱</param>
     public GridColumnsDialog(GridDefinition gridDefinition, List<string> masterColumns, string connectionString = null, bool forEditList = false,
-                             Action saveForm = null, Font screenFont = null)
+                             Action saveForm = null, Font screenFont = null, (FormDefinition Form, IEnumerable<string> UsedNames)? masterList = null)
     {
         InitializeComponent();
         grid = gridDefinition;
         this.connectionString = connectionString;
         workColumns = grid.Columns.ToList();
-        workJoins = grid.Joins.Select(j => j.Clone()).ToList();
+        if (grid.IsMasterList && masterList is { } m)
+        {
+            masterJoins = m.Form.Joins;
+            lockedAliases.UnionWith(m.Form.Fields.Where(f => f.IsJoin).Select(f => f.JoinAlias));
+            usedNames.AddRange(m.UsedNames);
+        }
+        workJoins = (masterJoins ?? grid.Joins).Select(j => j.Clone()).ToList();
         Text = $"{(forEditList ? "明細清單欄位設定" : "單身欄位設定")}：{grid.TableSchema}.{grid.TableName}";
         btnLayout.Visible = !forEditList;
 
@@ -58,7 +71,7 @@ public partial class GridColumnsDialog : Form
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
 
         // ---- JOIN 其他資料表：帶進來的欄位是唯讀的，只能改顯示、標題、寬度 ----
-        btnJoin.Visible = !grid.IsMasterList;               // 單頭清單的資料來自單頭主查詢，不支援 JOIN
+        btnJoin.Visible = !grid.IsMasterList || masterJoins != null;     // 單頭清單的 JOIN 加在單頭主查詢上
         btnJoin.Click += (s, e) => AddJoin();
         dgvColumns.CellBeginEdit += (s, e) =>
         {
@@ -121,7 +134,7 @@ public partial class GridColumnsDialog : Form
         while (workJoins.Any(j => j.Alias == $"J{n}")) n++;
         var localColumns = workColumns.Where(c => !c.IsJoin)
             .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, IsPrimaryKey = c.IsKey }).ToList();
-        using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, workColumns.Select(c => c.Column));
+        using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, workColumns.Select(c => c.Column).Concat(usedNames));
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         workJoins.Add(dlg.Join);
         foreach (var c in dlg.NewColumns)
@@ -136,6 +149,11 @@ public partial class GridColumnsDialog : Form
     private void RemoveJoin(string alias)
     {
         if (alias == null) return;
+        if (lockedAliases.Contains(alias))
+        {
+            MessageBox.Show($"畫面上的單頭欄位還在用 JOIN {alias}，不能在這裡移除。不要顯示的話，取消勾選「顯示」就好。", "提醒");
+            return;
+        }
         var columns = workColumns.Where(c => c.JoinAlias == alias).ToList();
         if (MessageBox.Show($"確定要移除 JOIN {alias}（{columns.Count} 個欄位）嗎？", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
         dgvColumns.EndEdit();
@@ -212,7 +230,12 @@ public partial class GridColumnsDialog : Form
         var ordered = columnTable.Rows.Cast<DataRow>().Select(r => workColumns.First(x => x.Column == (string)r["Column"])).ToList();
         grid.Columns.Clear();
         grid.Columns.AddRange(ordered);
-        grid.Joins = workJoins;
+        if (masterJoins != null)
+        {
+            masterJoins.Clear();                           // 單頭清單：寫回畫面的單頭 JOIN（同一個 List，單頭欄位也在用）
+            masterJoins.AddRange(workJoins);
+        }
+        else grid.Joins = workJoins;
         DialogResult = DialogResult.OK;
     }
 }
