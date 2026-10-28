@@ -758,7 +758,7 @@ public partial class DesignerForm : Form
     /// <summary>
     /// 把整個資料表拖到畫面上產生 Grid，預設放入全部欄位：
     /// 拖的是單頭自己的資料表 → 單頭清單（列出查詢結果，點選切換單頭）；
-    /// 拖的是其他資料表 → 單身，並自動推測關聯欄位；
+    /// 拖的是其他資料表 → 單身（可以放好幾個），並自動推測關聯欄位；
     /// 還沒有單頭時（空白畫面）→ 這個資料表就當單頭，產生單頭清單（之後可以再拖欄位上來當查詢條件）
     /// </summary>
     private void AddGrid(TableDragData data, Point location)
@@ -769,11 +769,9 @@ public partial class DesignerForm : Form
             SetMasterTable(data.Schema, data.Table);
         }
         bool isMasterList = def.TableSchema == data.Schema && def.TableName == data.Table;
-        if (def.Grids.Any(g => !g.IsSqlList && g.IsMasterList == isMasterList))
+        if (isMasterList && def.Grids.Any(g => !g.IsSqlList && g.IsMasterList))
         {
-            MessageBox.Show(isMasterList
-                ? "畫面上已經有單頭清單 Grid 了。"
-                : "一個畫面目前只能放一個單身 Grid，要換資料表請先移除現有的單身。", "提醒");
+            MessageBox.Show("畫面上已經有單頭清單 Grid 了。", "提醒");
             return;
         }
         var gridColumns = GetColumnsCached(data.Schema, data.Table);

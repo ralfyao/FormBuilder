@@ -21,10 +21,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private DataTable results = new();
     private int current = -1;
 
-    // 單身
-    private readonly GridDefinition gridDef;
-    private readonly DataGridView detailGrid;
-    private DataTable detailTable = new();
+    /// <summary>一個單身：Grid 與它目前的明細資料</summary>
+    private sealed class DetailPart
+    {
+        public GridDefinition Def { get; init; }
+        public DataGridView Grid { get; init; }
+        public DataTable Table { get; set; } = new();
+    }
+
+    // 單身：可以有好幾個（各自的資料表與關聯欄位），按「單身」時全部一起輸入、一起存檔
+    private readonly List<DetailPart> details = new();
+    private bool HasDetail => details.Count > 0;
 
     // 單頭清單：列出查詢結果，點選一列切換單頭
     private readonly GridDefinition listDef;
@@ -139,13 +146,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
             ButtonRunner.ApplyFont(b, button);              // 按鈕自己設的字型、大小
         }
 
-        gridDef = def.Grids.FirstOrDefault(g => !g.IsMasterList && !g.IsSqlList);
-        btnDetail.Visible = gridDef != null;
-        if (gridDef != null)
+        foreach (var g in def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList))
         {
-            detailGrid = CreateDetailGrid(gridDef, def.ConnectionString);
-            HookEditDialog(detailGrid, EditDetailRow);
+            var part = new DetailPart { Def = g, Grid = CreateDetailGrid(g, def.ConnectionString) };
+            HookEditDialog(part.Grid, index => EditDetailRow(part, index));
+            details.Add(part);
         }
+        btnDetail.Visible = HasDetail;
         foreach (var g in def.Grids.Where(g => g.IsSqlList))
             sqlGrids.Add((g, CreateDetailGrid(g, def.ConnectionString)));   // 唯讀
         listDef = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
@@ -171,7 +178,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 讓先放的 Grid 在最下面，跟設計畫面一樣
         foreach (var g in def.Grids.AsEnumerable().Reverse())
         {
-            DataGridView grid = g == gridDef ? detailGrid : g == listDef ? listGrid : sqlGrids.FirstOrDefault(x => x.Def == g).Grid;
+            DataGridView grid = details.FirstOrDefault(p => p.Def == g)?.Grid ?? (g == listDef ? listGrid : sqlGrids.FirstOrDefault(x => x.Def == g).Grid);
             if (grid == null) continue;
             if (g.Dock == GridDock.Bottom)
             {
@@ -363,18 +370,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnInsert.Enabled = browsing && perm.Insert;
         btnModify.Enabled = browsing && HasCurrent && HasKey && perm.Modify;
         btnDelete.Enabled = browsing && HasCurrent && HasKey && perm.Delete;
-        btnDetail.Enabled = browsing && HasCurrent && gridDef != null && perm.Modify;
+        btnDetail.Enabled = browsing && HasCurrent && HasDetail && perm.Modify;
         if (listGrid != null) listGrid.Enabled = browsing;        // 輸入中不能切換單頭
-        if (detailGrid != null)
+        foreach (var part in details)
         {
             bool detailEditing = mode == Mode.Detail;
-            detailGrid.ReadOnly = !detailEditing;
-            detailGrid.AllowUserToAddRows = detailEditing;
-            detailGrid.AllowUserToDeleteRows = detailEditing;
-            detailGrid.BackgroundColor = detailEditing ? SystemColors.Window : SystemColors.Control;
+            part.Grid.ReadOnly = !detailEditing;
+            part.Grid.AllowUserToAddRows = detailEditing;
+            part.Grid.AllowUserToDeleteRows = detailEditing;
+            part.Grid.BackgroundColor = detailEditing ? SystemColors.Window : SystemColors.Control;
             // 只顯示、自動編號、關聯欄位（自動帶單頭的值）不能輸入
-            foreach (DataGridViewColumn col in detailGrid.Columns)
-                if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column)))
+            foreach (DataGridViewColumn col in part.Grid.Columns)
+                if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || IsLinkColumn(part, c.Column)))
                     col.ReadOnly = true;
         }
         btnFirst.Enabled = btnPrevious.Enabled = browsing && current > 0;
@@ -412,7 +419,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
-        if (mode == Mode.Detail) detailGrid.Focus();
+        if (mode == Mode.Detail) details[0].Grid.Focus();
         else if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
     }
 
@@ -441,9 +448,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>輸入查詢條件或新單頭時，先清掉上一筆的單身，避免看起來像是這筆的明細</summary>
     private void ClearDetail()
     {
-        if (detailGrid == null) return;
-        detailTable = new DataTable();
-        detailGrid.DataSource = detailTable;
+        foreach (var part in details)
+        {
+            part.Table = new DataTable();
+            part.Grid.DataSource = part.Table;
+        }
     }
 
     /// <summary>修改前先重讀這筆資料，確保改的是資料庫裡最新的內容</summary>
@@ -935,7 +944,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             else if (joins.Contains(alias)) columns.TryAdd(name, $"{GridSql.Joined(Dialect, alias, source)} AS {Dialect.Quote(name)}");
         }
         foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
-        foreach (var master in gridDef?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
+        foreach (var master in details.SelectMany(p => p.Def.Links).Select(l => l.Master))
             if (!columns.ContainsKey(master)) Add(master, null, null);
         foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>()) Add(c.Column, c.JoinAlias, c.SourceColumn);
         return string.Join(", ", columns.Values);
@@ -1111,7 +1120,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var values = CollectValues();
         if (values == null) return;
-        if (InsertValues(values.ToDictionary(v => v.Key.Column, v => v.Value)) && gridDef != null && HasCurrent)
+        if (InsertValues(values.ToDictionary(v => v.Key.Column, v => v.Value)) && HasDetail && HasCurrent)
             BeginDetail();                                 // 像 4GL：單頭存好直接進單身
     }
 
@@ -1149,7 +1158,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             Audit.Write(def.FormKey, def.TableName, "新增", HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null,
                         values.ToDictionary(v => v.Key, v => Audit.Format(v.Value)));
             MessageBox.Show("新增完成。", "新增");
-            AfterSave(HasCurrent && HasKey ? CurrentKey() : null, closing: gridDef == null);   // 有單身時等單身存檔再關
+            AfterSave(HasCurrent && HasKey ? CurrentKey() : null, closing: !HasDetail);   // 有單身時等單身存檔再關
             return true;
         }
         catch (Exception ex)
@@ -1219,7 +1228,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private bool DeleteRecord()
     {
         if (!HasCurrent || !HasKey) return false;
-        bool withDetail = gridDef != null && gridDef.Links.Count > 0;
+        bool withDetail = details.Any(p => p.Def.Links.Count > 0);
         string question = withDetail ? "確定要刪除這筆資料（連同單身明細）嗎？" : "確定要刪除這筆資料嗎？";
         if (MessageBox.Show(question, "刪除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
         try
@@ -1228,9 +1237,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             using var tran = conn.BeginTransaction();             // 單身、單頭一起刪，失敗就全部不變
             using var cmd = Dialect.CreateCommand(conn);
             cmd.Transaction = tran;
-            if (withDetail)
+            foreach (var part in details.Where(p => p.Def.Links.Count > 0))
             {
-                cmd.CommandText = $"DELETE FROM {gridDef.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd);
+                cmd.CommandText = $"DELETE FROM {part.Def.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd, part);
                 cmd.ExecuteNonQuery();
                 cmd.Parameters.Clear();
             }
@@ -1406,8 +1415,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     // ================= 單身 =================
 
-    private bool IsLinkColumn(string detailColumn) =>
-        gridDef != null && gridDef.Links.Any(l => string.Equals(l.Detail, detailColumn, StringComparison.OrdinalIgnoreCase));
+    private static bool IsLinkColumn(DetailPart part, string detailColumn) =>
+        part.Def.Links.Any(l => string.Equals(l.Detail, detailColumn, StringComparison.OrdinalIgnoreCase));
 
     /// <param name="connectionString">下拉選單欄位的選項 SQL 用</param>
     private static DataGridView CreateDetailGrid(GridDefinition g, string connectionString)
@@ -1444,10 +1453,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return grid;
     }
 
-    /// <summary>讀取目前單頭的明細（單身關聯欄位 = 單頭的值）</summary>
+    /// <summary>讀取目前單頭的明細（每個單身：關聯欄位 = 單頭的值）</summary>
     private void LoadDetail()
     {
-        if (gridDef == null) return;
+        foreach (var part in details) LoadDetail(part);
+    }
+
+    private void LoadDetail(DetailPart part)
+    {
+        var gridDef = part.Def;
         var table = new DataTable();
         if (HasCurrent)
         {
@@ -1456,7 +1470,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 var d = Dialect;
                 using var conn = d.Open(def.ConnectionString);
                 using var cmd = d.CreateCommand(conn);
-                string where = AddDetailCondition(cmd, GridSql.BaseAlias);          // 有 JOIN 時，本身的欄位要加別名
+                string where = AddDetailCondition(cmd, part, GridSql.BaseAlias);    // 有 JOIN 時，本身的欄位要加別名
                 var orderColumns = gridDef.KeyColumns.Count > 0 ? gridDef.KeyColumns : gridDef.Columns.Where(c => !c.IsJoin).Take(1).ToList();
                 cmd.CommandText = GridSql.Select(d, gridDef.FullTableName(d), gridDef.Columns, gridDef.Joins, 5000)
                                 + (where != "" ? " WHERE " + where : "")
@@ -1466,7 +1480,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             catch (Exception ex)
             {
-                MessageBox.Show("讀取單身失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"讀取單身「{gridDef.Title ?? gridDef.TableName}」失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
         // 新增明細時，關聯欄位自動帶入目前單頭的值
@@ -1483,17 +1497,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (e.Row.Table.Columns.Contains(detail))
                     e.Row[detail] = results.Rows[current][master];
         };
-        detailTable = table;
-        detailGrid.DataSource = detailTable;
+        part.Table = table;
+        part.Grid.DataSource = part.Table;
     }
 
     /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 m0、m1…；沒有關聯欄位時回傳空字串</summary>
     /// <param name="row">查詢結果的第幾筆；null = 目前這筆</param>
-    private string AddDetailCondition(DbCommand cmd, string tableAlias = null, int? row = null)
+    private string AddDetailCondition(DbCommand cmd, DetailPart part, string tableAlias = null, int? row = null)
     {
         var conditions = new List<string>();
         int i = 0;
-        foreach (var (master, detail) in gridDef.Links)
+        foreach (var (master, detail) in part.Def.Links)
         {
             conditions.Add($"{(tableAlias != null ? Dialect.Quote(tableAlias) + "." : "")}{Dialect.Quote(detail)} = {Dialect.Param($"m{i}")}");
             Dialect.AddParam(cmd, $"m{i}", results.Rows[row ?? current][master]);
@@ -1504,50 +1518,61 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void BeginDetail()
     {
-        if (gridDef == null || !HasCurrent) return;
+        if (!HasDetail || !HasCurrent) return;
         SetMode(Mode.Detail);
     }
 
     /// <summary>
-    /// 單身存檔：新增的列 INSERT、改過的列 UPDATE、刪掉的列 DELETE，全部在同一個交易裡，
+    /// 單身存檔：每個單身新增的列 INSERT、改過的列 UPDATE、刪掉的列 DELETE，全部單身在同一個交易裡，
     /// 任何一筆失敗就全部不變（像 4GL 單身的 BEGIN WORK / COMMIT WORK）
     /// </summary>
     private void SaveDetail()
     {
-        detailGrid.EndEdit();
-        if (BindingContext[detailTable] is CurrencyManager cm) cm.EndCurrentEdit();
-        var changed = detailTable.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Unchanged).ToList();
-        if (changed.Count == 0)
+        var changes = new List<(DetailPart Part, List<DataRow> Rows)>();
+        foreach (var part in details)
+        {
+            part.Grid.EndEdit();
+            if (BindingContext[part.Table] is CurrencyManager cm) cm.EndCurrentEdit();
+            var rows = part.Table.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Unchanged).ToList();
+            if (rows.Count > 0) changes.Add((part, rows));
+        }
+        if (changes.Count == 0)
         {
             SetMode(Mode.Browse);
             return;
         }
-        var keys = gridDef.KeyColumns;
-        if (keys.Count == 0 && changed.Any(r => r.RowState is DataRowState.Modified or DataRowState.Deleted))
+        string NameOf(DetailPart part) => details.Count > 1 ? $"單身「{part.Def.Title ?? part.Def.TableName}」" : "單身";
+        foreach (var (part, changed) in changes)
         {
-            MessageBox.Show("單身沒有設定主鍵，只能新增明細，不能修改或刪除。請按「取消」放棄修改的部分。", "提醒");
-            return;
-        }
-
-        // 必填檢查：顯示在 Grid 上、不允許 NULL 的欄位
-        foreach (var r in changed.Where(r => r.RowState != DataRowState.Deleted))
-        {
-            var empty = gridDef.Columns.FirstOrDefault(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.NoEntry && r[c.Column] == DBNull.Value);
-            if (empty != null)
+            if (part.Def.KeyColumns.Count == 0 && changed.Any(r => r.RowState is DataRowState.Modified or DataRowState.Deleted))
             {
-                MessageBox.Show($"第 {detailTable.Rows.IndexOf(r) + 1} 列請輸入「{empty.Header}」。", "提醒");
+                MessageBox.Show($"{NameOf(part)}沒有設定主鍵，只能新增明細，不能修改或刪除。請按「取消」放棄修改的部分。", "提醒");
                 return;
+            }
+            // 必填檢查：顯示在 Grid 上、不允許 NULL 的欄位
+            foreach (var r in changed.Where(r => r.RowState != DataRowState.Deleted))
+            {
+                var empty = part.Def.Columns.FirstOrDefault(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.NoEntry && r[c.Column] == DBNull.Value);
+                if (empty != null)
+                {
+                    MessageBox.Show($"{NameOf(part)}第 {part.Table.Rows.IndexOf(r) + 1} 列請輸入「{empty.Header}」。", "提醒");
+                    part.Grid.Focus();
+                    return;
+                }
             }
         }
 
         try
         {
             var d = Dialect;
-            string table = gridDef.FullTableName(d);
             using var conn = d.Open(def.ConnectionString);
             using var tran = conn.BeginTransaction();
+            foreach (var (part, changed) in changes)
             foreach (var r in changed)
             {
+                var gridDef = part.Def;
+                var keys = gridDef.KeyColumns;
+                string table = gridDef.FullTableName(d);
                 using var cmd = d.CreateCommand(conn);
                 cmd.Transaction = tran;
                 switch (r.RowState)
@@ -1555,7 +1580,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     case DataRowState.Added:
                     {
                         // 空值不寫，讓資料庫預設值生效；關聯欄位一定要寫
-                        var cols = gridDef.Columns.Where(c => !c.IsIdentity && (IsLinkColumn(c.Column) || (!c.NoEntry && r[c.Column] != DBNull.Value))).ToList();
+                        var cols = gridDef.Columns.Where(c => !c.IsIdentity && (IsLinkColumn(part, c.Column) || (!c.NoEntry && r[c.Column] != DBNull.Value))).ToList();
                         for (int i = 0; i < cols.Count; i++) d.AddParam(cmd, $"p{i}", r[cols[i].Column]);
                         cmd.CommandText = $"INSERT INTO {table} ({string.Join(", ", cols.Select(c => d.Quote(c.Column)))}) "
                                         + $"VALUES ({string.Join(", ", cols.Select((c, i) => d.Param($"p{i}")))})";
@@ -1563,7 +1588,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     }
                     case DataRowState.Modified:
                     {
-                        var cols = gridDef.Columns.Where(c => !c.IsIdentity && !c.NoEntry && !c.IsKey && !IsLinkColumn(c.Column)).ToList();
+                        var cols = gridDef.Columns.Where(c => !c.IsIdentity && !c.NoEntry && !c.IsKey && !IsLinkColumn(part, c.Column)).ToList();
                         if (cols.Count == 0) continue;
                         for (int i = 0; i < cols.Count; i++) d.AddParam(cmd, $"p{i}", r[cols[i].Column]);
                         cmd.CommandText = $"UPDATE {table} SET {string.Join(", ", cols.Select((c, i) => $"{d.Quote(c.Column)} = {d.Param($"p{i}")}"))} "
@@ -1577,12 +1602,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 cmd.ExecuteNonQuery();
             }
             tran.Commit();
-            Audit.Write(def.FormKey, gridDef.TableName, "單身存檔", HasKey ? Audit.KeyText(CurrentKey()) : null, new
-            {
-                新增 = changed.Count(r => r.RowState == DataRowState.Added),
-                修改 = changed.Count(r => r.RowState == DataRowState.Modified),
-                刪除 = changed.Count(r => r.RowState == DataRowState.Deleted),
-            });
+            foreach (var (part, changed) in changes)
+                Audit.Write(def.FormKey, part.Def.TableName, "單身存檔", HasKey ? Audit.KeyText(CurrentKey()) : null, new
+                {
+                    新增 = changed.Count(r => r.RowState == DataRowState.Added),
+                    修改 = changed.Count(r => r.RowState == DataRowState.Modified),
+                    刪除 = changed.Count(r => r.RowState == DataRowState.Deleted),
+                });
         }
         catch (Exception ex)
         {
@@ -1591,7 +1617,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         LoadDetail();
         SetMode(Mode.Browse);
-        MessageBox.Show($"單身已儲存（{changed.Count} 筆異動）。", "單身");
+        MessageBox.Show($"單身已儲存（{changes.Sum(c => c.Rows.Count)} 筆異動）。", "單身");
         AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
     }
 
@@ -1862,10 +1888,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 單身的某一列：瀏覽時改完直接存回資料表；
     /// 在「單身」輸入中則只改 Grid 上的資料，等按「確定」時跟其他明細一起存
     /// </summary>
-    private void EditDetailRow(int index)
+    private void EditDetailRow(DetailPart part, int index)
     {
-        if (gridDef == null || index < 0 || index >= detailGrid.Rows.Count) return;
-        if (detailGrid.Rows[index].DataBoundItem is not DataRowView view) return;   // 最後一列的「新增列」還沒有資料
+        var gridDef = part.Def;
+        if (index < 0 || index >= part.Grid.Rows.Count) return;
+        if (part.Grid.Rows[index].DataBoundItem is not DataRowView view) return;   // 最後一列的「新增列」還沒有資料
         DataRow row = view.Row;
         bool inDetailMode = mode == Mode.Detail;
         if (!inDetailMode && mode != Mode.Browse) return;
@@ -1884,7 +1911,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         bool keyEditable = inDetailMode && row.RowState == DataRowState.Added;
         gridDef.EnsureEditLayout();
         var fields = gridDef.EditColumns
-            .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(c.Column) || (c.IsKey && !keyEditable)))
+            .Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || IsLinkColumn(part, c.Column) || (c.IsKey && !keyEditable)))
             .ToList();
         using var dlg = new RecordEditDialog($"{(inDetailMode ? "編輯" : "修改")}明細：{gridDef.Title ?? gridDef.TableName}", fields, col => row[col],
                                              gridDef.EditFormSize, def.ConnectionString, gridDef.EditButtons, def.SourcePath, gridDef.EditLists, gridDef.EditBackColor, gridDef.EditFont(body.Font), perm);
@@ -1900,7 +1927,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 MessageBox.Show("資料格式不正確：" + ex.Message, "提醒");
             }
-            detailGrid.Refresh();
+            part.Grid.Refresh();
             return;
         }
 
@@ -1926,7 +1953,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             MessageBox.Show("修改失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-        LoadDetail();
+        LoadDetail(part);
     }
 
     // ================= 單頭清單 =================
@@ -2064,7 +2091,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var rows = SelectedRowIndexes();
         if (rows.Count == 0 || !HasKey) return;
-        bool withDetail = gridDef != null && gridDef.Links.Count > 0;
+        bool withDetail = details.Any(p => p.Def.Links.Count > 0);
         string what = rows.Count > 1 ? $"選取的 {rows.Count} 筆資料" : "這筆資料";
         if (MessageBox.Show($"確定要刪除{what}{(withDetail ? "（連同單身明細）" : "")}嗎？", "刪除",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
@@ -2077,10 +2104,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             cmd.Transaction = tran;
             foreach (int row in rows)
             {
-                if (withDetail)
+                foreach (var part in details.Where(p => p.Def.Links.Count > 0))
                 {
                     cmd.Parameters.Clear();
-                    cmd.CommandText = $"DELETE FROM {gridDef.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd, row: row);
+                    cmd.CommandText = $"DELETE FROM {part.Def.FullTableName(Dialect)} WHERE " + AddDetailCondition(cmd, part, row: row);
                     cmd.ExecuteNonQuery();
                 }
                 cmd.Parameters.Clear();
