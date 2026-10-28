@@ -449,6 +449,10 @@ public static class SysDb
             IF OBJECT_ID('dbo.SYS_Menu') IS NULL CREATE TABLE dbo.SYS_Menu(
                 MenuId int IDENTITY NOT NULL PRIMARY KEY, ParentId int NULL, Title nvarchar(100) NOT NULL,
                 FormKey nvarchar(200) NULL, SortOrder int NOT NULL DEFAULT 0);
+            -- 「未放進選單的畫面」的子資料夾（只有 ERP Studio 的管理者看得到，ERP 系統讀不到）
+            IF OBJECT_ID('dbo.SYS_MenuUnlisted') IS NULL CREATE TABLE dbo.SYS_MenuUnlisted(
+                MenuId int IDENTITY NOT NULL PRIMARY KEY, ParentId int NULL, Title nvarchar(100) NOT NULL,
+                FormKey nvarchar(200) NULL, SortOrder int NOT NULL DEFAULT 0);
             IF OBJECT_ID('dbo.SYS_Permission') IS NULL CREATE TABLE dbo.SYS_Permission(
                 RoleId nvarchar(30) NOT NULL, FormKey nvarchar(200) NOT NULL,
                 CanOpen bit NOT NULL DEFAULT 0, CanInsert bit NOT NULL DEFAULT 0, CanModify bit NOT NULL DEFAULT 0,
@@ -619,8 +623,14 @@ public static class SysDb
 
     // ================= 選單 =================
 
-    public static List<MenuNode> LoadMenu(string cs) =>
-        Query(cs, "SELECT MenuId, ParentId, Title, FormKey, SortOrder FROM dbo.SYS_Menu ORDER BY SortOrder, MenuId").Rows.Cast<DataRow>()
+    public static List<MenuNode> LoadMenu(string cs) => ToMenuNodes(Query(cs, "SELECT MenuId, ParentId, Title, FormKey, SortOrder FROM dbo.SYS_Menu ORDER BY SortOrder, MenuId"));
+
+    /// <summary>「未放進選單的畫面」的子資料夾與畫面放的位置；舊的系統資料庫還沒有這個資料表時是空的</summary>
+    public static List<MenuNode> LoadUnlisted(string cs) =>
+        ToMenuNodes(Query(cs, "IF OBJECT_ID('dbo.SYS_MenuUnlisted') IS NOT NULL SELECT MenuId, ParentId, Title, FormKey, SortOrder FROM dbo.SYS_MenuUnlisted ORDER BY SortOrder, MenuId"));
+
+    private static List<MenuNode> ToMenuNodes(DataTable table) =>
+        table.Rows.Cast<DataRow>()
             .Select(r => new MenuNode
             {
                 Id = (int)r["MenuId"],
@@ -630,12 +640,23 @@ public static class SysDb
                 SortOrder = (int)r["SortOrder"],
             }).ToList();
 
-    /// <summary>整個選單重存（樹狀：每個節點的子節點依順序），在同一個交易裡</summary>
-    public static void SaveMenu(string cs, IList<MenuTree> roots)
+    /// <summary>
+    /// 整個選單重存（樹狀：每個節點的子節點依順序），在同一個交易裡；
+    /// unlisted 不是 null 時，「未放進選單的畫面」的子資料夾也一起重存
+    /// </summary>
+    public static void SaveMenu(string cs, IList<MenuTree> roots, IList<MenuTree> unlisted = null)
     {
+        if (unlisted != null) EnsureSchema(cs);           // 舊的系統資料庫自動補上 SYS_MenuUnlisted
         using var conn = Open(cs);
         using var tran = conn.BeginTransaction();
-        using (var del = Cmd(conn, "DELETE FROM dbo.SYS_Menu")) { del.Transaction = tran; del.ExecuteNonQuery(); }
+        SaveTree(conn, tran, "dbo.SYS_Menu", roots);
+        if (unlisted != null) SaveTree(conn, tran, "dbo.SYS_MenuUnlisted", unlisted);
+        tran.Commit();
+    }
+
+    private static void SaveTree(SqlConnection conn, SqlTransaction tran, string table, IList<MenuTree> roots)
+    {
+        using (var del = Cmd(conn, $"DELETE FROM {table}")) { del.Transaction = tran; del.ExecuteNonQuery(); }
         void Insert(IList<MenuTree> nodes, int? parentId)
         {
             int order = 0;
@@ -643,15 +664,14 @@ public static class SysDb
             {
                 var node = tree.Node;
                 using var ins = Cmd(conn, """
-                    INSERT INTO dbo.SYS_Menu(ParentId, Title, FormKey, SortOrder) VALUES (@p, @t, @f, @o); SELECT CAST(SCOPE_IDENTITY() AS int)
-                    """, ("@p", parentId), ("@t", node.Title), ("@f", string.IsNullOrEmpty(node.FormKey) ? null : node.FormKey), ("@o", order++));
+                    INSERT INTO {table}(ParentId, Title, FormKey, SortOrder) VALUES (@p, @t, @f, @o); SELECT CAST(SCOPE_IDENTITY() AS int)
+                    """.Replace("{table}", table), ("@p", parentId), ("@t", node.Title), ("@f", string.IsNullOrEmpty(node.FormKey) ? null : node.FormKey), ("@o", order++));
                 ins.Transaction = tran;
                 int id = (int)ins.ExecuteScalar();
                 Insert(tree.Children, id);
             }
         }
         Insert(roots, null);
-        tran.Commit();
     }
 
     // ================= 已發布的畫面、列印樣板 =================
@@ -710,6 +730,9 @@ public static class SysDb
             form.ExecuteNonQuery();
         using (var menu = Run("UPDATE dbo.SYS_Menu SET FormKey = @n, Title = @t WHERE FormKey = @o", ("@n", newKey), ("@t", newTitle), ("@o", oldKey)))
             menu.ExecuteNonQuery();
+        using (var unlisted = Run("IF OBJECT_ID('dbo.SYS_MenuUnlisted') IS NOT NULL UPDATE dbo.SYS_MenuUnlisted SET FormKey = @n, Title = @t WHERE FormKey = @o",
+                                  ("@n", newKey), ("@t", newTitle), ("@o", oldKey)))
+            unlisted.ExecuteNonQuery();
         using (var perm = Run("UPDATE dbo.SYS_Permission SET FormKey = @n WHERE FormKey = @o", ("@n", newKey), ("@o", oldKey)))
             perm.ExecuteNonQuery();
         tran.Commit();

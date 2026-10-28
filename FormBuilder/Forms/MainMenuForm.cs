@@ -54,19 +54,21 @@ public partial class MainMenuForm : Form
             var miOpen = nodeMenu.Items.Add("開啟", null, (s, e) => OpenSelected());
             var miDesign = nodeMenu.Items.Add("設計這個畫面", null, (s, e) => OpenDesigner());
             var miRename = nodeMenu.Items.Add("重新命名…", null, (s, e) => RenameSelected());
-            var sepNew = new ToolStripSeparator();
-            nodeMenu.Items.Add(sepNew);
+            nodeMenu.Items.Add("新增資料夾…", null, (s, e) => AddFolder());
+            var miDeleteFolder = nodeMenu.Items.Add("刪除資料夾", null, (s, e) => DeleteFolder());
+            nodeMenu.Items.Add(new ToolStripSeparator());
             // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
             nodeMenu.Items.Add("新增表單", null, (s, e) => new DesignerForm().Show());
             nodeMenu.Opening += (s, e) =>
             {
-                // 在空白處按右鍵：取消選取，選單只會出現「新增表單」
+                // 在空白處按右鍵：取消選取（新增資料夾會加在最上層）
                 var point = treeMenu.PointToClient(MousePosition);
                 if (treeMenu.ClientRectangle.Contains(point) && treeMenu.GetNodeAt(point) == null) treeMenu.SelectedNode = null;
-                // 開啟、設計只對畫面；新增表單在哪裡按右鍵都有
+                // 開啟、設計只對畫面；新增資料夾、新增表單在哪裡按右鍵都有
                 bool onForm = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false };
                 miOpen.Visible = miDesign.Visible = onForm;
-                miRename.Visible = sepNew.Visible = treeMenu.SelectedNode?.Tag is MenuNode;     // 畫面、資料夾都可以改名
+                miRename.Visible = treeMenu.SelectedNode?.Tag is MenuNode;                      // 畫面、資料夾都可以改名
+                miDeleteFolder.Visible = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: true };
             };
             treeMenu.KeyDown += (s, e) => { if (e.KeyCode == Keys.F2) RenameSelected(); };
             treeMenu.NodeMouseClick += (s, e) => { if (e.Button == MouseButtons.Right) treeMenu.SelectedNode = e.Node; };
@@ -82,9 +84,16 @@ public partial class MainMenuForm : Form
         LoadMenu();
     }
 
-    /// <summary>載入選單：沒有開啟權限的畫面不顯示，裡面沒有畫面的資料夾也不顯示</summary>
-    private void LoadMenu()
+    /// <summary>
+    /// 載入選單：沒有開啟權限的畫面不顯示，裡面沒有畫面的資料夾也不顯示。
+    /// 重新載入時保留資料夾的展開、收合；select = 載入後要選取的節點（TreeNode.FullPath）
+    /// </summary>
+    private void LoadMenu(string select = null)
     {
+        var expanded = new HashSet<string>();
+        var collapsed = new HashSet<string>();
+        foreach (var tn in AllNodes(treeMenu.Nodes).Where(tn => tn.Nodes.Count > 0))
+            (tn.IsExpanded ? expanded : collapsed).Add(tn.FullPath);
         treeMenu.BeginUpdate();
         treeMenu.Nodes.Clear();
         try
@@ -112,12 +121,41 @@ public partial class MainMenuForm : Form
             {
                 var inMenu = nodes.Where(n => !n.IsFolder).Select(n => n.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var others = SysDb.LoadPublished(SysContext.Connection, "form").Where(p => !inMenu.Contains(p.FormKey)).ToList();
-                // 一直顯示（沒有畫面時也顯示），把畫面拖到這裡 = 從選單拿掉
+                var byKey = others.ToDictionary(p => p.FormKey, StringComparer.OrdinalIgnoreCase);
+                var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                TreeNode FormNode(PublishedItem p) => new(p.Title ?? p.FormKey) { Tag = new MenuNode { Title = p.Title ?? p.FormKey, FormKey = p.FormKey } };
+                // 一直顯示（沒有畫面時也顯示），把畫面拖到這裡 = 從選單拿掉；裡面可以再分子資料夾（存在 SYS_MenuUnlisted）
                 unlistedFolder = new TreeNode("📁 （未放進選單的畫面）") { ForeColor = SystemColors.GrayText };
-                foreach (var p in others) unlistedFolder.Nodes.Add(new TreeNode(p.Title ?? p.FormKey) { Tag = new MenuNode { Title = p.Title ?? p.FormKey, FormKey = p.FormKey } });
+                var saved = SysDb.LoadUnlisted(SysContext.Connection);
+                void AddUnlisted(TreeNodeCollection target, int? parentId)
+                {
+                    foreach (var n in saved.Where(n => n.ParentId == parentId))
+                    {
+                        if (n.IsFolder)
+                        {
+                            var folder = new TreeNode("📁 " + n.Title) { Tag = n };
+                            AddUnlisted(folder.Nodes, n.Id);
+                            target.Add(folder);
+                        }
+                        // 已經放進選單、或已經不在系統裡的畫面略過（下次存的時候就不見了）
+                        else if (byKey.TryGetValue(n.FormKey, out var p) && placed.Add(p.FormKey)) target.Add(FormNode(p));
+                    }
+                }
+                AddUnlisted(unlistedFolder.Nodes, null);
+                foreach (var p in others.Where(p => !placed.Contains(p.FormKey))) unlistedFolder.Nodes.Add(FormNode(p));   // 新發布的放最後面
                 treeMenu.Nodes.Add(unlistedFolder);
             }
-            treeMenu.ExpandAll();
+            // 第一次載入：選單全部展開，「未放進選單的畫面」裡的子資料夾收合；之後照使用者展開、收合的
+            foreach (var tn in AllNodes(treeMenu.Nodes).Where(tn => tn.Nodes.Count > 0))
+            {
+                bool inUnlisted = tn != unlistedFolder && InUnlisted(tn);
+                if (expanded.Contains(tn.FullPath) || !collapsed.Contains(tn.FullPath) && !inUnlisted) tn.Expand();
+            }
+            if (select != null && AllNodes(treeMenu.Nodes).FirstOrDefault(tn => tn.FullPath == select) is { } selected)
+            {
+                selected.EnsureVisible();
+                treeMenu.SelectedNode = selected;
+            }
             if (treeMenu.Nodes.Count == 0)
                 treeMenu.Nodes.Add(new TreeNode(SysContext.User.IsAdmin
                     ? "（還沒有畫面：到「系統管理 → 畫面設計」設計畫面後，用「檔案 → 發布到系統」，再到「選單管理」排進選單）"
@@ -137,7 +175,7 @@ public partial class MainMenuForm : Form
 
     /// <summary>
     /// 管理者可以直接在選單上拖曳：拖到資料夾上 = 放進資料夾，拖到畫面上 = 放在它下面，拖到空白處 = 最上層，
-    /// 拖到「未放進選單的畫面」= 從選單拿掉；放開就存進系統資料庫（同「選單管理」按儲存）
+    /// 拖到「未放進選單的畫面」（或裡面的子資料夾）= 從選單拿掉；放開就存進系統資料庫（同「選單管理」按儲存）
     /// </summary>
     private void EnableDragToMove()
     {
@@ -162,12 +200,15 @@ public partial class MainMenuForm : Form
             var node = (MenuNode)dragged.Tag;
             dragged.Remove();
             if (target == null) treeMenu.Nodes.Insert(unlistedFolder?.Index ?? treeMenu.Nodes.Count, dragged);   // 最上層（放在「未放進選單」前面）
-            else if (InUnlisted(target)) unlistedFolder.Nodes.Add(dragged);                                      // 從選單拿掉
+            else if (target == unlistedFolder) unlistedFolder.Nodes.Add(dragged);                                // 從選單拿掉
             else if (target.Tag is MenuNode { IsFolder: true }) target.Nodes.Add(dragged);
             else (target.Parent?.Nodes ?? treeMenu.Nodes).Insert(target.Index + 1, dragged);
-            SaveMenuFromTree($"移動「{node.Title}」");
+            SaveMenuFromTree($"移動「{node.Title}」", dragged.FullPath);
         };
     }
+
+    private static IEnumerable<TreeNode> AllNodes(TreeNodeCollection nodes) =>
+        nodes.Cast<TreeNode>().SelectMany(tn => AllNodes(tn.Nodes).Prepend(tn));
 
     private bool InUnlisted(TreeNode node)
     {
@@ -175,17 +216,19 @@ public partial class MainMenuForm : Form
         return false;
     }
 
-    /// <summary>不能拖到自己或自己的子節點裡；資料夾不能拖到「未放進選單的畫面」</summary>
+    /// <summary>不能拖到自己或自己的子節點裡（資料夾也可以拖進、拖出「未放進選單的畫面」，整個資料夾的畫面一起拿掉或放進選單）</summary>
     private bool CanDrop(TreeNode dragged, TreeNode target)
     {
         for (var p = target; p != null; p = p.Parent) if (p == dragged) return false;
         if (target != null && target.Tag is not MenuNode && target != unlistedFolder) return false;   // 提示文字之類的
-        if (target != null && InUnlisted(target) && ((MenuNode)dragged.Tag).IsFolder) return false;
         return true;
     }
 
-    /// <summary>依目前的樹存回選單（「未放進選單的畫面」不存），存完重新載入</summary>
-    private void SaveMenuFromTree(string action)
+    /// <summary>
+    /// 依目前的樹存回選單，「未放進選單的畫面」裡的子資料夾另外存（ERP 系統讀不到），存完重新載入；
+    /// select = 重新載入後要選取的節點（TreeNode.FullPath）
+    /// </summary>
+    private void SaveMenuFromTree(string action, string select = null)
     {
         List<MenuTree> Build(TreeNodeCollection nodes) =>
             nodes.Cast<TreeNode>().Where(tn => tn != unlistedFolder && tn.Tag is MenuNode).Select(tn =>
@@ -194,16 +237,54 @@ public partial class MainMenuForm : Form
                 tree.Children.AddRange(Build(tn.Nodes));
                 return tree;
             }).ToList();
+        select ??= treeMenu.SelectedNode?.FullPath;
         try
         {
-            SysDb.SaveMenu(SysContext.Connection, Build(treeMenu.Nodes));
+            SysDb.SaveMenu(SysContext.Connection, Build(treeMenu.Nodes), unlistedFolder == null ? null : Build(unlistedFolder.Nodes));
             Audit.Write(null, "SYS_Menu", "修改選單", null, action);
         }
         catch (Exception ex)
         {
             MessageBox.Show("儲存選單失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-        LoadMenu();
+        LoadMenu(select);
+    }
+
+    // ================= 管理者：新增、刪除資料夾 =================
+
+    /// <summary>新增資料夾：選的是資料夾（含「未放進選單的畫面」）→ 放在裡面；選的是畫面 → 放在它下面；沒選 → 選單最上層</summary>
+    private void AddFolder()
+    {
+        if (!SysContext.User.IsAdmin) return;
+        var v = PromptDialog.Ask(this, "新增資料夾", values => values[0] == "" ? "請輸入資料夾名稱。" : null, new PromptDialog.Field("資料夾名稱"));
+        if (v == null) return;
+        var folder = new TreeNode("📁 " + v[0]) { Tag = new MenuNode { Title = v[0] } };
+        var sel = treeMenu.SelectedNode;
+        if (sel == unlistedFolder || sel?.Tag is MenuNode { IsFolder: true })
+            sel.Nodes.Insert(sel.Nodes.Cast<TreeNode>().LastOrDefault(n => n.Tag is MenuNode { IsFolder: true }) is { } last ? last.Index + 1 : 0, folder);   // 資料夾排在畫面前面
+        else if (sel?.Tag is MenuNode) (sel.Parent?.Nodes ?? treeMenu.Nodes).Insert(sel.Index + 1, folder);
+        else treeMenu.Nodes.Insert(unlistedFolder?.Index ?? treeMenu.Nodes.Count, folder);
+        SaveMenuFromTree($"新增資料夾「{v[0]}」", folder.FullPath);
+    }
+
+    /// <summary>刪除資料夾：裡面的畫面、子資料夾移到資料夾原本的位置（畫面不會被刪除）</summary>
+    private void DeleteFolder()
+    {
+        if (!SysContext.User.IsAdmin || treeMenu.SelectedNode is not { Tag: MenuNode { IsFolder: true } node } folder) return;
+        if (folder.Nodes.Count > 0 &&
+            MessageBox.Show($"「{node.Title}」裡面的 {folder.Nodes.Count} 個項目會移到資料夾原本的位置（畫面不會被刪除），確定要刪除這個資料夾嗎？", "刪除資料夾",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        var siblings = folder.Parent?.Nodes ?? treeMenu.Nodes;
+        string parentPath = folder.Parent?.FullPath;
+        int index = folder.Index;
+        var children = folder.Nodes.Cast<TreeNode>().ToList();
+        folder.Remove();
+        foreach (var child in children)
+        {
+            child.Remove();
+            siblings.Insert(index++, child);
+        }
+        SaveMenuFromTree($"刪除資料夾「{node.Title}」", parentPath);
     }
 
     // ================= 管理者：重新命名 =================

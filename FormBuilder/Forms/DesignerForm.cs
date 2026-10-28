@@ -1219,10 +1219,10 @@ public partial class DesignerForm : Form
                                 "發布", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
             int version = PublishOne(cs, key, def, currentFilePath, notes);
-            var done = new List<string> { $"「{def.Title}」（{key}）第 {version} 版" };
+            var done = new List<string> { $"「{PublishTitle(def, key)}」（{key}）第 {version} 版" };
             if (withRelated)
                 foreach (var r in related)
-                    done.Add($"「{r.Def.Title ?? r.Key}」（{r.Key}）第 {PublishOne(cs, r.Key, r.Def, r.Path, notes)} 版");
+                    done.Add($"「{PublishTitle(r.Def, r.Key)}」（{r.Key}）第 {PublishOne(cs, r.Key, r.Def, r.Path, notes)} 版");
             else if (related.Count > 0)
             {
                 var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1247,10 +1247,20 @@ public partial class DesignerForm : Form
             .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
             .Where(b => b != null).ToList();
 
+    /// <summary>發布時的畫面名稱：沒有改過標題（還是預設的「新畫面」或空白）就用檔名（不含副檔名）</summary>
+    private static string PublishTitle(FormDefinition form, string key) =>
+        string.IsNullOrWhiteSpace(form.Title) || form.Title == new FormDefinition().Title ? key : form.Title;
+
     /// <summary>發布一個畫面和它的按鈕用到的列印樣板，回傳畫面的版本</summary>
     private static int PublishOne(string cs, string key, FormDefinition form, string path, List<string> notes)
     {
         string folder = Path.GetDirectoryName(path);
+        string title = PublishTitle(form, key);
+        if (title != form.Title)
+        {
+            form = FormDefinition.FromJson(form.ToJson());     // 複製一份再改標題，不動到設計中的畫面
+            form.Title = title;
+        }
         int version = SysDb.Publish(cs, key, "form", form.Title, form.ToJson(), SysContext.User.UserId);
         foreach (var b in AllButtons(form).Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
         {

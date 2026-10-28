@@ -67,11 +67,14 @@ public static class ButtonRunner
         }
         try
         {
-            int affected = ExecuteSql(userSql, b.SqlParams, connectionString, rows, out var firstRow);
+            int affected = ExecuteSql(userSql, b.SqlParams, connectionString, rows, out var firstRow, out bool queried);
             Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = userSql, 筆數 = rows.Count, 影響 = affected });
             if (firstRow != null) onResult?.Invoke(MapResult(firstRow, b.SqlReturn));
-            // 只是查值填回畫面（例如取號）時不跳「執行完成」，查到的值已經顯示在欄位上
-            if (!quiet && !(firstRow != null && affected == 0))
+            // 只是查值填回畫面（例如取號）時不跳「執行完成」，查到的值已經顯示在欄位上；SELECT 沒查到資料時明白告訴使用者
+            if (quiet || (firstRow != null && affected == 0)) { }
+            else if (queried && firstRow == null && affected == 0)
+                MessageBox.Show("SQL 沒有查到資料，畫面上的欄位沒有變。\n請檢查 SQL 的條件（例如 WHERE 的資料表裡還沒有符合的資料）。", b.Text);
+            else
                 MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
         }
@@ -93,9 +96,15 @@ public static class ButtonRunner
     /// SQL 有 SELECT 出資料時，firstRow = 第一個查詢結果的第一筆（欄位名稱 → 值），沒有就是 null
     /// </summary>
     public static int ExecuteSql(string userSql, string paramText, string connectionString, IReadOnlyList<Func<string, object>> rows,
-                                 out Dictionary<string, object> firstRow)
+                                 out Dictionary<string, object> firstRow) =>
+        ExecuteSql(userSql, paramText, connectionString, rows, out firstRow, out _);
+
+    /// <param name="queried">SQL 裡有 SELECT（有傳回查詢結果，不管有沒有資料）</param>
+    public static int ExecuteSql(string userSql, string paramText, string connectionString, IReadOnlyList<Func<string, object>> rows,
+                                 out Dictionary<string, object> firstRow, out bool queried)
     {
         firstRow = null;
+        queried = false;
         var d = DbDialect.Of(connectionString);
         var (sql, parameters) = d.PrepareUserSql(userSql);        // @名稱 轉成這個資料庫的參數寫法
         var extra = ParsePairs(paramText).GroupBy(p => p.Left, StringComparer.OrdinalIgnoreCase)
@@ -122,6 +131,7 @@ public static class ButtonRunner
             {
                 do
                 {
+                    if (reader.FieldCount > 0) queried = true;
                     if (firstRow == null && reader.FieldCount > 0 && reader.Read())
                     {
                         firstRow = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
