@@ -16,6 +16,8 @@ public partial class EditLayoutDialog : Form
     private readonly List<ButtonBox> buttonBoxes = new();
     /// <summary>版面上的明細清單（編輯的是複本，確定時才寫回）</summary>
     private readonly List<EditListBox> listBoxes = new();
+    /// <summary>版面上的文字標籤（編輯的是複本，確定時才寫回）</summary>
+    private readonly List<FieldBox> labelBoxes = new();
     private readonly List<DesignBox> selection = new();
     /// <summary>「資料表」頁籤要用的連線字串；沒有連線時不能加明細清單</summary>
     private readonly string connectionString;
@@ -96,6 +98,7 @@ public partial class EditLayoutDialog : Form
             if (lstAvailable.SelectedItem is GridColumnDefinition c) PlaceColumn(c, NextFreePoint());
         };
         // ---- 左邊「工具箱」頁籤 ----
+        toolbox.AddEntry("Label", "文字標籤 (Label)");
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // ---- 左邊「資料表」頁籤：拖到版面或雙擊，加入依關聯欄位列出明細的清單 ----
@@ -145,7 +148,7 @@ public partial class EditLayoutDialog : Form
         btnFileMenu.DropDownItems.Insert(0, new ToolStripSeparator());
         btnFileMenu.DropDownItems.Insert(0, new ToolStripMenuItem("匯入現有畫面…", null, (s, e) => ImportForm())
         {
-            ToolTipText = "選一個畫面定義檔，同名的欄位照那個畫面的位置、大小、標籤、輸入方式放上來，按鈕、版面大小、底色、字型也一起帶入",
+            ToolTipText = "選一個畫面定義檔，同名的欄位照那個畫面的位置、大小、標籤、輸入方式放上來，文字標籤、按鈕、版面大小、底色、字型也一起帶入",
         });
 
         // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
@@ -194,6 +197,7 @@ public partial class EditLayoutDialog : Form
         foreach (var c in grid.EditColumns) PlaceColumn(c, new Point(c.EditX, c.EditY), select: false);
         foreach (var b in grid.EditButtons) AddButtonBox(b.Clone(), select: false);
         foreach (var l in grid.EditLists) AddListBox(l.Clone(), select: false);
+        foreach (var f in grid.EditTextLabels) AddLabelBox(f.Clone(), select: false);
         // 設計過大小就用設計的，沒有就依欄位自動決定
         formSize = grid.EditFormSize ?? InputHelper.ContentSize(placed.Values.Select(b => b.Field), 500);
         RefreshAvailable();
@@ -212,6 +216,7 @@ public partial class EditLayoutDialog : Form
         public List<PlacedField> Fields { get; set; } = new();
         public List<ButtonDefinition> Buttons { get; set; } = new();
         public List<EditListDefinition> Lists { get; set; } = new();
+        public List<FieldDefinition> Labels { get; set; } = new();
         public int Width { get; set; }
         public int Height { get; set; }
         public string EffectiveColumn { get; set; }
@@ -229,6 +234,7 @@ public partial class EditLayoutDialog : Form
         Fields = placed.Select(p => new PlacedField { Column = p.Key.Column, Field = p.Value.Field }).ToList(),
         Buttons = buttonBoxes.Select(b => b.ButtonDef).ToList(),
         Lists = listBoxes.Select(b => b.ListDef).ToList(),
+        Labels = labelBoxes.Select(b => b.Field).ToList(),
         Width = formSize.Width,
         Height = formSize.Height,
         EffectiveColumn = effectiveColumn,
@@ -243,6 +249,7 @@ public partial class EditLayoutDialog : Form
         placed.Clear();
         buttonBoxes.Clear();
         listBoxes.Clear();
+        labelBoxes.Clear();
         foreach (var p in state.Fields)
         {
             var column = grid.Columns.FirstOrDefault(c => c.Column == p.Column);
@@ -253,6 +260,7 @@ public partial class EditLayoutDialog : Form
         }
         foreach (var b in state.Buttons) AddButtonBox(b, select: false);
         foreach (var l in state.Lists ?? new List<EditListDefinition>()) AddListBox(l, select: false);
+        foreach (var f in state.Labels ?? new List<FieldDefinition>()) AddLabelBox(f, select: false);
         formSize = new Size(state.Width, state.Height);
         effectiveColumn = state.EffectiveColumn;
         UpdateEffectiveButton();
@@ -264,7 +272,7 @@ public partial class EditLayoutDialog : Form
 
     /// <summary>
     /// 檔案 → 匯入現有畫面：讀一個畫面定義檔，跟這個 Grid 同名的欄位照那個畫面的位置、大小、標籤與輸入方式放上版面，
-    /// 按鈕、版面大小、底色、字型也一起帶入（取代目前的版面，可以按 Ctrl+Z 復原）；文字標籤和 Grid 不帶入
+    /// 文字標籤、按鈕、版面大小、底色、字型也一起帶入（取代目前的版面，可以按 Ctrl+Z 復原）；Grid 不帶入
     /// </summary>
     private void ImportForm()
     {
@@ -313,7 +321,8 @@ public partial class EditLayoutDialog : Form
             MessageBox.Show($"「{name}」的欄位跟這個 Grid（{grid.TableName}）沒有同名的欄位，沒有匯入。", "匯入現有畫面");
             return;
         }
-        if (placed.Count + buttonBoxes.Count + listBoxes.Count > 0 &&
+        var labels = source.Fields.Where(f => f.IsTextLabel).Select(f => f.Clone()).ToList();
+        if (placed.Count + buttonBoxes.Count + listBoxes.Count + labelBoxes.Count > 0 &&
             MessageBox.Show("匯入會取代目前的版面（之後可以按 Ctrl+Z 復原），確定要匯入嗎？", "匯入現有畫面",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
@@ -321,6 +330,7 @@ public partial class EditLayoutDialog : Form
         {
             Fields = fields,
             Buttons = source.Buttons.Select(b => b.Clone()).ToList(),
+            Labels = labels,
             Width = source.Width,
             Height = source.Height,
             EffectiveColumn = effectiveColumn,
@@ -333,7 +343,7 @@ public partial class EditLayoutDialog : Form
             ApplyEditFont();
         }
         history.Check();
-        lblHint.Text = $"  已匯入「{name}」：{fields.Count} 個欄位、{source.Buttons.Count} 個按鈕";
+        lblHint.Text = $"  已匯入「{name}」：{fields.Count} 個欄位、{labels.Count} 個文字標籤、{source.Buttons.Count} 個按鈕";
         if (skipped.Count > 0)
             MessageBox.Show($"這些欄位在 {grid.TableName} 沒有同名的欄位，沒有匯入：" + Environment.NewLine + string.Join("、", skipped), "匯入現有畫面");
     }
@@ -441,6 +451,42 @@ public partial class EditLayoutDialog : Form
         else if (kind == "DatePicker") AddKindField(location, InputKind.日期選擇);
         else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
         else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
+        else if (kind == "Label") AddTextLabel(location);
+    }
+
+    /// <summary>
+    /// 加入文字標籤：只顯示文字（屬性面板的「標籤」），不對應資料表；欄位「執行後動作」的 SQL 寫「AS 變數名稱」
+    /// （或回傳對應「變數名稱=SQL 欄位」）就能把查出來的值顯示在這裡，打開、切換資料時也會重新帶出
+    /// </summary>
+    private void AddTextLabel(Point location)
+    {
+        var used = new HashSet<string>(grid.Columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)), StringComparer.OrdinalIgnoreCase);
+        int n = 1;
+        while (used.Contains($"標籤{n}")) n++;
+        AddLabelBox(new FieldDefinition
+        {
+            Column = $"標籤{n}",
+            DataType = "nvarchar",
+            IsNullable = true,
+            NoEntry = true,
+            IsCalculated = true,
+            InputType = InputKind.文字標籤,
+            Label = "文字",
+            LabelWidth = 0,
+            X = location.X,
+            Y = location.Y,
+            Width = 120,
+        });
+        lblHint.Text = $"  已加入文字標籤「標籤{n}」：在屬性面板改「標籤」（顯示的文字）與「變數名稱」";
+    }
+
+    private void AddLabelBox(FieldDefinition field, bool select = true)
+    {
+        var box = new FieldBox(field);
+        labelBoxes.Add(box);
+        AttachBox(box);
+        UpdateCanvasSize();
+        if (select) SetSelection(new[] { box });
     }
 
     private void AddButtonBox(ButtonDefinition button, bool select = true)
@@ -609,7 +655,7 @@ public partial class EditLayoutDialog : Form
     {
         foreach (var box in selection.ToList())
         {
-            if (box is FieldBox fb) placed.Remove(placed.First(p => p.Value == fb).Key);
+            if (box is FieldBox fb && !labelBoxes.Remove(fb)) placed.Remove(placed.First(p => p.Value == fb).Key);   // 文字標籤不在 placed 裡
             if (box is ButtonBox bb) buttonBoxes.Remove(bb);
             if (box is EditListBox lb) listBoxes.Remove(lb);
             canvas.Controls.Remove(box);
@@ -710,7 +756,8 @@ public partial class EditLayoutDialog : Form
         if (selection.Count > 0) ActiveControl = null;
         // 屬性面板：選一個顯示它，選多個只列共同屬性（改了套用到全部）
         PrintListConverter.Available = listBoxes.Select(l => l.ListDef.TableName).Distinct().ToList();    // 按鈕「列印來源清單」的選項
-        propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
+        // 文字標籤用畫面設計的屬性（標籤、變數名稱、字型、底色）
+        propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox { Field.IsTextLabel: false } fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
     }
 
     private void OnCanvasMouseDown(MouseEventArgs e)
@@ -836,6 +883,7 @@ public partial class EditLayoutDialog : Form
         }
         grid.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
         grid.EditLists = listBoxes.Select(b => b.ListDef).ToList();
+        grid.EditTextLabels = labelBoxes.Select(b => b.Field).ToList();
         grid.HasEditLayout = true;
         grid.EditFormWidth = formSize.Width;
         grid.EditFormHeight = formSize.Height;

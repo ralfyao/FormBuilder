@@ -586,6 +586,13 @@ public class GridDefinition
     public List<EditListDefinition> EditLists { get; set; } = new();
 
     /// <summary>
+    /// 編輯視窗版面上的文字標籤（只顯示文字，不對應資料表）；欄位的「執行後動作」可以用變數名稱把值填進來，
+    /// 打開、切換資料時也會用它重新帶出（例如國別代碼、業別名稱）
+    /// </summary>
+    [Browsable(false)]
+    public List<FieldDefinition> EditTextLabels { get; set; } = new();
+
+    /// <summary>
     /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」。
     /// 空白 = 不使用（不顯示生效 / 取消生效）
     /// </summary>

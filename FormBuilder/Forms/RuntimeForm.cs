@@ -1362,10 +1362,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         // 有單頭清單時，欄位只當查詢條件：點選清單不帶入，查詢完也清空（資料看清單、編輯用雙擊的編輯視窗）
         if (HasCurrent && listGrid == null)
+        {
             // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
             // 只當查詢條件的欄位不顯示資料
-            foreach (var f in def.Fields.Where(f => !f.IsTextLabel))    // 文字標籤保留原本的文字（或 SQL 填進來的值）
+            foreach (var f in def.Fields.Where(f => !f.IsTextLabel))    // 文字標籤另外用執行後動作帶出
                 SetValue(f, !f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
+            ButtonRunner.RefreshTextLabels(inputs, def.ConnectionString, name =>
+            {
+                var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (field != null) return GetValue(field);
+                return results.Columns.Contains(name) ? results.Rows[current][name] : null;
+            });
+        }
         else
         {
             ClearInputs();
@@ -1769,7 +1777,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var f in fields) f.IsKey = keyColumns.Contains(f.Column, StringComparer.OrdinalIgnoreCase);
         var cursor = new RecordCursor(this, row);
         var dlg = new RecordNavigatorDialog(cursor, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
-                                            listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font));
+                                            listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font),
+                                            listDef.EditTextLabels.Select(f => f.Clone()).ToList());
         // 多個視窗錯開排列，才看得到後面的
         var owner = (TopLevelControl as Form) ?? this;
         int open = editWindows.Count(w => !w.Dialog.IsDisposed);

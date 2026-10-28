@@ -204,6 +204,34 @@ public static class ButtonRunner
     }
 
     /// <summary>
+    /// 顯示一筆資料時，用欄位的「執行後動作」把文字標籤的值帶出來（例如國別帶出國別代碼、業別代碼帶出業別名稱）：
+    /// 文字標籤先恢復原本的文字；欄位有值、執行後動作是 SELECT 的才查，查出來的值只填進文字標籤，不動其他欄位、不跳訊息
+    /// </summary>
+    public static void RefreshTextLabels(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString, Func<string, object> valueOf)
+    {
+        var labels = inputs.Where(p => p.Key.IsTextLabel).ToDictionary(p => p.Key, p => p.Value);
+        if (labels.Count == 0) return;
+        foreach (var (f, input) in labels) InputHelper.SetValue(input, f.Label);
+        foreach (var f in inputs.Keys.Where(f => !f.IsTextLabel && f.AfterSelectSql?.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) == true))
+        {
+            try
+            {
+                if (valueOf(f.Column) is null or DBNull || valueOf(f.Column) is string s && s.Trim() == "") continue;
+                ExecuteSql(f.AfterSelectSql, f.AfterSelectParams, connectionString, new Func<string, object>[] { valueOf }, out var row);
+                if (row == null) continue;
+                var map = ParsePairs(f.AfterSelectReturn).ToList();
+                var values = map.Count == 0 ? row
+                    : map.Where(m => row.ContainsKey(m.Right.TrimStart('@'))).ToDictionary(m => m.Left, m => row[m.Right.TrimStart('@')], StringComparer.OrdinalIgnoreCase);
+                FillFields(values, labels, reportMissing: false);
+            }
+            catch (Exception)
+            {
+                // 帶不出來只是少了顯示，不影響資料
+            }
+        }
+    }
+
+    /// <summary>
     /// 「執行前檢查」：rows 裡不符合 condition（DataTable 篩選寫法）的資料列，依原本順序；
     /// 條件寫錯時丟 EvaluateException / SyntaxErrorException
     /// </summary>

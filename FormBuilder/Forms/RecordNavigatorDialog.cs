@@ -58,7 +58,7 @@ public partial class RecordNavigatorDialog : Form
     public RecordNavigatorDialog(IRecordNavigator navigator, string title, List<FieldDefinition> editFields, Size? bodySize = null,
                                  string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
                                  string effectiveColumn = null, List<EditListDefinition> lists = null, Color backColor = default,
-                                 Font font = null)
+                                 Font font = null, List<FieldDefinition> textLabels = null)
     {
         InitializeComponent();
         body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
@@ -86,17 +86,12 @@ public partial class RecordNavigatorDialog : Form
         btnPrint.Click += (s, e) => PrintRecord();
 
         // 欄位照後台「編輯視窗版面」設計的位置擺放（依定義動態產生到 body）
-        inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
+        // 文字標籤也放上去（inputs 裡有，fields 裡沒有：不讀資料、不存檔，只讓執行後動作填值）
+        inputs = InputHelper.LayoutFields(body, fields.Concat(textLabels ?? new List<FieldDefinition>()), connectionString);     // 連線字串給下拉選單的選項 SQL 用
         // 欄位的開窗選取（跟「開啟畫面」按鈕一樣開啟、帶回）；瀏覽時不開
         ButtonRunner.AttachPickers(inputs, b => { if (mode != EditMode.Browse) RunButton(b); });
         // 下拉選單的執行後動作：@名稱 先找視窗上的欄位，沒有就用目前這筆資料；查出來的值填回視窗上的欄位
-        ButtonRunner.AttachAfterSelect(inputs, connectionString, name =>
-        {
-            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (f != null) return InputHelper.GetValue(f, inputs[f]);
-            DataRow row = nav.CurrentRow;
-            return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-        });
+        ButtonRunner.AttachAfterSelect(inputs, connectionString, ValueOf);
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
@@ -160,7 +155,17 @@ public partial class RecordNavigatorDialog : Form
         DataRow row = nav.CurrentRow;
         foreach (var f in fields)
             InputHelper.SetValue(inputs[f], row != null && row.Table.Columns.Contains(f.Column) ? row[f.Column] : null);
+        ButtonRunner.RefreshTextLabels(inputs, connectionString, ValueOf);     // 文字標籤用欄位的執行後動作帶出來
         ReloadLists(row);
+    }
+
+    /// <summary>SQL 的 @名稱：先找視窗上的欄位，沒有就用目前這筆資料</summary>
+    private object ValueOf(string name)
+    {
+        var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (f != null) return InputHelper.GetValue(f, inputs[f]);
+        DataRow row = nav.CurrentRow;
+        return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
     }
 
     /// <summary>依目前這筆的欄位值重新載入明細清單；row = null（沒有資料、新增中）時清單是空的</summary>
@@ -379,6 +384,7 @@ public partial class RecordNavigatorDialog : Form
     private void BeginInsert()
     {
         foreach (var f in fields) InputHelper.SetValue(inputs[f], null);
+        foreach (var f in inputs.Keys.Where(f => f.IsTextLabel)) InputHelper.SetValue(inputs[f], f.Label);   // 文字標籤恢復原本的文字
         ReloadLists(null);
         DefaultValue.FillInputs(inputs);                                         // 欄位的預設值
         NumberRule.FillInputs(inputs, connectionString, nav.FullTableName);     // 有編號規則的欄位自動帶入下一個編號
