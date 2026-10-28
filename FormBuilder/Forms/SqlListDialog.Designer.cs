@@ -18,7 +18,7 @@ namespace FormBuilder
             this.txtTitle = new System.Windows.Forms.TextBox();
             this.lblTitle = new System.Windows.Forms.Label();
             this.sqlGroup = new System.Windows.Forms.GroupBox();
-            this.txtSql = new System.Windows.Forms.TextBox();
+            this.txtSql = new FormBuilder.SqlTextBox();
             this.lblParams = new System.Windows.Forms.Label();
             this.btnReadColumns = new System.Windows.Forms.Button();
             this.columnGroup = new System.Windows.Forms.GroupBox();
@@ -77,13 +77,12 @@ namespace FormBuilder
             //
             // txtSql
             //
-            this.txtSql.AcceptsReturn = true;
             this.txtSql.AcceptsTab = true;
             this.txtSql.Dock = System.Windows.Forms.DockStyle.Fill;
             this.txtSql.Font = new System.Drawing.Font("Consolas", 10F);
             this.txtSql.Multiline = true;
             this.txtSql.Name = "txtSql";
-            this.txtSql.ScrollBars = System.Windows.Forms.ScrollBars.Both;
+            this.txtSql.ScrollBars = System.Windows.Forms.RichTextBoxScrollBars.Both;
             this.txtSql.TabIndex = 0;
             this.txtSql.WordWrap = false;
             //
@@ -217,7 +216,7 @@ namespace FormBuilder
         private System.Windows.Forms.TextBox txtTitle;
         private System.Windows.Forms.Label lblTitle;
         private System.Windows.Forms.GroupBox sqlGroup;
-        private System.Windows.Forms.TextBox txtSql;
+        private FormBuilder.SqlTextBox txtSql;
         private System.Windows.Forms.Label lblParams;
         private System.Windows.Forms.Button btnReadColumns;
         private System.Windows.Forms.GroupBox columnGroup;

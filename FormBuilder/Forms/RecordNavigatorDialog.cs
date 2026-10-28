@@ -87,6 +87,14 @@ public partial class RecordNavigatorDialog : Form
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
         // 欄位的開窗選取（跟「開啟畫面」按鈕一樣開啟、帶回）；瀏覽時不開
         ButtonRunner.AttachPickers(inputs, b => { if (mode != EditMode.Browse) RunButton(b); });
+        // 下拉選單的執行後動作：@名稱 先找視窗上的欄位，沒有就用目前這筆資料；查出來的值填回視窗上的欄位
+        ButtonRunner.AttachAfterSelect(inputs, connectionString, name =>
+        {
+            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (f != null) return InputHelper.GetValue(f, inputs[f]);
+            DataRow row = nav.CurrentRow;
+            return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
+        });
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
@@ -245,20 +253,24 @@ public partial class RecordNavigatorDialog : Form
             case ButtonAction.取消: CancelEdit(); break;
             case ButtonAction.離開: Close(); break;
             case ButtonAction.執行SQL:
-                // @欄位名稱：先找視窗上的欄位，沒有就用目前這筆資料
+            {
+                // @欄位名稱：先找視窗上的欄位，沒有就用目前這筆資料；SQL 查出來的值等重讀完再填進視窗上的欄位
+                IReadOnlyDictionary<string, object> result = null;
                 if (ButtonRunner.RunSql(b, connectionString, name =>
                     {
                         var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                         if (f != null) return InputHelper.GetValue(f, inputs[f]);
                         DataRow row = nav.CurrentRow;
                         return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-                    }) && nav.CurrentRow != null)
+                    }, onResult: values => result = values) && nav.CurrentRow != null)
                 {
                     nav.Refresh();                         // 資料可能被 SQL 改過，重讀
                     ShowRecord();
                     SetMode(EditMode.Browse);
                 }
+                if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
                 break;
+            }
             case ButtonAction.列印報表:
             {
                 // 欄位值先找目前這筆資料，沒有就用視窗上的欄位

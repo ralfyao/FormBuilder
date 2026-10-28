@@ -365,11 +365,25 @@ public class FieldDefinition
 
     [Category("下拉選單"), DisplayName("選項 SQL"),
      Description("從資料庫取選項：第一欄是值，第二欄（可省略）是顯示文字，例如：SELECT 代碼, 名稱 FROM 幣別"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string ItemsSql { get; set; }
 
     [Category("下拉選單"), DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get; set; }
+
+    [Category("下拉選單"), DisplayName("執行後動作"),
+     Description("使用者在下拉選單選了選項後執行這段 SQL（同一個交易，失敗全部還原），@名稱 取「執行後動作傳入參數」或畫面上任何欄位的值。"
+               + "SQL 有 SELECT 時，查出來的第一筆依「執行後動作回傳對應」填進畫面上的欄位，"
+               + "例如：SELECT ADDRESS AS 地址, TEL AS 電話 FROM C客戶設定 WHERE 客戶編號 = @客戶編號"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterSelectSql { get; set; }
+
+    [Category("下拉選單"), DisplayName("執行後動作傳入參數"), Description("「名稱=值」，多組用逗號或換行分隔，SQL 裡用 @名稱 取得；值可以是 @畫面欄位、SQL 運算式（含 @欄位 或括號，由資料庫算出）或固定值，例如：新編號=LEFT(@產品編號, 13) + '01'。沒列在這裡的 @名稱 直接取畫面上同名欄位的值"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterSelectParams { get; set; }
+
+    [Category("下拉選單"), DisplayName("執行後動作回傳對應"), Description("SQL 查出資料時，第一筆要填進畫面上的哪些欄位：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：地址=ADDRESS, 電話=TEL。空白 = SQL 的每個欄位填進畫面上同名的欄位（畫面上沒有的略過）")]
+    public string AfterSelectReturn { get; set; }
 
     [Category("開窗選取"), DisplayName("開窗畫面"),
      Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
@@ -769,7 +783,7 @@ public class ButtonDefinition
      Description("有填時，按下按鈕要先在清單選取資料（沒有清單的畫面檢查目前這筆），每一筆都符合這個條件才執行，否則顯示「檢查不符訊息」。"
                + "寫法：欄位名稱有空白或符號時用 [ ]，文字用單引號；可用 = <> > < >= <= AND OR NOT、LIKE（* 或 % 只能放在頭尾）、IN ('A','B')、"
                + "ISNULL(欄位, 值)、LEN(欄位)。例如：核准 = 'Y' AND 數量 > 0"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PreCheck { get; set; }
 
     [Category("按鈕"), DisplayName("檢查不符訊息"),
@@ -780,15 +794,24 @@ public class ButtonDefinition
      Description("按下按鈕（通過執行前檢查、確認）後先執行這段 SQL，成功了才接著做「動作」（例如開啟畫面）。"
                + "同一個交易執行，@欄位名稱 帶入選取的資料（清單選多筆時每筆各執行一次），失敗就全部還原、不做後續動作；需要編修權限。"
                + "例如：UPDATE A材料 SET 狀態 = '處理中' WHERE 產品編號 = @產品編號"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PreActionSql { get; set; }
+
+    [Category("按鈕"), DisplayName("SQL 傳入參數"),
+     Description("「執行後動作」和「執行SQL」的 SQL 用的參數：「名稱=值」，多組用逗號或換行分隔，SQL 裡用 @名稱 取得；值可以是 @畫面欄位、SQL 運算式（含 @欄位 或括號，由資料庫算出）或固定值，例如：新編號=LEFT(@產品編號, 13) + '01'。沒列在這裡的 @名稱 直接取畫面上同名欄位的值"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string SqlParams { get; set; }
+
+    [Category("按鈕"), DisplayName("SQL 回傳對應"),
+     Description("「執行後動作」和「執行SQL」的 SQL SQL 查出資料時，第一筆要填進畫面上的哪些欄位：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：地址=ADDRESS, 電話=TEL。空白 = SQL 的每個欄位填進畫面上同名的欄位（畫面上沒有的略過）")]
+    public string SqlReturn { get; set; }
 
     [Category("執行SQL"), DisplayName("SQL"),
      Description("執行SQL：同一個交易執行，@欄位名稱 帶入目前這筆的值，例如 UPDATE C客戶設定 SET 停用 = 1 WHERE 識別 = @識別。"
                + "自訂查詢：按一下輸入條件、再按一下（或確定）查詢，@欄位名稱 帶入輸入框的值（文字沒填 = 空字串）；SQL 沒用到畫面上的欄位時按一下就查，"
                + "例如 SELECT * FROM B廠商設定 WHERE 廠商名稱 LIKE '%' + @廠商名稱 + '%'。"
                + "開啟查詢條件畫面：可以空白（依條件畫面上的欄位自動組條件）；有填時改執行這個 SELECT，@欄位名稱 帶入條件畫面上的值"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string Sql { get; set; }
 
     [Category("開啟畫面"), DisplayName("畫面定義檔"),
@@ -807,7 +830,7 @@ public class ButtonDefinition
                + "SQL 運算式（含 @欄位 或括號，開啟時由資料庫算出），例如：產品編號=LEFT(@產品編號, 13) + (SELECT FORMAT(ISNULL(MAX(CONVERT(INT, RIGHT(產品編號, 2))), 0) + 1, '00') FROM 產品 WHERE 產品編號 LIKE LEFT(@產品編號, 13) + '%')；\n"
                + "固定值，例如：狀態=新建（含括號的固定文字用單引號括起來）。\n"
                + "對方畫面上有同名的欄位時，會當成查詢條件自動查詢；對方的「執行SQL」也可以用 @名稱 取得"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string OpenParams { get; set; }
 
     [Category("開啟畫面"), DisplayName("回傳對應"),
@@ -974,6 +997,10 @@ public class GridColumnDefinition
     public string EditPickerForm { get; set; }
     public string EditPickerParams { get; set; }
     public string EditPickerReturn { get; set; }
+    /// <summary>編輯視窗下拉選單的執行後動作（同 FieldDefinition.AfterSelectSql / AfterSelectParams / AfterSelectReturn）</summary>
+    public string EditAfterSelectSql { get; set; }
+    public string EditAfterSelectParams { get; set; }
+    public string EditAfterSelectReturn { get; set; }
     /// <summary>編輯視窗的日期選擇格式、勾選框的值（同 FieldDefinition）</summary>
     public string EditDateFormat { get; set; }
     /// <summary>編輯視窗新增時的自動編號規則（同 FieldDefinition.NumberRule）</summary>

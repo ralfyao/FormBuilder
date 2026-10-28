@@ -85,7 +85,7 @@ public partial class SqlListDialog : Form
             return;
         }
         // SQL 改了沒按「讀取欄位」：先讀一次，確認 SQL 能執行
-        if ((readColumns == null || txtSql.Text != grid.Sql) && !ReadColumns()) return;
+        if ((readColumns == null || txtSql.Text.Trim() != (grid.Sql ?? "").Replace("\r\n", "\n").Trim()) && !ReadColumns()) return;
         if (columnTable.Rows.Count == 0)
         {
             MessageBox.Show("SQL 沒有傳回任何欄位。", "提醒");
@@ -93,7 +93,7 @@ public partial class SqlListDialog : Form
         }
         var types = (readColumns ?? new()).ToDictionary(c => c.Column, StringComparer.OrdinalIgnoreCase);
         grid.Title = string.IsNullOrWhiteSpace(txtTitle.Text) ? "SQL 清單" : txtTitle.Text.Trim();
-        grid.Sql = txtSql.Text.Trim();
+        grid.Sql = txtSql.Text.Trim().Replace("\n", "\r\n");      // RichTextBox 的換行是 \n，存回 \r\n
         grid.Columns = columnTable.Rows.Cast<DataRow>().Select(r =>
         {
             string name = (string)r["Column"];

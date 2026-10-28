@@ -117,6 +117,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         // 欄位的開窗選取：瀏覽時不開（跟選取視窗按鈕一樣，輸入中、查詢中才能用）
         ButtonRunner.AttachPickers(inputs, b => { if (mode != Mode.Browse) OpenOtherForm(b); });
+        // 下拉選單的執行後動作：@名稱 先找畫面上的欄位，再找目前這筆、開啟時的傳入參數；查出來的值填回畫面上的欄位
+        ButtonRunner.AttachAfterSelect(inputs, def.ConnectionString, name =>
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null) return GetValue(field);
+            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return openParams.TryGetValue(name, out var param) ? param : null;
+        }, def.FormKey);
         HookJoinRefresh();
         HookFormulas();
 
@@ -863,13 +871,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (indexes.Count == 0 && HasCurrent) indexes.Add(current);
         var rows = HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
         var valueOfs = rows.Count > 0 ? rows.Select(ValueOf).ToList() : new List<Func<string, object>> { ValueOf(null) };
-        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey, sql, quiet);
+        IReadOnlyDictionary<string, object> result = null;
+        bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey, sql, quiet, values => result = values);
         // 資料可能被 SQL 改過，重讀執行過的那幾筆
         if (ok && HasMasterTable && HasKey && indexes.Count > 0)
         {
             RefreshRows(indexes);
             SetMode(mode);
         }
+        // SQL 查出來的值（「SQL 回傳對應」）等重讀完再填進畫面上的欄位，才不會被重讀蓋掉
+        if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
         return ok;
     }
 

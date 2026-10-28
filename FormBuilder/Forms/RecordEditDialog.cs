@@ -45,6 +45,12 @@ public partial class RecordEditDialog : Form
             var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
         }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString));
+        // 下拉選單的執行後動作：@名稱 先找視窗上的欄位，沒有就用這筆資料；查出來的值填回視窗上的欄位
+        ButtonRunner.AttachAfterSelect(inputs, connectionString, name =>
+        {
+            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
+        });
         // 後台在編輯視窗版面放的按鈕：明細編輯只支援確定、取消、離開、執行SQL、開啟畫面
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
@@ -63,7 +69,7 @@ public partial class RecordEditDialog : Form
                         {
                             var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
-                        });
+                        }, onResult: values => ButtonRunner.FillFields(values, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn)));
                         break;
                     case ButtonAction.列印報表:
                         if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, name => currentValue(name), this)) break;   // 依下方清單選取的資料列印

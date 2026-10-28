@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using System.Text.RegularExpressions;
 
 namespace FormBuilder;
@@ -24,8 +25,9 @@ public static class ButtonRunner
     /// 執行按鈕設定的 SQL（同一個交易，失敗全部還原）。
     /// @欄位名稱 的值由 valueOf 提供（回傳 null = NULL；格式不對時丟 FormatException）
     /// </summary>
-    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf, string formKey = null) =>
-        RunSql(b, connectionString, new[] { valueOf }, formKey);
+    public static bool RunSql(ButtonDefinition b, string connectionString, Func<string, object> valueOf, string formKey = null,
+                              Action<IReadOnlyDictionary<string, object>> onResult = null) =>
+        RunSql(b, connectionString, new[] { valueOf }, formKey, onResult: onResult);
 
     /// <summary>
     /// 對多筆資料各執行一次按鈕設定的 SQL（清單多選時），全部在同一個交易裡，任何一筆失敗就全部還原；
@@ -33,8 +35,9 @@ public static class ButtonRunner
     /// </summary>
     /// <param name="userSql">要執行的 SQL；null = 按鈕的「SQL」（「執行後動作」傳自己的 SQL）</param>
     /// <param name="quiet">成功時不顯示「執行完成」（「執行後動作」成功後直接接著做後續動作）</param>
+    /// <param name="onResult">SQL 有 SELECT 出資料時，依按鈕的「SQL 回傳對應」交給呼叫端填進畫面上的欄位（key = 畫面欄位名稱）</param>
     public static bool RunSql(ButtonDefinition b, string connectionString, IReadOnlyList<Func<string, object>> rows, string formKey = null,
-                              string userSql = null, bool quiet = false)
+                              string userSql = null, bool quiet = false, Action<IReadOnlyDictionary<string, object>> onResult = null)
     {
         userSql ??= b.Sql;
         if (string.IsNullOrWhiteSpace(userSql))
@@ -44,22 +47,9 @@ public static class ButtonRunner
         }
         try
         {
-            var d = DbDialect.Of(connectionString);
-            var (sql, parameters) = d.PrepareUserSql(userSql);    // @欄位名稱 轉成這個資料庫的參數寫法
-            using var conn = d.Open(connectionString);
-            using var tran = conn.BeginTransaction();
-            using var cmd = d.CreateCommand(conn, sql);
-            cmd.Transaction = tran;
-            int affected = 0;
-            foreach (var valueOf in rows)
-            {
-                cmd.Parameters.Clear();
-                foreach (var (name, parameter) in parameters)
-                    d.AddParam(cmd, parameter, valueOf(name));
-                affected += Math.Max(0, cmd.ExecuteNonQuery());
-            }
-            tran.Commit();
+            int affected = ExecuteSql(userSql, b.SqlParams, connectionString, rows, out var firstRow);
             Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = userSql, 筆數 = rows.Count, 影響 = affected });
+            if (firstRow != null) onResult?.Invoke(MapResult(firstRow, b.SqlReturn));
             if (!quiet)
                 MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
@@ -73,6 +63,107 @@ public static class ButtonRunner
         {
             MessageBox.Show("執行失敗（已全部還原）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 在同一個交易裡執行使用者寫的 SQL（rows 每一筆各執行一次，任何一筆失敗就全部還原），回傳影響筆數。
+    /// SQL 的 @名稱 先找 paramText（「名稱=值」，值可以是 @欄位、SQL 運算式或固定值，見 ParamValue），沒有就用 valueOf 取畫面上的值；
+    /// SQL 有 SELECT 出資料時，firstRow = 第一個查詢結果的第一筆（欄位名稱 → 值），沒有就是 null
+    /// </summary>
+    public static int ExecuteSql(string userSql, string paramText, string connectionString, IReadOnlyList<Func<string, object>> rows,
+                                 out Dictionary<string, object> firstRow)
+    {
+        firstRow = null;
+        var d = DbDialect.Of(connectionString);
+        var (sql, parameters) = d.PrepareUserSql(userSql);        // @名稱 轉成這個資料庫的參數寫法
+        var extra = ParsePairs(paramText).GroupBy(p => p.Left, StringComparer.OrdinalIgnoreCase)
+                                         .ToDictionary(g => g.Key, g => g.Last().Right, StringComparer.OrdinalIgnoreCase);
+        using var conn = d.Open(connectionString);
+        using var tran = conn.BeginTransaction();
+        using var cmd = d.CreateCommand(conn, sql);
+        cmd.Transaction = tran;
+        int affected = 0;
+        foreach (var valueOf in rows)
+        {
+            // 傳入參數用同一條連線、同一個交易計算（看得到前面幾筆剛改的資料）
+            var computed = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            object ValueOf(string name)
+            {
+                if (!extra.TryGetValue(name, out string source)) return valueOf(name);
+                if (!computed.TryGetValue(name, out var v)) computed[name] = v = ParamValue(name, source, valueOf, connectionString, conn, tran);
+                return v;
+            }
+            var values = parameters.Select(p => (p.Parameter, Value: ValueOf(p.Name))).ToList();
+            cmd.Parameters.Clear();
+            foreach (var (parameter, value) in values) d.AddParam(cmd, parameter, value);
+            using (var reader = cmd.ExecuteReader())
+            {
+                do
+                {
+                    if (firstRow == null && reader.FieldCount > 0 && reader.Read())
+                    {
+                        firstRow = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                        for (int i = 0; i < reader.FieldCount; i++) firstRow[reader.GetName(i)] = reader.GetValue(i);
+                    }
+                } while (reader.NextResult());
+                affected += Math.Max(0, reader.RecordsAffected);
+            }
+        }
+        tran.Commit();
+        return affected;
+    }
+
+    /// <summary>
+    /// SQL 查出來的那一筆依「回傳對應」轉成要填的欄位值（key = 畫面欄位名稱）：
+    /// 「畫面欄位=SQL 欄位」，多組用逗號分隔；空白 = SQL 的每個欄位填進畫面上同名的欄位
+    /// </summary>
+    public static Dictionary<string, object> MapResult(IReadOnlyDictionary<string, object> row, string returnMap)
+    {
+        var map = ParsePairs(returnMap).ToList();
+        if (map.Count == 0) return new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase);
+        var values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var notFound = new List<string>();
+        foreach (var (screen, column) in map)
+        {
+            string name = column.TrimStart('@');
+            if (row.TryGetValue(name, out var v)) values[screen] = v;
+            else notFound.Add(name);
+        }
+        if (notFound.Count > 0)
+            MessageBox.Show("SQL 查出來的資料沒有這些「回傳對應」的欄位：" + string.Join("、", notFound), "提醒");
+        return values;
+    }
+
+    /// <summary>
+    /// 下拉選單的「執行後動作」：使用者選了選項後執行 SQL，@名稱 先找「執行後動作傳入參數」，再用 valueOf 取畫面上任何欄位的值；
+    /// SQL 查出資料時，依「執行後動作回傳對應」填進畫面上的欄位（空白 = 同名的欄位）
+    /// </summary>
+    public static void AttachAfterSelect(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString, Func<string, object> valueOf,
+                                         string formKey = null)
+    {
+        foreach (var (f, input) in inputs)
+        {
+            if (string.IsNullOrWhiteSpace(f.AfterSelectSql) || input is not ComboBox combo) continue;
+            combo.SelectionChangeCommitted += (s, e) =>
+            {
+                try
+                {
+                    ExecuteSql(f.AfterSelectSql, f.AfterSelectParams, connectionString, new Func<string, object>[] { valueOf }, out var row);
+                    Audit.Write(formKey, null, "執行SQL", null, new { 下拉選單 = f.Label ?? f.Column, SQL = f.AfterSelectSql });
+                    if (row != null)
+                        FillFields(MapResult(row, f.AfterSelectReturn), inputs, reportMissing: !string.IsNullOrWhiteSpace(f.AfterSelectReturn));
+                }
+                catch (FormatException ex)
+                {
+                    MessageBox.Show(ex.Message, "提醒");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"下拉選單「{f.Label ?? f.Column}」的執行後動作失敗（已全部還原）：{ex.Message}", "錯誤",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            };
         }
     }
 
@@ -132,6 +223,7 @@ public static class ButtonRunner
 
     private static readonly Regex FieldRef = new(@"^@[\p{L}\p{N}_]+$", RegexOptions.Compiled);
     private static readonly Regex HasFieldRef = new(@"(?<!@)@[\p{L}\p{N}_]", RegexOptions.Compiled);
+    private static readonly Regex QuotedText = new(@"^'([^']|'')*'$", RegexOptions.Compiled);
 
     /// <summary>
     /// 傳入參數的值怎麼算：
@@ -140,33 +232,49 @@ public static class ButtonRunner
     ///                                    LEFT(@產品編號, 13) + (SELECT FORMAT(ISNULL(MAX(...), 0) + 1, '00') FROM ...)
     ///   其他                          → 固定文字（要傳含括號的固定文字時用單引號括起來，例如 'A(1)'）
     /// </summary>
-    public static object ParamValue(string name, string source, Func<string, object> valueOf, string connectionString)
+    /// <param name="conn">已經開好的連線（跟後面的 SQL 同一個交易時傳入，才看得到交易裡剛改的資料）；null = 另外開一條</param>
+    public static object ParamValue(string name, string source, Func<string, object> valueOf, string connectionString,
+                                    DbConnection conn = null, DbTransaction tran = null)
     {
         if (FieldRef.IsMatch(source)) return valueOf?.Invoke(source[1..]) ?? DBNull.Value;
+        if (QuotedText.IsMatch(source)) return source[1..^1].Replace("''", "'");   // 'A(1), B'：單引號括起來的固定文字
         if (!HasFieldRef.IsMatch(source) && !source.Contains('(')) return source;
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new InvalidOperationException($"傳入參數「{name}」是 SQL 運算式，但這個畫面沒有資料庫連線。");
         var d = DbDialect.Of(connectionString);
         var (sql, parameters) = d.PrepareUserSql("SELECT " + source + (d.Kind == DbKind.Oracle ? " FROM DUAL" : ""));
+        DbConnection own = null;
         try
         {
-            using var conn = d.Open(connectionString);
+            if (conn == null) conn = own = d.Open(connectionString);
             using var cmd = d.CreateCommand(conn, sql);
+            cmd.Transaction = tran;
             foreach (var (field, parameter) in parameters)
                 d.AddParam(cmd, parameter, valueOf?.Invoke(field));
             return cmd.ExecuteScalar() ?? DBNull.Value;
         }
-        catch (Exception ex) when (ex is not FormatException)
+        catch (FormatException)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             throw new InvalidOperationException($"傳入參數「{name}」的 SQL 執行失敗：{ex.Message}\n{source}", ex);
+        }
+        finally
+        {
+            own?.Dispose();
         }
     }
 
     /// <summary>有設定「回傳對應」的開啟畫面按鈕 = 選取視窗：要在輸入中（新增、修改）才能按</summary>
     public static bool IsPicker(ButtonDefinition b) => b.Action == ButtonAction.開啟畫面 && ParsePairs(b.ReturnMap).Any();
 
-    /// <summary>把選取視窗帶回的值填進本視窗的欄位；本視窗沒有的欄位列出來提醒</summary>
-    public static void FillFields(IReadOnlyDictionary<string, object> values, IReadOnlyDictionary<FieldDefinition, Control> inputs)
+    /// <summary>
+    /// 把選取視窗帶回的值（或 SQL 查出來的值）填進本視窗的欄位；reportMissing = 本視窗沒有的欄位列出來提醒
+    /// </summary>
+    public static void FillFields(IReadOnlyDictionary<string, object> values, IReadOnlyDictionary<FieldDefinition, Control> inputs,
+                                  bool reportMissing = true)
     {
         var missing = new List<string>();
         foreach (var (column, value) in values)
@@ -175,7 +283,7 @@ public static class ButtonRunner
             if (field == null) missing.Add(column);
             else InputHelper.SetValue(inputs[field], value);
         }
-        if (missing.Count > 0)
+        if (missing.Count > 0 && reportMissing)
             MessageBox.Show("「回傳對應」裡這些欄位不在這個視窗上，沒有帶入：" + string.Join("、", missing), "提醒");
     }
 

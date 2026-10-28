@@ -295,6 +295,9 @@ public partial class EditLayoutDialog : Form
             PickerForm = c.EditPickerForm,
             PickerParams = c.EditPickerParams,
             PickerReturn = c.EditPickerReturn,
+            AfterSelectSql = c.EditAfterSelectSql,
+            AfterSelectParams = c.EditAfterSelectParams,
+            AfterSelectReturn = c.EditAfterSelectReturn,
             DateFormat = c.EditDateFormat,
             NumberRule = c.EditNumberRule,
             DefaultValue = c.EditDefaultValue,
@@ -730,6 +733,9 @@ public partial class EditLayoutDialog : Form
                 c.EditPickerForm = string.IsNullOrWhiteSpace(box.Field.PickerForm) ? null : box.Field.PickerForm.Trim();
                 c.EditPickerParams = string.IsNullOrWhiteSpace(box.Field.PickerParams) ? null : box.Field.PickerParams;
                 c.EditPickerReturn = string.IsNullOrWhiteSpace(box.Field.PickerReturn) ? null : box.Field.PickerReturn;
+                c.EditAfterSelectSql = string.IsNullOrWhiteSpace(box.Field.AfterSelectSql) ? null : box.Field.AfterSelectSql;
+                c.EditAfterSelectParams = string.IsNullOrWhiteSpace(box.Field.AfterSelectParams) ? null : box.Field.AfterSelectParams;
+                c.EditAfterSelectReturn = string.IsNullOrWhiteSpace(box.Field.AfterSelectReturn) ? null : box.Field.AfterSelectReturn;
                 c.EditDateFormat = string.IsNullOrWhiteSpace(box.Field.DateFormat) ? null : box.Field.DateFormat.Trim();
                 c.EditNumberRule = string.IsNullOrWhiteSpace(box.Field.NumberRule) ? null : box.Field.NumberRule.Trim();
                 c.EditDefaultValue = string.IsNullOrWhiteSpace(box.Field.DefaultValue) ? null : box.Field.DefaultValue.Trim();
@@ -811,7 +817,7 @@ public class EditFieldView
     public string Items { get => field.Items; set => field.Items = value; }
 
     [DisplayName("選項 SQL"), Description("從資料庫取選項：第一欄是值，第二欄（可省略）是顯示文字，例如：SELECT 代碼, 名稱 FROM 幣別"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string ItemsSql { get => field.ItemsSql; set => field.ItemsSql = value; }
 
     [DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
@@ -826,6 +832,17 @@ public class EditFieldView
 
     [DisplayName("開窗回傳對應"), Description("「本視窗欄位=對方欄位」，可以帶回多個欄位；空白 = 只帶回這個欄位（對方同名的欄位）；只寫對方的欄位名稱 = 把它帶回這個欄位")]
     public string PickerReturn { get => field.PickerReturn; set => field.PickerReturn = value; }
+
+    [DisplayName("執行後動作"), Description("下拉選單選了選項後執行的 SQL；@名稱 取「執行後動作傳入參數」或視窗上任何欄位的值。SQL 有 SELECT 時，第一筆依「執行後動作回傳對應」填進視窗上的欄位"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterSelectSql { get => field.AfterSelectSql; set => field.AfterSelectSql = value; }
+
+    [DisplayName("執行後動作傳入參數"), Description("「名稱=值」，多組用逗號或換行分隔，SQL 裡用 @名稱 取得；值可以是 @畫面欄位、SQL 運算式（含 @欄位 或括號，由資料庫算出）或固定值，例如：新編號=LEFT(@產品編號, 13) + '01'。沒列在這裡的 @名稱 直接取畫面上同名欄位的值"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterSelectParams { get => field.AfterSelectParams; set => field.AfterSelectParams = value; }
+
+    [DisplayName("執行後動作回傳對應"), Description("SQL 查出資料時，第一筆要填進畫面上的哪些欄位：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：地址=ADDRESS, 電話=TEL。空白 = SQL 的每個欄位填進畫面上同名的欄位（畫面上沒有的略過）")]
+    public string AfterSelectReturn { get => field.AfterSelectReturn; set => field.AfterSelectReturn = value; }
 
     [DisplayName("字體大小"), DefaultValue(0f), Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高")]
     public float FontSize { get => field.FontSize; set => field.FontSize = Math.Clamp(value, 0, 72); }
