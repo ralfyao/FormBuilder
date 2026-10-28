@@ -141,6 +141,12 @@ public partial class EditLayoutDialog : Form
         if (saveForm == null) miSave.ToolTipText = miSaveClose.ToolTipText = "從設計畫面開啟時才能存檔";
         miSave.Click += (s, e) => SaveLayout(close: false);
         miSaveClose.Click += (s, e) => SaveLayout(close: true);
+        // 匯入現有畫面：用已經設計好的畫面（例如單頭畫面）當編輯視窗的版面
+        btnFileMenu.DropDownItems.Insert(0, new ToolStripSeparator());
+        btnFileMenu.DropDownItems.Insert(0, new ToolStripMenuItem("匯入現有畫面…", null, (s, e) => ImportForm())
+        {
+            ToolTipText = "選一個畫面定義檔，同名的欄位照那個畫面的位置、大小、標籤、輸入方式放上來，按鈕、版面大小、底色、字型也一起帶入",
+        });
 
         // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
         miUndo.Click += (s, e) => history.Undo();
@@ -254,6 +260,82 @@ public partial class EditLayoutDialog : Form
         RefreshAvailable();
         SetSelection(Array.Empty<DesignBox>());
         UpdateCanvasSize();
+    }
+
+    /// <summary>
+    /// 檔案 → 匯入現有畫面：讀一個畫面定義檔，跟這個 Grid 同名的欄位照那個畫面的位置、大小、標籤與輸入方式放上版面，
+    /// 按鈕、版面大小、底色、字型也一起帶入（取代目前的版面，可以按 Ctrl+Z 復原）；文字標籤和 Grid 不帶入
+    /// </summary>
+    private void ImportForm()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "匯入現有畫面",
+            Filter = "畫面定義檔 (*.json)|*.json",
+            InitialDirectory = Directory.Exists(FormDefinition.DefaultFolder) ? FormDefinition.DefaultFolder : null,
+        };
+        if (dlg.ShowDialog(this) == DialogResult.OK) ImportForm(dlg.FileName);
+    }
+
+    private void ImportForm(string path)
+    {
+        FormDefinition source;
+        try
+        {
+            source = FormDefinition.Load(path);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("讀取畫面定義檔失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var fields = new List<PlacedField>();
+        var skipped = new List<string>();
+        foreach (var f in source.Fields.Where(f => !f.IsTextLabel))
+        {
+            var column = grid.Columns.FirstOrDefault(c => c.Column.Equals(f.Column, StringComparison.OrdinalIgnoreCase));
+            if (column == null || fields.Any(p => p.Column == column.Column))
+            {
+                skipped.Add(string.IsNullOrWhiteSpace(f.Label) ? f.Column : $"{f.Label}（{f.Column}）");
+                continue;
+            }
+            // 複製一份（不動到來源畫面），主鍵、不能輸入照這個 Grid 的欄位
+            var copy = System.Text.Json.JsonSerializer.Deserialize<FieldDefinition>(System.Text.Json.JsonSerializer.Serialize(f));
+            copy.Column = column.Column;
+            copy.IsKey = column.IsKey;
+            copy.NoEntry = f.NoEntry || column.NoEntry || column.IsIdentity;
+            fields.Add(new PlacedField { Column = column.Column, Field = copy });
+        }
+        string name = string.IsNullOrWhiteSpace(source.Title) ? Path.GetFileNameWithoutExtension(path) : source.Title;
+        if (fields.Count == 0)
+        {
+            MessageBox.Show($"「{name}」的欄位跟這個 Grid（{grid.TableName}）沒有同名的欄位，沒有匯入。", "匯入現有畫面");
+            return;
+        }
+        if (placed.Count + buttonBoxes.Count + listBoxes.Count > 0 &&
+            MessageBox.Show("匯入會取代目前的版面（之後可以按 Ctrl+Z 復原），確定要匯入嗎？", "匯入現有畫面",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+        RestoreLayout(System.Text.Json.JsonSerializer.Serialize(new LayoutState
+        {
+            Fields = fields,
+            Buttons = source.Buttons.Select(b => b.Clone()).ToList(),
+            Width = source.Width,
+            Height = source.Height,
+            EffectiveColumn = effectiveColumn,
+            BackColorHtml = source.BackColorHtml ?? ColorText.Format(backColor),
+        }));
+        if (!string.IsNullOrWhiteSpace(source.FontName) || source.FontSize > 0)
+        {
+            editFontName = string.IsNullOrWhiteSpace(source.FontName) ? null : source.FontName;
+            editFontSize = source.FontSize;
+            ApplyEditFont();
+        }
+        history.Check();
+        lblHint.Text = $"  已匯入「{name}」：{fields.Count} 個欄位、{source.Buttons.Count} 個按鈕";
+        if (skipped.Count > 0)
+            MessageBox.Show($"這些欄位在 {grid.TableName} 沒有同名的欄位，沒有匯入：" + Environment.NewLine + string.Join("、", skipped), "匯入現有畫面");
     }
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / (double)DesignBox.Grid) * DesignBox.Grid);
