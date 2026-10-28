@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Data;
 
 namespace FormBuilder;
 
@@ -149,6 +150,12 @@ public partial class EditLayoutDialog : Form
         btnFileMenu.DropDownItems.Insert(0, new ToolStripMenuItem("匯入現有畫面…", null, (s, e) => ImportForm())
         {
             ToolTipText = "選一個畫面定義檔，同名的欄位照那個畫面的位置、大小、標籤、輸入方式放上來，文字標籤、按鈕、版面大小、底色、字型也一起帶入",
+        });
+
+        // ---- 預覽：用目前的版面開一個編輯視窗看看（不用先存檔）----
+        effectBar.Items.Insert(effectBar.Items.IndexOf(sepMenus), new ToolStripButton("預覽", null, (s, e) => Preview())
+        {
+            ToolTipText = "用目前的版面開編輯視窗，資料是資料表的前 50 筆；預覽中不能新增、修改、刪除",
         });
 
         // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
@@ -835,16 +842,20 @@ public partial class EditLayoutDialog : Form
     }
 
     /// <summary>把目前的版面寫回 GridDefinition；版面上沒有欄位時不寫，回傳 false</summary>
-    private bool WriteBack()
+    private bool WriteBack() => WriteBack(grid);
+
+    /// <param name="target">要寫入的 Grid：grid 本身，或預覽用的複本（欄位順序跟 grid 一樣）</param>
+    private bool WriteBack(GridDefinition target)
     {
         if (placed.Count == 0)
         {
             MessageBox.Show("編輯視窗至少要有一個欄位。", "提醒");
             return false;
         }
-        foreach (var c in grid.Columns)
+        for (int i = 0; i < grid.Columns.Count; i++)
         {
-            if (placed.TryGetValue(c, out var box))
+            var c = target.Columns[i];
+            if (placed.TryGetValue(grid.Columns[i], out var box))
             {
                 c.EditVisible = true;
                 c.EditX = box.Field.X;
@@ -881,17 +892,87 @@ public partial class EditLayoutDialog : Form
                 c.EditVisible = false;
             }
         }
-        grid.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
-        grid.EditLists = listBoxes.Select(b => b.ListDef).ToList();
-        grid.EditTextLabels = labelBoxes.Select(b => b.Field).ToList();
-        grid.HasEditLayout = true;
-        grid.EditFormWidth = formSize.Width;
-        grid.EditFormHeight = formSize.Height;
-        grid.EffectiveColumn = string.IsNullOrEmpty(effectiveColumn) ? null : effectiveColumn;
-        grid.EditBackColor = backColor;
-        grid.EditFontName = string.IsNullOrWhiteSpace(editFontName) ? null : editFontName;
-        grid.EditFontSize = editFontSize;
+        target.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
+        target.EditLists = listBoxes.Select(b => b.ListDef).ToList();
+        target.EditTextLabels = labelBoxes.Select(b => b.Field).ToList();
+        target.HasEditLayout = true;
+        target.EditFormWidth = formSize.Width;
+        target.EditFormHeight = formSize.Height;
+        target.EffectiveColumn = string.IsNullOrEmpty(effectiveColumn) ? null : effectiveColumn;
+        target.EditBackColor = backColor;
+        target.EditFontName = string.IsNullOrWhiteSpace(editFontName) ? null : editFontName;
+        target.EditFontSize = editFontSize;
         return true;
+    }
+
+    // ================= 預覽 =================
+
+    /// <summary>
+    /// 預覽：用目前的版面（還沒按確定、存檔也可以）開一個編輯視窗，資料是這個 Grid 資料表的前 50 筆，可以切換上一筆、下一筆；
+    /// 預覽中不能新增、修改、刪除，也不能執行 SQL 按鈕（不會改到資料）。JOIN 帶進來的欄位預覽時是空白
+    /// </summary>
+    private void Preview()
+    {
+        // 複本：不動到正在設計的 Grid
+        var copy = FormDefinition.FromJson(new FormDefinition { Grids = { grid } }.ToJson()).Grids[0];
+        if (!WriteBack(copy)) return;
+        DataTable data = new();
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                var d = DbDialect.Of(connectionString);
+                using var conn = d.Open(connectionString);
+                using var cmd = d.CreateCommand(conn, $"SELECT {d.Top(50)}* FROM {copy.FullTableName(d)}{d.Limit(50)}");
+                data = d.Fill(cmd);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("讀取預覽資料失敗（只顯示空白的編輯視窗）：" + ex.Message, "預覽");
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
+        }
+        var fields = copy.EditColumns.Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity)).ToList();
+        var navigator = new PreviewNavigator(data, string.IsNullOrWhiteSpace(connectionString) ? copy.TableName : copy.FullTableName(DbDialect.Of(connectionString)));
+        using var dlg = new RecordNavigatorDialog(navigator, "預覽：" + (copy.Title ?? copy.TableName), fields, copy.EditFormSize, connectionString,
+                                                  copy.EditButtons, FormDefinition.DefaultFolder, copy.EffectiveColumn, copy.EditLists,
+                                                  copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels);
+        dlg.ShowDialog(this);
+    }
+
+    /// <summary>預覽用的資料來源：只能瀏覽、切換、列印（不能新增、修改、刪除、生效）</summary>
+    private sealed class PreviewNavigator : IRecordNavigator
+    {
+        private readonly DataTable data;
+        private int current;
+
+        public PreviewNavigator(DataTable data, string fullTableName)
+        {
+            this.data = data;
+            FullTableName = fullTableName;
+            current = data.Rows.Count > 0 ? 0 : -1;
+        }
+
+        public string FullTableName { get; }
+        public int Count => data.Rows.Count;
+        public int Current => current;
+        public DataRow CurrentRow => current >= 0 ? data.Rows[current] : null;
+        public bool CanModify => false;
+        public bool CanInsert => false;
+        public bool CanDelete => false;
+        public bool CanPrint => true;
+        public bool CanApprove => false;
+        public FormPermission Permission { get; } = new(true, false, false, false, true);
+        public void MoveTo(int index) { if (index >= 0 && index < data.Rows.Count) current = index; }
+        public bool Refresh() => current >= 0;
+        public bool Insert(Dictionary<string, object> values) => false;
+        public bool Update(Dictionary<string, object> values) => false;
+        public bool UpdateColumn(string column, object value, string doneMessage) => false;
+        public bool Delete() => false;
     }
 }
 
