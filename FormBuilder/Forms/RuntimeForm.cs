@@ -2022,12 +2022,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         listGrid.CellBeginEdit += (s, e) =>
         {
-            var row = listGrid.Rows[e.RowIndex];
-            if (!row.IsNewRow && !(row.DataBoundItem is DataRowView v && IsPendingRow(v.Row))) e.Cancel = true;
+            if (e.RowIndex >= 0 && e.RowIndex < listGrid.Rows.Count && listGrid.Rows[e.RowIndex].IsNewRow) return;
+            if (ListRowView(e.RowIndex) is not { } v || !IsPendingRow(v.Row)) e.Cancel = true;
         };
         listGrid.RowValidating += (s, e) =>
         {
-            if (listGrid.Rows[e.RowIndex].DataBoundItem is not DataRowView view || !IsPendingRow(view.Row)) return;
+            if (e.RowIndex < listGrid.Rows.Count && listGrid.Rows[e.RowIndex].IsNewRow) return;      // 空白的新增列（沒輸入任何東西）
+            if (ListRowView(e.RowIndex) is not { } view || !IsPendingRow(view.Row)) return;
             listGrid.EndEdit();
             var missing = listDef.Columns.Where(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.IsJoin && !c.NoEntry
                                                      && results.Columns.Contains(c.Column) && view.Row[c.Column] == DBNull.Value)
@@ -2041,6 +2042,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
             var row = view.Row;
             BeginInvoke(() => InsertListRow(row));                // 等 Grid 把這一列交給 DataTable 後再存
         };
+    }
+
+    /// <summary>
+    /// 清單第 index 列對應的資料；沒有（空白的新增列、重新查詢換了資料後 Grid 還在驗證舊的列）時回傳 null。
+    /// 不用 DataGridViewRow.DataBoundItem：列數跟資料對不上時它會丟 IndexOutOfRangeException
+    /// </summary>
+    private DataRowView ListRowView(int index)
+    {
+        if (listGrid.DataSource != results) return null;
+        var view = results.DefaultView;
+        return index >= 0 && index < view.Count ? view[index] : null;
     }
 
     /// <summary>把清單上新輸入的一列 INSERT 到資料表；失敗時把輸入的值放回清單，讓使用者修正</summary>
