@@ -70,7 +70,8 @@ public static class ButtonRunner
             int affected = ExecuteSql(userSql, b.SqlParams, connectionString, rows, out var firstRow);
             Audit.Write(formKey, null, "執行SQL", null, new { 按鈕 = b.Text, SQL = userSql, 筆數 = rows.Count, 影響 = affected });
             if (firstRow != null) onResult?.Invoke(MapResult(firstRow, b.SqlReturn));
-            if (!quiet)
+            // 只是查值填回畫面（例如取號）時不跳「執行完成」，查到的值已經顯示在欄位上
+            if (!quiet && !(firstRow != null && affected == 0))
                 MessageBox.Show(rows.Count > 1 ? $"已對選取的 {rows.Count} 筆資料執行完成（影響 {affected} 筆）。" : $"執行完成（影響 {affected} 筆）。", b.Text);
             return true;
         }

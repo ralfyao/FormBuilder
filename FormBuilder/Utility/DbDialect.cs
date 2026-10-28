@@ -73,20 +73,26 @@ public abstract class DbDialect
         }
     }
 
-    /// <summary>建立命令（conn 可以先不給，之後再設定 Connection）</summary>
-    public virtual DbCommand CreateCommand(DbConnection conn = null, string sql = null)
+    /// <summary>建立命令（conn 可以先不給，之後再設定 Connection）；預覽執行（Debug）時包成 DebugCommand，出錯時顯示 SQL</summary>
+    public DbCommand CreateCommand(DbConnection conn = null, string sql = null)
     {
-        var cmd = conn != null ? conn.CreateCommand() : Factory.CreateCommand();
+        var cmd = NewCommand(conn);
         if (sql != null) cmd.CommandText = sql;
-        return cmd;
+        return SqlDebug.Enabled ? new DebugCommand(cmd) : cmd;
     }
+
+    /// <summary>建立這個資料庫的命令物件</summary>
+    protected virtual DbCommand NewCommand(DbConnection conn) => conn != null ? conn.CreateCommand() : Factory.CreateCommand();
 
     /// <summary>執行查詢，結果放到 DataTable</summary>
     public DataTable Fill(DbCommand cmd)
     {
         var table = new DataTable();
         using var adapter = Factory.CreateDataAdapter();
-        adapter.SelectCommand = cmd;
+        // DataAdapter 只收這個資料庫自己的命令型別：Debug 時把真正的命令交給它，執行前先記下 SQL
+        var real = cmd is DebugCommand debug ? debug.Inner : cmd;
+        SqlDebug.Executing(real);
+        adapter.SelectCommand = real;
         adapter.Fill(table);
         return table;
     }
@@ -266,9 +272,9 @@ public sealed class OracleDialect : DbDialect
     protected override string ParameterName(string name) => name;
 
     /// <summary>ODP.NET 預設依順序對應參數，改成依名稱（同一個參數用兩次、順序不同才不會錯）</summary>
-    public override DbCommand CreateCommand(DbConnection conn = null, string sql = null)
+    protected override DbCommand NewCommand(DbConnection conn)
     {
-        var cmd = base.CreateCommand(conn, sql);
+        var cmd = base.NewCommand(conn);
         if (cmd is OracleCommand oc) oc.BindByName = true;
         return cmd;
     }

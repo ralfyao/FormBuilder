@@ -744,7 +744,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.單身 => btnDetail.Enabled,
         ButtonAction.離開 => btnExit.Enabled,
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
-        ButtonAction.執行SQL => mode == Mode.Browse && perm.Modify,
+        ButtonAction.執行SQL => mode is Mode.Insert or Mode.Modify && perm.Modify,    // 執行SQL 只在新增、修改中可以按（例如取號、更名）
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
         ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && (HasMasterTable || sqlGrids.Count > 0),
         _ => mode == Mode.Browse,
@@ -870,14 +870,24 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         Func<string, object> ValueOf(DataRow row) => name => row != null && row.Table.Columns.Contains(name) ? row[name] : Other(name);
 
-        var indexes = SelectedRowIndexes();
-        if (indexes.Count == 0 && HasCurrent) indexes.Add(current);
-        var rows = HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
-        var valueOfs = rows.Count > 0 ? rows.Select(ValueOf).ToList() : new List<Func<string, object>> { ValueOf(null) };
+        // 新增、修改中：只執行一次，@欄位名稱 先取畫面上正在輸入的值；執行完不重讀資料，才不會蓋掉正在輸入的內容
+        bool editing = mode is Mode.Insert or Mode.Modify;
+        var indexes = editing ? new List<int>() : SelectedRowIndexes();
+        if (!editing && indexes.Count == 0 && HasCurrent) indexes.Add(current);
+        var rows = editing ? new List<DataRow>() : HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
+        Func<string, object> editingValue = name =>
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null) return GetValue(field);
+            if (mode == Mode.Modify && HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return openParams.TryGetValue(name, out var param) ? param : null;
+        };
+        var valueOfs = editing ? new List<Func<string, object>> { editingValue }
+                     : rows.Count > 0 ? rows.Select(ValueOf).ToList() : new List<Func<string, object>> { ValueOf(null) };
         IReadOnlyDictionary<string, object> result = null;
         bool ok = ButtonRunner.RunSql(b, def.ConnectionString, valueOfs, def.FormKey, sql, quiet, values => result = values);
-        // 資料可能被 SQL 改過，重讀執行過的那幾筆
-        if (ok && HasMasterTable && HasKey && indexes.Count > 0)
+        // 資料可能被 SQL 改過，重讀執行過的那幾筆（瀏覽時）
+        if (ok && !editing && HasMasterTable && HasKey && indexes.Count > 0)
         {
             RefreshRows(indexes);
             SetMode(mode);

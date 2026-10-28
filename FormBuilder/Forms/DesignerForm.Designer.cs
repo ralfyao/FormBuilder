@@ -41,6 +41,7 @@ namespace FormBuilder
             btnGridColumns = new ToolStripMenuItem();
             sepEdit = new ToolStripSeparator();
             btnPreview = new ToolStripButton();
+            btnPreviewDebug = new ToolStripButton();
             sepAlign = new ToolStripSeparator();
             connPanel = new Panel();
             lblConn = new Label();
@@ -89,7 +90,7 @@ namespace FormBuilder
             // toolStrip
             // 
             toolStrip.GripStyle = ToolStripGripStyle.Hidden;
-            toolStrip.Items.AddRange(new ToolStripItem[] { btnFileMenu, btnEditMenu, sepFile, btnPreview, sepAlign });
+            toolStrip.Items.AddRange(new ToolStripItem[] { btnFileMenu, btnEditMenu, sepFile, btnPreview, btnPreviewDebug, sepAlign });
             toolStrip.Location = new Point(0, 0);
             toolStrip.Name = "toolStrip";
             toolStrip.Size = new Size(1384, 25);
@@ -165,6 +166,14 @@ namespace FormBuilder
             btnPreview.Name = "btnPreview";
             btnPreview.Size = new Size(59, 22);
             btnPreview.Text = "預覽執行";
+            //
+            // btnPreviewDebug
+            //
+            btnPreviewDebug.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            btnPreviewDebug.Name = "btnPreviewDebug";
+            btnPreviewDebug.Size = new Size(110, 22);
+            btnPreviewDebug.Text = "預覽執行(Debug)";
+            btnPreviewDebug.ToolTipText = "跟預覽執行一樣，但 SQL 出錯時另外顯示出錯的 SQL 與參數值";
             // 
             // sepAlign
             // 
@@ -474,6 +483,7 @@ namespace FormBuilder
         private System.Windows.Forms.ToolStripMenuItem btnGridColumns;
         private System.Windows.Forms.ToolStripSeparator sepEdit;
         private System.Windows.Forms.ToolStripButton btnPreview;
+        private System.Windows.Forms.ToolStripButton btnPreviewDebug;
         private System.Windows.Forms.ToolStripSeparator sepAlign;
         private System.Windows.Forms.Panel connPanel;
         private System.Windows.Forms.Label lblConn;

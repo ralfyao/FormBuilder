@@ -234,7 +234,7 @@ public partial class RecordNavigatorDialog : Form
         ButtonAction.確定 => btnOk.Enabled,
         ButtonAction.取消 => btnCancel.Enabled,
         ButtonAction.離開 => btnClose.Enabled,
-        ButtonAction.執行SQL => mode == EditMode.Browse && nav.CanModify,
+        ButtonAction.執行SQL => mode is EditMode.Insert or EditMode.Modify && nav.Permission.Modify,   // 執行SQL 只在新增、修改中可以按
         ButtonAction.開啟畫面 => mode == EditMode.Browse,
         ButtonAction.列印報表 => mode == EditMode.Browse && nav.CurrentRow != null && nav.CanPrint,
         _ => false,
@@ -266,7 +266,7 @@ public partial class RecordNavigatorDialog : Form
                         if (f != null) return InputHelper.GetValue(f, inputs[f]);
                         DataRow row = nav.CurrentRow;
                         return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-                    }, onResult: values => result = values) && nav.CurrentRow != null)
+                    }, onResult: values => result = values) && nav.CurrentRow != null && mode == EditMode.Browse)   // 新增、修改中不重讀，才不會蓋掉正在輸入的內容
                 {
                     nav.Refresh();                         // 資料可能被 SQL 改過，重讀
                     ShowRecord();

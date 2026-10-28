@@ -47,6 +47,7 @@ public partial class DesignerForm : Form
         btnAddAll.Click += (s, e) => AddAllColumns();
         btnGridColumns.Click += (s, e) => EditGridColumns(canvas.Controls.OfType<GridBox>().FirstOrDefault());
         btnPreview.Click += (s, e) => Preview();
+        btnPreviewDebug.Click += (s, e) => Preview(debug: true);
         // 「編輯」選單：移除 / 加入欄位之後，接著是水平、垂直、大小的對齊子選單
         AlignHelper.AddAlignMenu(btnEditMenu.DropDownItems, () => selection.ToList(), () => { propertyGrid.Refresh(); ApplyCanvasSize(); });
         toolStrip.Items.Add(new ToolStripLabel("拖曳時靠近其他欄位會自動貼齊（按住 Alt 不貼齊）") { ForeColor = SystemColors.GrayText });
@@ -1364,13 +1365,30 @@ public partial class DesignerForm : Form
         return FormDefinition.DefaultFolder;
     }
 
-    private void Preview()
+    /// <summary>預覽執行；debug = SQL 出錯時另外顯示出錯的 SQL 與參數值（從這個預覽開出去的畫面也一樣）</summary>
+    private void Preview(bool debug = false)
     {
         if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList || g.IsMasterList))       // 只放 SQL 清單、單頭清單的畫面不需要欄位
         {
             MessageBox.Show("畫面上還沒有欄位（或清單）。", "提醒");
             return;
         }
-        new RuntimeForm(def).Show(this);
+        if (!debug)
+        {
+            new RuntimeForm(def).Show(this);
+            return;
+        }
+        SqlDebug.Begin();                                  // 建立畫面前就開始，開啟時讀資料的 SQL 也記得到
+        try
+        {
+            var form = new RuntimeForm(def);
+            SqlDebug.Attach(form);                         // 關閉時結束 Debug
+            form.Show(this);
+        }
+        catch
+        {
+            SqlDebug.End();
+            throw;
+        }
     }
 }
