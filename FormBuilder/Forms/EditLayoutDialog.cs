@@ -155,7 +155,7 @@ public partial class EditLayoutDialog : Form
         // ---- 預覽：用目前的版面開一個編輯視窗看看（不用先存檔）----
         effectBar.Items.Insert(effectBar.Items.IndexOf(sepMenus), new ToolStripButton("預覽", null, (s, e) => Preview())
         {
-            ToolTipText = "用目前的版面開編輯視窗，資料是資料表的前 50 筆；預覽中不能新增、修改、刪除",
+            ToolTipText = "用目前的版面開編輯視窗，資料是資料表的前 50 筆；可以按新增、修改試著輸入，按確定不會存進資料庫",
         });
 
         // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
@@ -909,7 +909,7 @@ public partial class EditLayoutDialog : Form
 
     /// <summary>
     /// 預覽：用目前的版面（還沒按確定、存檔也可以）開一個編輯視窗，資料是這個 Grid 資料表的前 50 筆，可以切換上一筆、下一筆；
-    /// 預覽中不能新增、修改、刪除，也不能執行 SQL 按鈕（不會改到資料）。JOIN 帶進來的欄位預覽時是空白
+    /// 可以按新增、修改試著輸入（按確定不會存檔），不能刪除，也不能執行 SQL 按鈕（不會改到資料）。JOIN 帶進來的欄位預覽時是空白
     /// </summary>
     private void Preview()
     {
@@ -944,7 +944,10 @@ public partial class EditLayoutDialog : Form
         dlg.ShowDialog(this);
     }
 
-    /// <summary>預覽用的資料來源：只能瀏覽、切換、列印（不能新增、修改、刪除、生效）</summary>
+    /// <summary>
+    /// 預覽用的資料來源：可以按新增、修改試著輸入（下拉選單、開窗選取、執行後動作都照常動作），按確定只檢查、不存進資料庫；
+    /// 不能刪除、生效，權限是唯讀的，「執行SQL」按鈕也不能按
+    /// </summary>
     private sealed class PreviewNavigator : IRecordNavigator
     {
         private readonly DataTable data;
@@ -961,16 +964,24 @@ public partial class EditLayoutDialog : Form
         public int Count => data.Rows.Count;
         public int Current => current;
         public DataRow CurrentRow => current >= 0 ? data.Rows[current] : null;
-        public bool CanModify => false;
-        public bool CanInsert => false;
+        public bool CanModify => true;
+        public bool CanInsert => true;
         public bool CanDelete => false;
         public bool CanPrint => true;
         public bool CanApprove => false;
         public FormPermission Permission { get; } = new(true, false, false, false, true);
         public void MoveTo(int index) { if (index >= 0 && index < data.Rows.Count) current = index; }
         public bool Refresh() => current >= 0;
-        public bool Insert(Dictionary<string, object> values) => false;
-        public bool Update(Dictionary<string, object> values) => false;
+        public bool Insert(Dictionary<string, object> values) => NotSaved(values);
+        public bool Update(Dictionary<string, object> values) => NotSaved(values);
+
+        /// <summary>按確定：必填已經檢查過了，列出輸入的值，不存進資料庫</summary>
+        private static bool NotSaved(Dictionary<string, object> values)
+        {
+            MessageBox.Show("預覽不會存進資料庫。這次輸入的值：" + Environment.NewLine + Environment.NewLine
+                            + string.Join(Environment.NewLine, values.Select(v => $"　{v.Key} = {Audit.Format(v.Value)}")), "預覽");
+            return true;
+        }
         public bool UpdateColumn(string column, object value, string doneMessage) => false;
         public bool Delete() => false;
     }
