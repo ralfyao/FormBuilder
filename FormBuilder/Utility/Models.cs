@@ -476,6 +476,11 @@ public class GridDefinition
     [Category("資料"), DisplayName("單頭清單"), ReadOnly(true), Description("True = 列出單頭自己的查詢結果；False = 單身明細")]
     public bool IsMasterList { get; set; }
 
+    [Category("資料"), DisplayName("允許直接新增"), DefaultValue(false),
+     Description("單頭清單才有作用：True = 清單最下面有一列空白列，使用者直接輸入，離開這一列就新增（INSERT）到資料表；" +
+                 "使用者還是要有這個畫面的「新增」權限。單身 Grid 請用「單身」按鈕輸入")]
+    public bool AllowInsert { get; set; }
+
     /// <summary>SQL 清單：資料來自這個 SELECT（唯讀，可以用 @單頭欄位）；空白 = 一般的資料表 Grid</summary>
     [Browsable(false)]
     public string Sql { get; set; }

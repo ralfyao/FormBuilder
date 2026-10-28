@@ -738,6 +738,24 @@ public static class SysDb
         tran.Commit();
     }
 
+    /// <summary>從系統刪除已發布的畫面：畫面定義、選單、未放進選單的位置、角色權限一起刪，在同一個交易裡（稽核紀錄保留）</summary>
+    public static void DeleteForm(string cs, string formKey)
+    {
+        using var conn = Open(cs);
+        using var tran = conn.BeginTransaction();
+        using (var cmd = Cmd(conn, """
+            DELETE FROM dbo.SYS_Menu WHERE FormKey = @f;
+            IF OBJECT_ID('dbo.SYS_MenuUnlisted') IS NOT NULL DELETE FROM dbo.SYS_MenuUnlisted WHERE FormKey = @f;
+            DELETE FROM dbo.SYS_Permission WHERE FormKey = @f;
+            DELETE FROM dbo.SYS_Form WHERE FormKey = @f;
+            """, ("@f", formKey)))
+        {
+            cmd.Transaction = tran;
+            cmd.ExecuteNonQuery();
+        }
+        tran.Commit();
+    }
+
     // ================= 系統設定值 =================
 
     /// <summary>讀一個系統設定值（例如登入畫面的企業識別）；沒有設定、或舊的系統資料庫還沒有這個資料表時回傳 null</summary>

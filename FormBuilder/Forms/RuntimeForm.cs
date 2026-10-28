@@ -164,6 +164,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetupListBatchMenu();
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
             HookEditDialog(listGrid, EditMasterRow);
+            if (listDef.AllowInsert) SetupListInsert();
             // 空白處雙擊（還沒有資料時）也能開編輯視窗，才有地方按「新增」
             listGrid.DoubleClick += (s, e) =>
             {
@@ -371,7 +372,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnModify.Enabled = browsing && HasCurrent && HasKey && perm.Modify;
         btnDelete.Enabled = browsing && HasCurrent && HasKey && perm.Delete;
         btnDetail.Enabled = browsing && HasCurrent && HasDetail && perm.Modify;
-        if (listGrid != null) listGrid.Enabled = browsing;        // 輸入中不能切換單頭
+        if (listGrid != null)
+        {
+            listGrid.Enabled = browsing;                          // 輸入中不能切換單頭
+            listGrid.AllowUserToAddRows = CanInsertInList;
+        }
         foreach (var part in details)
         {
             bool detailEditing = mode == Mode.Detail;
@@ -1125,7 +1130,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>新增一筆單頭（key = 欄位名稱）；成功後讀回這筆、加到查詢結果並設為目前這筆</summary>
-    private bool InsertValues(Dictionary<string, object> values)
+    /// <param name="notify">false = 不跳「新增完成」（清單直接新增，新的那筆出現在清單上就知道了）</param>
+    private bool InsertValues(Dictionary<string, object> values, bool notify = true)
     {
         try
         {
@@ -1157,7 +1163,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetMode(Mode.Browse);
             Audit.Write(def.FormKey, def.TableName, "新增", HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null,
                         values.ToDictionary(v => v.Key, v => Audit.Format(v.Value)));
-            MessageBox.Show("新增完成。", "新增");
+            if (notify) MessageBox.Show("新增完成。", "新增");
             AfterSave(HasCurrent && HasKey ? CurrentKey() : null, closing: !HasDetail);   // 有單身時等單身存檔再關
             return true;
         }
@@ -1718,6 +1724,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             return;
         }
+        // 直接新增的空白列、還沒存的列：在清單上輸入，不開編輯視窗
+        if (listDef.AllowInsert && index >= 0 && (index >= results.Rows.Count ? index < listGrid.Rows.Count : IsPendingRow(results.Rows[index]))) return;
         // 清單選了多筆、雙擊（或 Enter）的是其中一筆：每筆各開一個編輯視窗
         var rows = SelectedRowIndexes();
         if (index >= 0 && rows.Count > 1 && rows.Contains(index))
@@ -1966,6 +1974,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         try
         {
             if (listGrid.DataSource != results) listGrid.DataSource = results;
+            listGrid.AllowUserToAddRows = CanInsertInList;            // 查詢之後才有欄位可以新增
             // 使用者在清單上點選（含 Ctrl / Shift 多選）造成的切換：保留使用者選的列
             if (HasCurrent && current < listGrid.Rows.Count && listGrid.CurrentRow?.Index == current && listGrid.Rows[current].Selected) return;
             listGrid.ClearSelection();
@@ -1987,7 +1996,67 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         if (syncingList || mode != Mode.Browse) return;
         int index = listGrid.CurrentRow?.Index ?? -1;
-        if (index >= 0 && index < results.Rows.Count && index != current) MoveTo(index);
+        if (index >= 0 && index < results.Rows.Count && index != current && !IsPendingRow(results.Rows[index])) MoveTo(index);
+    }
+
+    // ================= 單頭清單：直接新增 =================
+
+    /// <summary>清單現在可以直接新增：後台勾了「允許直接新增」、有新增權限、瀏覽中，而且查詢過（有欄位）</summary>
+    private bool CanInsertInList =>
+        listDef?.AllowInsert == true && perm.Insert && !pickMode && !conditionMode && mode == Mode.Browse && results.Columns.Count > 0;
+
+    /// <summary>清單上使用者正在輸入、還沒存進資料表的列</summary>
+    private static bool IsPendingRow(DataRow row) => row.RowState is DataRowState.Added or DataRowState.Detached;
+
+    /// <summary>
+    /// 單頭清單「允許直接新增」：最下面的空白列可以輸入，已經存在的列不能改（修改還是用雙擊的編輯視窗）；
+    /// 離開這一列時檢查必填，通過就 INSERT 到資料表，再用主鍵讀回來（自動編號、預設值、JOIN 欄位都帶出來）
+    /// </summary>
+    private void SetupListInsert()
+    {
+        listGrid.ReadOnly = false;
+        foreach (DataGridViewColumn col in listGrid.Columns)
+        {
+            var c = listDef.Columns.FirstOrDefault(x => x.Column == col.DataPropertyName);
+            if (c == null || c.IsJoin || c.IsIdentity || c.NoEntry) col.ReadOnly = true;
+        }
+        listGrid.CellBeginEdit += (s, e) =>
+        {
+            var row = listGrid.Rows[e.RowIndex];
+            if (!row.IsNewRow && !(row.DataBoundItem is DataRowView v && IsPendingRow(v.Row))) e.Cancel = true;
+        };
+        listGrid.RowValidating += (s, e) =>
+        {
+            if (listGrid.Rows[e.RowIndex].DataBoundItem is not DataRowView view || !IsPendingRow(view.Row)) return;
+            listGrid.EndEdit();
+            var missing = listDef.Columns.Where(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.IsJoin && !c.NoEntry
+                                                     && results.Columns.Contains(c.Column) && view.Row[c.Column] == DBNull.Value)
+                                         .Select(c => c.Header ?? c.Column).ToList();
+            if (missing.Count > 0)
+            {
+                MessageBox.Show($"請輸入：{string.Join("、", missing)}（不新增請按 Esc）", "新增");
+                e.Cancel = true;
+                return;
+            }
+            var row = view.Row;
+            BeginInvoke(() => InsertListRow(row));                // 等 Grid 把這一列交給 DataTable 後再存
+        };
+    }
+
+    /// <summary>把清單上新輸入的一列 INSERT 到資料表；失敗時把輸入的值放回清單，讓使用者修正</summary>
+    private void InsertListRow(DataRow row)
+    {
+        if (row.Table != results || !IsPendingRow(row)) return;
+        var values = listDef.Columns
+            .Where(c => !c.IsJoin && !c.IsIdentity && !c.NoEntry && results.Columns.Contains(c.Column) && row[c.Column] != DBNull.Value)
+            .ToDictionary(c => c.Column, c => row[c.Column]);
+        var typed = row.ItemArray;
+        results.Rows.Remove(row);
+        if (InsertValues(values, notify: false)) return;
+        var back = results.NewRow();
+        back.ItemArray = typed;
+        results.Rows.Add(back);                                 // 還是「未存檔」的列，改好離開這一列會再存一次
+        listGrid.CurrentCell = listGrid.Rows[results.Rows.IndexOf(back)].Cells.Cast<DataGridViewCell>().FirstOrDefault(c => !c.ReadOnly && c.Visible);
     }
 
     /// <summary>清單上選取的列（由上到下）；沒有清單時是空的</summary>

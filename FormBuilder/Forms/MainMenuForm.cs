@@ -56,6 +56,7 @@ public partial class MainMenuForm : Form
             var miRename = nodeMenu.Items.Add("重新命名…", null, (s, e) => RenameSelected());
             nodeMenu.Items.Add("新增資料夾…", null, (s, e) => AddFolder());
             var miDeleteFolder = nodeMenu.Items.Add("刪除資料夾", null, (s, e) => DeleteFolder());
+            var miDeleteForm = nodeMenu.Items.Add("刪除畫面…", null, (s, e) => DeleteFormSelected());
             nodeMenu.Items.Add(new ToolStripSeparator());
             // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
             nodeMenu.Items.Add("新增表單", null, (s, e) => new DesignerForm().Show());
@@ -66,11 +67,15 @@ public partial class MainMenuForm : Form
                 if (treeMenu.ClientRectangle.Contains(point) && treeMenu.GetNodeAt(point) == null) treeMenu.SelectedNode = null;
                 // 開啟、設計只對畫面；新增資料夾、新增表單在哪裡按右鍵都有
                 bool onForm = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false };
-                miOpen.Visible = miDesign.Visible = onForm;
+                miOpen.Visible = miDesign.Visible = miDeleteForm.Visible = onForm;
                 miRename.Visible = treeMenu.SelectedNode?.Tag is MenuNode;                      // 畫面、資料夾都可以改名
                 miDeleteFolder.Visible = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: true };
             };
-            treeMenu.KeyDown += (s, e) => { if (e.KeyCode == Keys.F2) RenameSelected(); };
+            treeMenu.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.F2) RenameSelected();
+                else if (e.KeyCode == Keys.Delete) { if (treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: true }) DeleteFolder(); else DeleteFormSelected(); }
+            };
             treeMenu.NodeMouseClick += (s, e) => { if (e.Button == MouseButtons.Right) treeMenu.SelectedNode = e.Node; };
             treeMenu.ContextMenuStrip = nodeMenu;
             EnableDragToMove();
@@ -285,6 +290,40 @@ public partial class MainMenuForm : Form
             siblings.Insert(index++, child);
         }
         SaveMenuFromTree($"刪除資料夾「{node.Title}」", parentPath);
+    }
+
+    /// <summary>
+    /// 刪除畫面（右鍵或 Delete）：從系統刪除已發布的畫面，選單、角色權限一起拿掉；本機 Forms 資料夾的畫面定義檔不刪（還可以重新發布）。
+    /// 別的畫面的按鈕還指到這個畫面的，確認時一起列出來
+    /// </summary>
+    private void DeleteFormSelected()
+    {
+        if (!SysContext.User.IsAdmin || treeMenu.SelectedNode?.Tag is not MenuNode { IsFolder: false } node) return;
+        string key = node.FormKey;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            var refs = FormsReferencing(key, SysDb.LoadPublished(SysContext.Connection, "form"));
+            Cursor = Cursors.Default;
+            string message = $"確定要從系統刪除畫面「{node.Title}」（{key}）嗎？"
+                             + Environment.NewLine + Environment.NewLine + "選單、角色權限的設定會一起拿掉，無法復原；本機的畫面定義檔不會刪除，之後還可以重新發布。"
+                             + (refs.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + "這些畫面的按鈕還會開啟這個畫面，刪除後按了會找不到："
+                                                       + Environment.NewLine + string.Join(Environment.NewLine, refs.Select(r => "　" + r)));
+            if (MessageBox.Show(message, "刪除畫面", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            string select = treeMenu.SelectedNode.Parent?.FullPath;
+            SysDb.DeleteForm(SysContext.Connection, key);
+            Audit.Write(key, "SYS_Form", "刪除畫面", "FormKey=" + key, $"「{node.Title}」（{key}）");
+            SysContext.ReloadPermissions();
+            LoadMenu(select);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("刪除畫面失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
     }
 
     // ================= 管理者：重新命名 =================
