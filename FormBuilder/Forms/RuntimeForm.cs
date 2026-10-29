@@ -133,6 +133,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
             return openParams.TryGetValue(name, out var param) ? param : null;
         }, def.FormKey);
+        // 選項 SQL 用到 @畫面欄位的下拉選單（連動下拉）：欄位改了就重查選項
+        InputHelper.AttachDependentItems(inputs, def.ConnectionString, name =>
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null) return GetValue(field);
+            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return openParams.TryGetValue(name, out var param) ? param : null;
+        });
         HookJoinRefresh();
         HookFormulas();
 

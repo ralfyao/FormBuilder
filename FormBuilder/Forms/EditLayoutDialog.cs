@@ -1188,7 +1188,7 @@ public class EditFieldView
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string Items { get => field.Items; set => field.Items = value; }
 
-    [DisplayName("選項 SQL"), Description("從資料庫取選項：第一欄是值，第二欄（可省略）是顯示文字，例如：SELECT 代碼, 名稱 FROM 幣別"),
+    [DisplayName("選項 SQL"), Description("從資料庫取選項：第一欄是值，第二欄（可省略）是顯示文字，例如：SELECT 代碼, 名稱 FROM 幣別；可以用 @視窗欄位，那個欄位改了就重查選項（連動下拉），例如：SELECT 代碼, 分類 FROM H職務工作分類 WHERE 職務 = @職務；@登入帳號、@登入姓名 = 登入的使用者"),
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string ItemsSql { get => field.ItemsSql; set => field.ItemsSql = value; }
 

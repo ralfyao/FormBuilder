@@ -126,8 +126,11 @@ public static class InputHelper
         return cb;
     }
 
-    /// <summary>選項 = 固定選項 + 選項 SQL 查出來的（下拉選單、選項按鈕共用）；withBlank = 最上面加空白選項</summary>
-    public static List<ComboItem> BuildItems(FieldDefinition f, string connectionString, bool withBlank)
+    /// <summary>
+    /// 選項 = 固定選項 + 選項 SQL 查出來的（下拉選單、選項按鈕共用）；withBlank = 最上面加空白選項。
+    /// 選項 SQL 的 @名稱 由 valueOf 提供（畫面欄位的值），沒有的用系統參數（@登入帳號、@登入姓名），都沒有當 NULL
+    /// </summary>
+    public static List<ComboItem> BuildItems(FieldDefinition f, string connectionString, bool withBlank, Func<string, object> valueOf = null)
     {
         var items = new List<ComboItem>();
         if (withBlank) items.Add(new ComboItem("", ""));
@@ -140,9 +143,13 @@ public static class InputHelper
                 using var conn = d.Open(connectionString);
                 var (sql, parameters) = d.PrepareUserSql(f.ItemsSql);
                 using var cmd = d.CreateCommand(conn, sql);
-                // 選項只在建立時查一次：只認得系統參數（@登入帳號、@登入姓名），其他 @名稱 當 NULL
+                var valueOfParam = SysParams.With(name =>
+                {
+                    try { return valueOf?.Invoke(name); }
+                    catch (FormatException) { return null; }             // 欄位還沒打完（格式不對）：當 NULL
+                });
                 foreach (var (name, parameter) in parameters)
-                    d.AddParam(cmd, parameter, SysParams.TryGet(name, out var v) ? v : DBNull.Value);
+                    d.AddParam(cmd, parameter, valueOfParam(name) ?? DBNull.Value);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -158,6 +165,63 @@ public static class InputHelper
             }
         }
         return items;
+    }
+
+    /// <summary>連動下拉：選項 SQL 用到畫面上其他欄位的下拉選單（SetValue 找不到值時先加進選項，等重查）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ComboBox, object> dependentCombos = new();
+
+    /// <summary>
+    /// 連動下拉：選項 SQL 有 @畫面欄位（例如 SELECT 代碼, 分類 FROM H職務工作分類 WHERE 職務 = @職務）的下拉選單，
+    /// 那些欄位改了就用新的值重查選項。valueOf 取畫面上的值（也可以退回目前這筆資料）。
+    /// 重查後原本選的值還在選項裡就維持；不在時，使用者正在改上層欄位就清空，否則（例如切換資料、帶預設值）先保留原本的值
+    /// </summary>
+    public static void AttachDependentItems(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString, Func<string, object> valueOf)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        foreach (var (f, input) in inputs)
+        {
+            if (input is not ComboBox combo || string.IsNullOrWhiteSpace(f.ItemsSql)) continue;
+            var sources = ButtonRunner.ParameterNames(f.ItemsSql)
+                .Select(name => inputs.FirstOrDefault(p => p.Key != f && p.Key.Column.Equals(name, StringComparison.OrdinalIgnoreCase)).Value)
+                .Where(c => c != null).Distinct().ToList();
+            if (sources.Count == 0) continue;
+            dependentCombos.AddOrUpdate(combo, null);
+            bool busy = false;
+            void Requery()
+            {
+                if (busy) return;
+                busy = true;
+                try
+                {
+                    string current = combo.SelectedItem is ComboItem item ? item.Value : combo.DropDownStyle == ComboBoxStyle.DropDown ? combo.Text : "";
+                    var items = BuildItems(f, connectionString, withBlank: f.IsNullable || f.AllowFreeText, valueOf);
+                    combo.BeginUpdate();
+                    combo.Items.Clear();
+                    combo.Items.AddRange(items.ToArray());
+                    combo.EndUpdate();
+                    bool userEditing = sources.Any(c => c.ContainsFocus);
+                    if (current != "" && (!userEditing || items.Any(i => i.Value.Trim() == current.Trim()))) SetValue(combo, current);
+                    else SetValue(combo, null);
+                }
+                finally
+                {
+                    busy = false;
+                }
+            }
+            // 打字時不要每個字都查一次：停下來 300 毫秒才重查
+            var timer = new System.Windows.Forms.Timer { Interval = 300 };
+            timer.Tick += (s, e) => { timer.Stop(); if (!combo.IsDisposed) Requery(); };
+            combo.Disposed += (s, e) => timer.Dispose();
+            foreach (var source in sources)
+            {
+                EventHandler changed = (s, e) => { timer.Stop(); timer.Start(); };
+                source.TextChanged += changed;
+                if (source is ComboBox sc) sc.SelectedIndexChanged += changed;
+                if (source is DateTimePicker dtp) dtp.ValueChanged += changed;
+                if (source is CheckBox cb) cb.CheckedChanged += changed;
+            }
+            Requery();
+        }
     }
 
     /// <summary>解析固定選項：逗號或換行分隔，「值=顯示」或只有值</summary>
@@ -266,8 +330,8 @@ public static class InputHelper
                 int index = -1;
                 for (int i = 0; i < combo.Items.Count; i++)
                     if (combo.Items[i] is ComboItem item && item.Value.Trim() == s) { index = i; break; }
-                // 開窗選取帶回來的值不在選項裡：加進選項，才顯示得出來
-                if (index < 0 && s != "" && combo.DropDownStyle == ComboBoxStyle.DropDownList && ButtonRunner.HasPicker(combo))
+                // 開窗選取帶回來的值、連動下拉（選項跟著別的欄位變）還沒重查到的值不在選項裡：加進選項，才顯示得出來
+                if (index < 0 && s != "" && combo.DropDownStyle == ComboBoxStyle.DropDownList && (ButtonRunner.HasPicker(combo) || dependentCombos.TryGetValue(combo, out _)))
                     index = combo.Items.Add(new ComboItem(s, s));
                 combo.SelectedIndex = index;
                 if (index < 0 && combo.DropDownStyle == ComboBoxStyle.DropDown) combo.Text = s;

@@ -92,6 +92,7 @@ public partial class RecordNavigatorDialog : Form
         ButtonRunner.AttachPickers(inputs, b => { if (mode != EditMode.Browse) RunButton(b); });
         // 下拉選單的執行後動作：@名稱 先找視窗上的欄位，沒有就用目前這筆資料；查出來的值填回視窗上的欄位
         ButtonRunner.AttachAfterSelect(inputs, connectionString, ValueOf);
+        InputHelper.AttachDependentItems(inputs, connectionString, ValueOf);   // 選項 SQL 用到 @視窗欄位的下拉選單：欄位改了就重查選項
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {
             var button = ButtonRunner.CreateControl(b);
