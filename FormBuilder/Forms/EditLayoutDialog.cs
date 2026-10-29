@@ -118,7 +118,7 @@ public partial class EditLayoutDialog : Form
         // JOIN 其他資料表：帶出關聯資料表的欄位放到編輯視窗上（只顯示，例如用客戶編號帶出客戶名稱）
         var btnJoin = new Button { Text = "JOIN 其他資料表…", Dock = DockStyle.Bottom, Height = 28 };
         btnJoin.Click += (s, e) => AddJoin();
-        tabColumns.Controls.Add(btnJoin);
+        if (!grid.IsSqlList) tabColumns.Controls.Add(btnJoin);         // SQL 清單的欄位來自 SQL，要帶其他資料表就寫在 SQL 裡
         lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.AddEntry("Label", "文字標籤 (Label)");
@@ -1071,9 +1071,16 @@ public partial class EditLayoutDialog : Form
             {
                 Cursor = Cursors.WaitCursor;
                 var d = DbDialect.Of(connectionString);
-                using var conn = d.Open(connectionString);
-                using var cmd = d.CreateCommand(conn, $"SELECT {d.Top(50)}* FROM {copy.FullTableName(d)}{d.Limit(50)}");
-                data = d.Fill(cmd);
+                if (copy.IsSqlList)
+                {
+                    data = SqlList.Load(connectionString, copy.Sql, name => null);      // SQL 清單：@參數當空值
+                }
+                else
+                {
+                    using var conn = d.Open(connectionString);
+                    using var cmd = d.CreateCommand(conn, $"SELECT {d.Top(50)}* FROM {copy.FullTableName(d)}{d.Limit(50)}");
+                    data = d.Fill(cmd);
+                }
             }
             catch (Exception ex)
             {

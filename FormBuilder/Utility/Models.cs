@@ -502,6 +502,17 @@ public class GridDefinition
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string OpenParams { get; set; }
 
+    [Category("編輯視窗"), DisplayName("存回資料表"),
+     Description("SQL 清單用（要先在 SQL 清單設定按「編輯視窗版面…」設計編輯視窗）：編輯視窗上跟這張資料表同名的欄位可以修改，"
+               + "按「確定」用「主鍵對應」找出那一筆存回去，再重查清單。寫資料表名稱，例如 C-RFQDATAMEMO 或 dbo.C-RFQDATAMEMO；"
+               + "空白 = 編輯視窗只顯示，要改資料用版面上的「執行SQL」按鈕")]
+    public string EditTable { get; set; }
+
+    [Category("編輯視窗"), DisplayName("主鍵對應"),
+     Description("SQL 清單的哪個欄位對到資料表的哪個欄位，用來找出要修改的那一筆，用逗號分隔「清單欄位=資料表欄位」，例如 RFQNO=RFQNO, MEMOID=ID。"
+               + "空白 = 用資料表的主鍵（SQL 的 SELECT 要有同名的欄位）")]
+    public string EditKeyText { get; set; }
+
     [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
     public string TableSchema { get; set; }
 

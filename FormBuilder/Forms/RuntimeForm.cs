@@ -966,12 +966,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void HookSqlListOpen(GridDefinition g, DataGridView grid)
     {
         var button = ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams);
-        if (button == null) return;
+        bool editable = g.HasEditLayout;                   // 設計過編輯視窗版面：雙擊開編輯視窗（優先於雙擊開啟畫面）
+        if (button == null && !editable) return;
         grid.CellDoubleClick += (s, e) =>
         {
             if (e.RowIndex < 0 || pickMode && !HasMasterTable) return;
             if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
             var row = view.Row;
+            if (editable)
+            {
+                EditSqlListRow(g, row);
+                return;
+            }
             ButtonRunner.OpenForm(button, def.SourcePath, this, name =>
             {
                 if (row.Table.Columns.Contains(name)) return row[name];
@@ -981,6 +987,67 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 return openParams.TryGetValue(name, out var v) ? v : null;
             }, connectionString: def.ConnectionString);
         };
+    }
+
+    /// <summary>
+    /// SQL 清單的編輯視窗（照 SQL 清單設定的「編輯視窗版面」）：欄位值取雙擊那一列。
+    /// 有設「存回資料表」時，資料表裡有同名欄位的可以修改，按「確定」用主鍵對應 UPDATE 那張表；沒設時欄位只顯示，靠版面上的按鈕（執行SQL）改資料。
+    /// 關閉後重查 SQL 清單
+    /// </summary>
+    private void EditSqlListRow(GridDefinition g, DataRow listRow)
+    {
+        try
+        {
+            var d = Dialect;
+            string fullTable = null, table = null;
+            List<(string List, string Table)> keys = null;
+            var tableColumns = new Dictionary<string, GridColumnDefinition>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(g.EditTable))
+            {
+                string schema;
+                (schema, table) = SqlListEdit.ResolveTable(def.ConnectionString, g.EditTable);
+                fullTable = d.Table(schema, table);
+                var columns = SqlListEdit.Columns(def.ConnectionString, schema, table);
+                keys = SqlListEdit.Keys(g.EditKeyText, columns, listRow.Table);
+                var keyColumns = keys.Select(k => k.Table).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var c in columns.Where(c => !c.NoEntry && !keyColumns.Contains(c.Column))) tableColumns[c.Column] = c;
+            }
+            // 資料表有同名欄位（而且有修改權限）的可以改，型別、長度、必填照資料表；其他只顯示
+            var fields = g.EditColumns.Select(c =>
+            {
+                if (!perm.Modify || !tableColumns.TryGetValue(c.Column, out var t)) return InputHelper.FromGridColumn(c, true);
+                var f = InputHelper.FromGridColumn(c, false);
+                f.DataType = t.DataType;
+                f.MaxLength = t.MaxLength;
+                f.IsNullable = t.IsNullable;
+                return f;
+            }).ToList();
+            using var dlg = new RecordEditDialog(g.Title ?? "SQL 清單", fields, col => listRow.Table.Columns.Contains(col) ? listRow[col] : null,
+                                                 g.EditFormSize, def.ConnectionString, g.EditButtons, def.SourcePath, g.EditLists,
+                                                 g.EditBackColor, g.EditFont(body.Font), perm);
+            bool ok = dlg.ShowDialog(this) == DialogResult.OK;
+            if (ok && fullTable != null && dlg.Values.Count > 0)
+            {
+                using var conn = d.Open(def.ConnectionString);
+                using var cmd = d.CreateCommand(conn);
+                var sets = new List<string>();
+                foreach (var (column, value) in dlg.Values)
+                {
+                    d.AddParam(cmd, $"v{sets.Count}", value);
+                    sets.Add($"{d.Quote(column)} = {d.Param($"v{sets.Count}")}");
+                }
+                cmd.CommandText = $"UPDATE {fullTable} SET {string.Join(", ", sets)} WHERE " + SqlListEdit.Where(d, cmd, keys, listRow);
+                int rows = cmd.ExecuteNonQuery();
+                if (rows == 0) MessageBox.Show($"在「{table}」找不到這一筆，沒有更新到資料（可能已被其他人刪除，或主鍵對應不對）。", "提醒");
+                else if (rows > 1) MessageBox.Show($"「主鍵對應」在「{table}」對到 {rows} 筆，這幾筆都改了，請檢查主鍵對應。", "提醒");
+                Audit.Write(def.FormKey, table, "修改", Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Table, listRow[k.List]))), g.Title);
+            }
+            LoadSqlLists();                                // 存檔、或版面上的按鈕改了資料：清單顯示最新的
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("修改資料失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位（欄位的開窗選取也用這個）</summary>

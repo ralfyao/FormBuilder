@@ -13,7 +13,9 @@ public partial class SqlListDialog : Form
     private readonly DataTable columnTable = new();
 
     /// <param name="masterColumns">單頭的欄位（提示可以用的 @參數）</param>
-    public SqlListDialog(GridDefinition grid, string connectionString, IEnumerable<string> masterColumns)
+    /// <param name="allowLayout">主畫面的 SQL 清單：有「編輯視窗版面…」按鈕（編輯視窗裡的 SQL 清單沒有）</param>
+    /// <param name="screenFont">畫面字型（編輯視窗版面設計器預覽用）</param>
+    public SqlListDialog(GridDefinition grid, string connectionString, IEnumerable<string> masterColumns, bool allowLayout = false, Font screenFont = null)
     {
         InitializeComponent();
         this.grid = grid;
@@ -34,6 +36,18 @@ public partial class SqlListDialog : Form
 
         btnReadColumns.Click += (s, e) => ReadColumns();
         btnOk.Click += (s, e) => Apply();
+        if (allowLayout)
+        {
+            // 編輯視窗版面：先把目前的 SQL、欄位套用到 SQL 清單，再開版面設計器（版面設計器有自己的確定 / 取消）
+            var btnLayout = new Button { Text = "編輯視窗版面…", AutoSize = true, Height = 30 };
+            btnLayout.Click += (s, e) =>
+            {
+                if (!ApplyColumns()) return;
+                using var layout = new EditLayoutDialog(grid, connectionString, screenFont: screenFont);
+                layout.ShowDialog(this);
+            };
+            bottomPanel.Controls.Add(btnLayout);
+        }
     }
 
     /// <summary>執行 SQL 取欄位結構：原本有的欄位保留標題、寬度、顯示設定，新的欄位加在後面</summary>
@@ -78,18 +92,24 @@ public partial class SqlListDialog : Form
 
     private void Apply()
     {
+        if (ApplyColumns()) DialogResult = DialogResult.OK;
+    }
+
+    /// <summary>標題、SQL、欄位設定寫回 SQL 清單；SQL 有問題時提醒並回傳 false</summary>
+    private bool ApplyColumns()
+    {
         dgvColumns.EndEdit();
         if (string.IsNullOrWhiteSpace(txtSql.Text))
         {
             MessageBox.Show("請輸入 SQL（SELECT …）。", "提醒");
-            return;
+            return false;
         }
         // SQL 改了沒按「讀取欄位」：先讀一次，確認 SQL 能執行
-        if ((readColumns == null || txtSql.Text.Trim() != (grid.Sql ?? "").Replace("\r\n", "\n").Trim()) && !ReadColumns()) return;
+        if ((readColumns == null || txtSql.Text.Trim() != (grid.Sql ?? "").Replace("\r\n", "\n").Trim()) && !ReadColumns()) return false;
         if (columnTable.Rows.Count == 0)
         {
             MessageBox.Show("SQL 沒有傳回任何欄位。", "提醒");
-            return;
+            return false;
         }
         var types = (readColumns ?? new()).ToDictionary(c => c.Column, StringComparer.OrdinalIgnoreCase);
         grid.Title = string.IsNullOrWhiteSpace(txtTitle.Text) ? "SQL 清單" : txtTitle.Text.Trim();
@@ -105,6 +125,6 @@ public partial class SqlListDialog : Form
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
             return c;
         }).ToList();
-        DialogResult = DialogResult.OK;
+        return true;
     }
 }

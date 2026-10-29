@@ -848,7 +848,7 @@ public partial class DesignerForm : Form
         }
         if (box.GridDef.IsSqlList)
         {
-            using var sqlDialog = new SqlListDialog(box.GridDef, connectionString, MasterColumnNames());
+            using var sqlDialog = new SqlListDialog(box.GridDef, connectionString, MasterColumnNames(), allowLayout: true, screenFont: def.ScreenFont(Font));
             if (sqlDialog.ShowDialog(this) != DialogResult.OK) return;
             box.RefreshFromModel();
             propertyGrid.Refresh();
