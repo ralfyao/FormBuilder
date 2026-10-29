@@ -118,7 +118,7 @@ public partial class EditLayoutDialog : Form
         // JOIN 其他資料表：帶出關聯資料表的欄位放到編輯視窗上（只顯示，例如用客戶編號帶出客戶名稱）
         var btnJoin = new Button { Text = "JOIN 其他資料表…", Dock = DockStyle.Bottom, Height = 28 };
         btnJoin.Click += (s, e) => AddJoin();
-        if (!grid.IsSqlList) tabColumns.Controls.Add(btnJoin);         // SQL 清單的欄位來自 SQL，要帶其他資料表就寫在 SQL 裡
+        tabColumns.Controls.Add(btnJoin);
         lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.AddEntry("Label", "文字標籤 (Label)");
@@ -974,7 +974,7 @@ public partial class EditLayoutDialog : Form
         var aliases = new HashSet<string>(joinTarget.Concat(newJoins).Select(j => j.Alias).Concat(reservedAliases), StringComparer.OrdinalIgnoreCase);
         int n = 1;
         while (aliases.Contains($"J{n}")) n++;
-        var localColumns = columns.Where(c => !c.IsJoin)
+        var localColumns = columns.Where(c => !c.IsJoin && !c.ScreenOnly)
             .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, IsPrimaryKey = c.IsKey }).ToList();
         var used = columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)).Concat(reservedNames);
         using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, used);
@@ -1253,6 +1253,7 @@ public partial class EditLayoutDialog : Form
                 var d = DbDialect.Of(connectionString);
                 if (copy.IsSqlList)
                 {
+                    copy.Joins.AddRange(newJoins.Where(j => !copy.Joins.Any(x => x.Alias == j.Alias)));     // 這裡新 JOIN 的（按確定前還沒加到 Grid）
                     data = SqlList.Load(connectionString, SqlList.Compose(connectionString, copy.Sql, copy.Columns, copy.Joins), name => null);      // SQL 清單：@參數當空值
                 }
                 else
@@ -1272,7 +1273,9 @@ public partial class EditLayoutDialog : Form
             }
         }
         var fields = copy.EditColumns.Select(c => InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity)).ToList();
-        var navigator = new PreviewNavigator(data, string.IsNullOrWhiteSpace(connectionString) ? copy.TableName : copy.FullTableName(DbDialect.Of(connectionString)));
+        // SQL 清單沒有資料表：用標題當名稱（預覽只顯示，不會存檔）
+        var navigator = new PreviewNavigator(data, copy.IsSqlList ? copy.Title ?? "SQL 清單"
+                                                   : string.IsNullOrWhiteSpace(connectionString) ? copy.TableName : copy.FullTableName(DbDialect.Of(connectionString)));
         using var dlg = new RecordNavigatorDialog(navigator, "預覽：" + (copy.Title ?? copy.TableName), fields, copy.EditFormSize, connectionString,
                                                   copy.EditButtons, FormDefinition.DefaultFolder, copy.EffectiveColumn, copy.EditLists,
                                                   copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels);

@@ -28,6 +28,8 @@ public partial class DesignerForm : Form
     public DesignerForm()
     {
         InitializeComponent();
+        HookListSqlEditor();
+        Activated += (s, e) => HookListSqlEditor();
 
         // ---- 工具列（按鈕在 Designer.cs；對齊按鈕由 AlignHelper 加在後面）----
         btnNewForm.Click += (s, e) => NewForm();
@@ -143,6 +145,9 @@ public partial class DesignerForm : Form
                 renamed.Column = e.OldValue as string ?? renamed.Column;
                 propertyGrid.Refresh();
             }
+            // 清單 SQL 改了：SQL 多出來的欄位加到清單欄位（只顯示），拿掉的跟著移除
+            if (e.ChangedItem?.PropertyDescriptor?.Name == nameof(GridDefinition.ListSql) && selection.FirstOrDefault()?.Model is GridDefinition listGrid)
+                SyncListSqlColumns(listGrid);
             foreach (var box in selection) box.RefreshFromModel();     // 多選時屬性面板會一次改全部
             ApplyCanvasSize();
             UpdateStatus(e.ChangedItem?.PropertyDescriptor?.Name == nameof(FieldDefinition.Formula) ? "公式已更新" : null);
@@ -195,6 +200,63 @@ public partial class DesignerForm : Form
             return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ================= 單頭清單的清單 SQL =================
+
+    /// <summary>屬性面板「清單 SQL」的「…」用：這個畫面設計提供自動組的 SQL、執行 SQL 取欄位（有好幾個畫面設計開著時用目前作用中的）</summary>
+    private void HookListSqlEditor()
+    {
+        ListSqlEditor.Generate = GeneratedListSql;
+        ListSqlEditor.ReadColumns = sql => string.IsNullOrWhiteSpace(connectionString)
+            ? throw new InvalidOperationException("還沒有連線資料庫。") : SqlList.ReadColumns(connectionString, sql);
+    }
+
+    /// <summary>
+    /// 單頭清單目前自動組的 SELECT（跟執行時一樣的欄位、JOIN），和畫面要用到的欄位名稱（清單 SQL 要 SELECT 出來）
+    /// </summary>
+    private (string Sql, IReadOnlyCollection<string> Required) GeneratedListSql(GridDefinition g)
+    {
+        var d = def.Dialect;
+        var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var aliases = new HashSet<string>();
+        void Add(string name, string alias, string source)
+        {
+            if (string.IsNullOrEmpty(alias)) columns.TryAdd(name, GridSql.Base(d, name));
+            else if (def.Joins.Any(j => j.Alias == alias) && columns.TryAdd(name, $"{GridSql.Joined(d, alias, source)} AS {d.Quote(name)}")) aliases.Add(alias);
+        }
+        foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
+        foreach (var master in def.Grids.Where(x => !x.IsMasterList && !x.IsSqlList).SelectMany(x => x.Links).Select(l => l.Master)) Add(master, null, null);
+        foreach (var c in g.Columns.Where(c => !c.ScreenOnly && !c.FromListSql)) Add(c.Column, c.JoinAlias, c.SourceColumn);
+        string from = GridSql.From(d, def.FullTableName, def.Joins, aliases).Replace(" LEFT JOIN ", "\r\n  LEFT JOIN ");
+        return ("SELECT " + string.Join(",\r\n       ", columns.Values) + "\r\nFROM " + from, columns.Keys.ToList());
+    }
+
+    /// <summary>清單 SQL 多出來的欄位加到清單欄位最後面（只顯示，預設顯示）；SQL 拿掉的、改回自動組時移除</summary>
+    private void SyncListSqlColumns(GridDefinition g)
+    {
+        List<GridColumnDefinition> sqlColumns = new();
+        if (!string.IsNullOrWhiteSpace(g.ListSql) && !string.IsNullOrWhiteSpace(connectionString))
+        {
+            try
+            {
+                sqlColumns = SqlList.ReadColumns(connectionString, g.ListSql);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("清單 SQL 執行失敗（清單欄位沒有更新）：" + ex.Message, "清單 SQL", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+        }
+        var names = sqlColumns.Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        g.Columns.RemoveAll(c => c.FromListSql && !names.Contains(c.Column));
+        foreach (var c in sqlColumns.Where(c => !g.Columns.Any(x => x.Column.Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
+        {
+            c.Visible = true;
+            c.NoEntry = true;
+            c.FromListSql = true;
+            g.Columns.Add(c);
+        }
     }
 
     // ================= 複製 / 貼上 =================

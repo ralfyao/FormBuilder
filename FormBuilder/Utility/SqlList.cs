@@ -57,17 +57,25 @@ public static class SqlList
     {
         if (joins == null || joins.Count == 0 || !columns.Any(c => c.IsJoin)) return sql;
         var d = DbDialect.Of(connectionString);
+        var select = columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joins.Any(j => j.Alias == c.JoinAlias))).ToList();
+        return GridSql.Select(d, Subquery(d, sql), select, joins);
+    }
+
+    /// <summary>
+    /// 自己寫的 SELECT 包成子查詢「( … )」，外層可以再接別名、JOIN、WHERE。
+    /// SQL Server 的子查詢不能有 ORDER BY（除非有 TOP 或 OFFSET）：加上 OFFSET 0 ROWS；WITH 開頭的不能包，丟 InvalidOperationException
+    /// </summary>
+    public static string Subquery(DbDialect d, string sql)
+    {
         string inner = sql.Trim().TrimEnd(';').TrimEnd();
         if (Regex.IsMatch(inner, @"^\s*WITH\b", RegexOptions.IgnoreCase))
-            throw new InvalidOperationException("SQL 用 WITH 開頭時不能再 JOIN 其他資料表，請把 JOIN 直接寫在 SQL 裡。");
-        // SQL Server 的子查詢不能有 ORDER BY（除非有 TOP 或 OFFSET）：加上 OFFSET 0 ROWS
+            throw new InvalidOperationException("SQL 用 WITH 開頭時不能當子查詢（外層要再 JOIN 或加查詢條件），請改寫成 SELECT 開頭。");
         string outer = TopLevel(inner);
         if (d.Kind == DbKind.SqlServer && Regex.IsMatch(outer, @"\bORDER\s+BY\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(outer, @"^\s*SELECT\s+(ALL\s+|DISTINCT\s+)?TOP\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(outer, @"\bOFFSET\b", RegexOptions.IgnoreCase))
             inner += "\nOFFSET 0 ROWS";
-        var select = columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joins.Any(j => j.Alias == c.JoinAlias))).ToList();
-        return GridSql.Select(d, "(" + inner + "\n)", select, joins);     // 換行再括號：SQL 最後一行是 -- 註解時才不會把括號註解掉
+        return "(" + inner + "\n)";                    // 換行再括號：SQL 最後一行是 -- 註解時才不會把括號註解掉
     }
 
     /// <summary>SQL 最外層的文字：括號、字串、[識別名稱]、註解裡的內容換成空白（找最外層的 ORDER BY、TOP 用）</summary>

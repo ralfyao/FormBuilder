@@ -66,6 +66,13 @@ public partial class SqlListDialog : Form
                 if (!ApplyColumns()) return;
                 using var layout = new EditLayoutDialog(grid, connectionString, screenFont: screenFont);
                 layout.ShowDialog(this);
+                // 版面設計器 JOIN 進來的（已經加到 SQL 清單上了）也加進這裡，按「確定」時才不會被蓋掉
+                foreach (var j in grid.Joins.Where(j => !workJoins.Any(x => x.Alias == j.Alias))) workJoins.Add(j.Clone());
+                foreach (var c in grid.Columns.Where(c => c.IsJoin && !joinColumns.ContainsKey(c.Column)))
+                {
+                    joinColumns[c.Column] = c;
+                    columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
+                }
             };
             bottomPanel.Controls.Add(btnLayout);
         }

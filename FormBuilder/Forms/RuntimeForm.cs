@@ -559,11 +559,35 @@ public partial class RuntimeForm : Form, IRecordNavigator
                  .Take(1).ToList();
         // 清單沒顯示的 JOIN 欄位先不查（條件有用到的 JOIN 照樣 JOIN），開編輯視窗時再補讀
         var skip = ListOnlyJoins().Where(a => !where.Contains(Dialect.Quote(a) + ".")).ToHashSet();
-        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns(skip)} FROM {MasterFrom(skip)}"
+        // 單頭清單有「清單 SQL」：資料來自自己寫的 SELECT（當子查詢，別名 T0），查詢條件、排序、JOIN 套在外層
+        string listFrom = null;
+        if (!string.IsNullOrWhiteSpace(listDef?.ListSql))
+        {
+            try
+            {
+                var (prepared, parameters) = Dialect.PrepareUserSql(listDef.ListSql);
+                listFrom = SqlList.Subquery(Dialect, prepared);
+                var valueOf = SysParams.With(name =>
+                {
+                    var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (field != null) return GetValue(field);
+                    return openParams.TryGetValue(name, out var v) ? v : null;
+                });
+                foreach (var (name, parameter) in parameters) Dialect.AddParam(cmd, parameter, valueOf(name) ?? DBNull.Value);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+            {
+                MessageBox.Show("清單 SQL：" + ex.Message, "提醒");
+                return;
+            }
+        }
+        // 清單 SQL 已經帶出 JOIN 的欄位：外層只 JOIN 查詢條件有用到的
+        if (listFrom != null) skip = def.Joins.Select(j => j.Alias).Where(a => !where.Contains(Dialect.Quote(a) + ".")).ToHashSet();
+        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns(skip, listFrom != null)} FROM {MasterFrom(skip, listFrom)}"
                         + (where != "" ? " WHERE " + where : "")
                         + (orderColumns.Count > 0 ? " ORDER BY " + string.Join(", ", orderColumns) : "")
                         + Dialect.Limit(5000);
-        LoadResults(cmd, partial: skip.Count > 0);
+        LoadResults(cmd, partial: listFrom == null && skip.Count > 0);
     }
 
     /// <summary>
@@ -1067,26 +1091,30 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。
     /// 單頭資料表固定用別名 T0；單頭 JOIN 帶進來的欄位用「關聯資料表別名.原始欄位 AS 欄位名稱」
     /// </summary>
-    private string SelectColumns(ISet<string> skipJoins = null)
+    /// <param name="fromListSql">清單查詢的資料來自清單 SQL（別名 T0）：每個欄位都直接取 T0 的同名欄位，清單 SQL 帶出來的欄位也查</param>
+    private string SelectColumns(ISet<string> skipJoins = null, bool fromListSql = false)
     {
         var joins = def.Joins.Select(j => j.Alias).Where(a => skipJoins == null || !skipJoins.Contains(a)).ToHashSet();
         var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         void Add(string name, string alias, string source)
         {
-            if (string.IsNullOrEmpty(alias)) columns.TryAdd(name, GridSql.Base(Dialect, name));
+            if (string.IsNullOrEmpty(alias) || fromListSql) columns.TryAdd(name, GridSql.Base(Dialect, name));
             else if (joins.Contains(alias)) columns.TryAdd(name, $"{GridSql.Joined(Dialect, alias, source)} AS {Dialect.Quote(name)}");
         }
         foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
         foreach (var master in details.SelectMany(p => p.Def.Links).Select(l => l.Master))
             if (!columns.ContainsKey(master)) Add(master, null, null);
         foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>())
-            if (!c.ScreenOnly && (!c.IsJoin || joins.Contains(c.JoinAlias))) Add(c.Column, c.JoinAlias, c.SourceColumn);
+            if (!c.ScreenOnly && (fromListSql || !c.FromListSql) && (fromListSql || !c.IsJoin || joins.Contains(c.JoinAlias))) Add(c.Column, c.JoinAlias, c.SourceColumn);
         return string.Join(", ", columns.Values);
     }
 
-    /// <summary>單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表；skipJoins 的 JOIN 不加</summary>
-    private string MasterFrom(ISet<string> skipJoins = null) =>
-        GridSql.From(Dialect, def.FullTableName, def.Joins,
+    /// <summary>
+    /// 單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表；skipJoins 的 JOIN 不加；
+    /// baseTable = 換掉單頭資料表（清單 SQL 的子查詢）
+    /// </summary>
+    private string MasterFrom(ISet<string> skipJoins = null, string baseTable = null) =>
+        GridSql.From(Dialect, baseTable ?? def.FullTableName, def.Joins,
                      def.Fields.Select(f => f.JoinAlias).Concat(listDef?.Columns.Select(c => c.JoinAlias) ?? Enumerable.Empty<string>())
                         .Where(a => !string.IsNullOrEmpty(a) && (skipJoins == null || !skipJoins.Contains(a))));
 

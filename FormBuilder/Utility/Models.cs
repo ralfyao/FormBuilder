@@ -488,6 +488,13 @@ public class GridDefinition
     [Browsable(false)]
     public string Sql { get; set; }
 
+    [Category("資料"), DisplayName("清單 SQL"),
+     Description("單頭清單用：清單的資料改用自己寫的整段 SELECT（可以 JOIN、子查詢、算出來的欄位，可以用 @畫面欄位、@登入帳號）。"
+               + "查詢欄位的條件、排序會套在外層，所以 SQL 要 SELECT 出主鍵和畫面上用到的單頭欄位，例如 SELECT a.*, b.姓名 AS 業務姓名 FROM C客戶詢問函 a LEFT JOIN H員工清冊 b ON …；"
+               + "雙擊編輯、存檔照樣用主鍵讀寫資料表。SQL 多出來的欄位會加在清單欄位最後面（只顯示）。空白 = 系統自動組"),
+     Editor("FormBuilder.ListSqlEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string ListSql { get; set; }
+
     [Browsable(false), JsonIgnore]
     public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
 
@@ -1100,6 +1107,9 @@ public class GridColumnDefinition
     /// 不查詢、不存檔，可以輸入，按鈕的 SQL 用 @欄位 取得
     /// </summary>
     public bool ScreenOnly { get; set; }
+
+    /// <summary>單頭清單的「清單 SQL」帶出來、資料表沒有的欄位：只有清單查詢時讀，只顯示、不存檔</summary>
+    public bool FromListSql { get; set; }
 
     // ---- 雙擊 Grid 開啟的編輯視窗版面 ----
     /// <summary>編輯視窗是否顯示這個欄位；null = 跟 Grid 的「顯示」一樣</summary>
