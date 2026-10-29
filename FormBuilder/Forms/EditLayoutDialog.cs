@@ -174,6 +174,10 @@ public partial class EditLayoutDialog : Form
         {
             ToolTipText = "選一個畫面定義檔，同名的欄位照那個畫面的位置、大小、標籤、輸入方式放上來，文字標籤、按鈕、版面大小、底色、字型也一起帶入",
         });
+        btnFileMenu.DropDownItems.Insert(1, new ToolStripMenuItem("匯出成獨立畫面…", null, (s, e) => ExportForm())
+        {
+            ToolTipText = "把這個編輯視窗存成一個獨立的畫面定義檔：欄位（含下拉選單、開窗選取、執行後動作、預設值、編號規則的 SQL）、JOIN、按鈕、文字標籤、明細清單都一起帶過去",
+        });
 
         // ---- 預覽：用目前的版面開一個編輯視窗看看（不用先存檔）----
         effectBar.Items.Insert(effectBar.Items.IndexOf(sepMenus), new ToolStripButton("預覽", null, (s, e) => Preview())
@@ -400,11 +404,169 @@ public partial class EditLayoutDialog : Form
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / (double)DesignBox.Grid) * DesignBox.Grid);
 
+    /// <summary>
+    /// 檔案 → 匯出成獨立畫面：用目前的版面產生一個畫面定義檔（單頭 = 這個 Grid 的資料表）。
+    /// 欄位的設定（下拉選單選項 SQL、開窗選取、執行後動作、預設值、編號規則…）、JOIN、按鈕（執行SQL、開啟畫面、列印…）、
+    /// 文字標籤、明細清單（資料表清單變成單身 Grid，SQL 清單變成 SQL 清單）都一起帶過去；原本的畫面不受影響
+    /// </summary>
+    private void ExportForm()
+    {
+        if (grid.IsSqlList)
+        {
+            MessageBox.Show("SQL 清單的編輯視窗沒有對應的資料表，不能匯出成獨立畫面。", "匯出成獨立畫面");
+            return;
+        }
+        // 複本：不動到正在設計的 Grid
+        var copy = FormDefinition.FromJson(new FormDefinition { Grids = { grid } }.ToJson()).Grids[0];
+        if (!WriteBack(copy)) return;
+        var notes = new List<string>();
+
+        // 欄位：照編輯視窗的版面；JOIN 帶進來的欄位用單頭 JOIN（只顯示）
+        var columnsOnLayout = copy.EditColumns;
+        var fields = columnsOnLayout.Select(c =>
+        {
+            var f = InputHelper.FromGridColumn(c, c.NoEntry || c.IsIdentity || c.IsJoin);
+            f.JoinAlias = c.JoinAlias;
+            f.SourceColumn = c.SourceColumn;
+            return f;
+        }).ToList();
+        var usedAliases = columnsOnLayout.Where(c => c.IsJoin).Select(c => c.JoinAlias).ToHashSet();
+        var joins = joinTarget.Concat(newJoins).Where(j => usedAliases.Contains(j.Alias))
+            .GroupBy(j => j.Alias).Select(g => g.First().Clone()).ToList();
+        fields.AddRange(copy.EditTextLabels.Select(f => f.Clone()));
+
+        // 明細清單 → 單身 Grid（關聯欄位「編輯視窗欄位=明細欄位」就是單身的「單頭欄位=明細欄位」）
+        var grids = new List<GridDefinition>();
+        foreach (var l in copy.EditLists)
+        {
+            if (!string.IsNullOrWhiteSpace(l.ParentList))
+                notes.Add($"「{l.Title ?? l.TableName}」設了上層清單「{l.ParentList}」：獨立畫面的單身沒有上層清單，改成依單頭列出，請到畫面設計確認關聯欄位");
+            grids.Add(new GridDefinition
+            {
+                Title = l.Title,
+                TableSchema = l.IsSqlList ? null : l.TableSchema,
+                TableName = l.IsSqlList ? null : l.TableName,
+                LinkText = l.IsSqlList ? "" : l.LinkText,
+                Sql = l.Sql,
+                X = l.X,
+                Y = l.Y,
+                Width = l.Width,
+                Height = l.Height,
+                Columns = l.Columns,
+                Joins = l.Joins,
+                OpenForm = l.OpenForm,
+                OpenParams = l.OpenParams,
+            });
+        }
+
+        var size = copy.EditFormSize;
+        int right = fields.Select(f => f.X + f.LabelWidth + f.Width).Concat(copy.EditButtons.Select(b => b.X + b.Width)).Concat(grids.Select(g => g.X + g.Width)).DefaultIfEmpty(400).Max();
+        int bottom = fields.Select(f => f.Y + f.Height).Concat(copy.EditButtons.Select(b => b.Y + b.Height)).Concat(grids.Select(g => g.Y + g.Height)).DefaultIfEmpty(300).Max();
+        var form = new FormDefinition
+        {
+            Title = copy.Title ?? copy.TableName,
+            TableSchema = copy.TableSchema,
+            TableName = copy.TableName,
+            Width = size?.Width ?? right + 20,
+            Height = size?.Height ?? bottom + 20,
+            BackColorHtml = copy.EditBackColorHtml,
+            FontName = copy.EditFontName,
+            FontSize = copy.EditFontSize,
+            Fields = fields,
+            Joins = joins,
+            Buttons = copy.EditButtons.Select(b => b.Clone()).ToList(),
+            Grids = grids,
+        };
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            form.DatabaseType = DbDialect.Of(connectionString).Kind;
+            form.ConnectionString = connectionString;
+        }
+        var missingKeys = copy.Columns.Where(c => c.IsKey && !c.IsJoin && !fields.Any(f => f.Column.Equals(c.Column, StringComparison.OrdinalIgnoreCase))).Select(c => c.Column).ToList();
+        if (missingKeys.Count > 0)
+            notes.Add($"主鍵（{string.Join("、", missingKeys)}）沒有放在版面上：獨立畫面沒有主鍵就只能查詢、新增，請到畫面設計把主鍵欄位拖上去");
+        if (!string.IsNullOrWhiteSpace(copy.EffectiveColumn))
+            notes.Add($"編輯視窗的「生效 / 取消生效」（{copy.EffectiveColumn}）獨立畫面沒有，請改用按鈕「執行SQL」");
+
+        string folder = FormDefinition.DefaultFolder;
+        using var dlg = new SaveFileDialog
+        {
+            Title = "匯出成獨立畫面",
+            Filter = "畫面定義檔 (*.json)|*.json",
+            InitialDirectory = Directory.Exists(folder) ? folder : null,
+            FileName = string.Join("_", (form.Title + "-編輯視窗").Split(Path.GetInvalidFileNameChars())) + ".json",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            form.Save(dlg.FileName);       // 開啟畫面、列印樣板等路徑改成相對於新檔案的資料夾
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("匯出失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        MessageBox.Show($"已匯出成 {Path.GetFileName(dlg.FileName)}：{fields.Count} 個欄位（含文字標籤）、{form.Buttons.Count} 個按鈕、{grids.Count} 個清單、{joins.Count} 個 JOIN。"
+                        + Environment.NewLine + "用畫面設計開啟這個檔案就可以繼續修改，要放進 ERP 選單請發布。"
+                        + (notes.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Select(n => "　" + n))),
+                        "匯出成獨立畫面");
+    }
+
+    /// <summary>
+    /// Ctrl+C：複製選取的按鈕、文字標籤、SQL 清單；
+    /// Grid 的欄位、資料表的明細清單一個只能放一次，不複製
+    /// </summary>
+    private void CopySelection()
+    {
+        var labels = selection.OfType<FieldBox>().Where(labelBoxes.Contains).Select(b => b.Field).ToList();
+        var buttons = selection.OfType<ButtonBox>().Select(b => b.ButtonDef).ToList();
+        var lists = selection.OfType<EditListBox>().Select(b => b.ListDef).Where(l => l.IsSqlList).ToList();
+        int copied = labels.Count + buttons.Count + lists.Count;
+        if (copied == 0)
+        {
+            lblHint.Text = "  選取的是欄位或資料表的明細清單：同一個只能放一次，不能複製（按鈕、文字標籤、SQL 清單可以複製）";
+            return;
+        }
+        DesignClipboard.Copy(labels, buttons, Enumerable.Empty<GridDefinition>(), lists);
+        lblHint.Text = $"  已複製 {copied} 個元件，按 Ctrl+V 貼上" + (copied < selection.Count ? $"（{selection.Count - copied} 個欄位 / 明細清單不能複製，略過）" : "");
+    }
+
+    /// <summary>Ctrl+V：貼上複製的元件（新的一份，位置往右下錯開）；文字標籤、SQL 清單取新的名稱</summary>
+    private void PasteClipboard()
+    {
+        var (fields, buttons, _, lists) = DesignClipboard.Paste();
+        var labels = fields.Where(f => f.IsTextLabel).ToList();         // 計算欄位只能放在主畫面
+        if (labels.Count + buttons.Count + lists.Count == 0)
+        {
+            lblHint.Text = "  複製的元件不能貼在編輯視窗（計算欄位、主畫面的 SQL 清單只能貼在畫面設計）";
+            return;
+        }
+        var usedNames = new HashSet<string>(columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)), StringComparer.OrdinalIgnoreCase);
+        var usedLists = new HashSet<string>(listBoxes.Select(b => b.ListDef.TableName), StringComparer.OrdinalIgnoreCase);
+        foreach (var f in labels)
+        {
+            f.Column = DesignClipboard.UniqueName("標籤", usedNames);
+            AddLabelBox(f, select: false);
+        }
+        foreach (var b in buttons) AddButtonBox(b, select: false);
+        foreach (var l in lists)
+        {
+            l.TableName = DesignClipboard.UniqueName("SQL清單", usedLists);      // 識別用的名稱（上層清單用）不能重複
+            AddListBox(l, select: false);
+        }
+        SetSelection(labelBoxes.Where(b => labels.Contains(b.Field)).Cast<DesignBox>()
+            .Concat(buttonBoxes.Where(b => buttons.Contains(b.ButtonDef)))
+            .Concat(listBoxes.Where(b => lists.Contains(b.ListDef))));
+        lblHint.Text = $"  已貼上 {labels.Count + buttons.Count + lists.Count} 個元件（已選取，可以直接拖曳到要放的位置）";
+    }
+
     /// <summary>Delete：刪除選取的欄位；Ctrl+A：全選</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         bool typing = propertyGrid.ContainsFocus;            // 在屬性面板打字時，Delete / Ctrl+A 照常作用在文字上
         if (!typing && keyData == Keys.Delete && selection.Count > 0) { RemoveSelected(); return true; }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.C) && selection.Count > 0) { CopySelection(); return true; }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.V) && !DesignClipboard.IsEmpty) { PasteClipboard(); return true; }
         if (!UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.Z)) { history.Undo(); return true; }
         if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z))) { history.Redo(); return true; }
         if (!typing && keyData == (Keys.Control | Keys.A)) { SetSelection(canvas.Controls.OfType<DesignBox>()); return true; }

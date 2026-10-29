@@ -184,7 +184,70 @@ public partial class DesignerForm : Form
             SetSelection(canvas.Controls.OfType<DesignBox>());
             return true;
         }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.C) && selection.Count > 0)
+        {
+            CopySelection();
+            return true;
+        }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.V) && !DesignClipboard.IsEmpty)
+        {
+            PasteClipboard();
+            return true;
+        }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ================= 複製 / 貼上 =================
+
+    /// <summary>
+    /// Ctrl+C：複製選取的按鈕、文字標籤、計算欄位、SQL 清單；
+    /// 資料表的欄位、資料表的 Grid 一個欄位只能放一次，不複製
+    /// </summary>
+    private void CopySelection()
+    {
+        var fields = selection.OfType<FieldBox>().Select(b => b.Field).Where(f => f.IsCalculated).ToList();     // 文字標籤也是 IsCalculated
+        var buttons = selection.OfType<ButtonBox>().Select(b => b.ButtonDef).ToList();
+        var grids = selection.OfType<GridBox>().Select(b => b.GridDef).Where(g => g.IsSqlList).ToList();
+        int copied = fields.Count + buttons.Count + grids.Count;
+        if (copied == 0)
+        {
+            UpdateStatus("選取的是資料表的欄位或 Grid：同一個欄位只能放一次，不能複製（按鈕、文字標籤、計算欄位、SQL 清單可以複製）");
+            return;
+        }
+        DesignClipboard.Copy(fields, buttons, grids, Enumerable.Empty<EditListDefinition>());
+        UpdateStatus($"已複製 {copied} 個元件，按 Ctrl+V 貼上" + (copied < selection.Count ? $"（{selection.Count - copied} 個資料表欄位 / Grid 不能複製，略過）" : ""));
+    }
+
+    /// <summary>Ctrl+V：貼上複製的元件（新的一份，位置往右下錯開）；文字標籤、計算欄位取新的名稱</summary>
+    private void PasteClipboard()
+    {
+        var (fields, buttons, grids, _) = DesignClipboard.Paste();
+        if (fields.Count + buttons.Count + grids.Count == 0)
+        {
+            UpdateStatus("複製的元件不能貼在這裡（編輯視窗的 SQL 清單只能貼在編輯視窗版面）");
+            return;
+        }
+        var used = new HashSet<string>(UsedFieldNames(), StringComparer.OrdinalIgnoreCase);
+        var boxes = new List<DesignBox>();
+        foreach (var f in fields)
+        {
+            f.Column = DesignClipboard.UniqueName(f.IsTextLabel ? "標籤" : "計算", used);
+            def.Fields.Add(f);
+            boxes.Add(AddBox(f));
+        }
+        foreach (var b in buttons)
+        {
+            def.Buttons.Add(b);
+            boxes.Add(AttachBox(new ButtonBox(b)));
+        }
+        foreach (var g in grids)
+        {
+            def.Grids.Add(g);
+            boxes.Add(AddGridBox(g));
+        }
+        SetSelection(boxes);
+        ApplyCanvasSize();
+        UpdateStatus($"已貼上 {boxes.Count} 個元件（已選取，可以直接拖曳到要放的位置）");
     }
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / (double)DesignBox.Grid) * DesignBox.Grid);
