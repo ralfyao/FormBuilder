@@ -764,6 +764,19 @@ public static class SysDb
         tran.Commit();
     }
 
+    /// <summary>複製畫面時，角色權限也照原本的畫面複製一份給新代號（新代號已經有的權限不動）</summary>
+    public static void CopyPermissions(string cs, string fromKey, string toKey)
+    {
+        using var conn = Open(cs);
+        using var cmd = Cmd(conn, $"""
+            INSERT INTO dbo.SYS_Permission(RoleId, FormKey, {PermissionColumns}, Note, ValidUntil)
+            SELECT p.RoleId, @n, {string.Join(", ", PermissionColumns.Split(", ").Select(c => "p." + c))}, p.Note, p.ValidUntil
+              FROM dbo.SYS_Permission p
+             WHERE p.FormKey = @o AND NOT EXISTS (SELECT 1 FROM dbo.SYS_Permission x WHERE x.RoleId = p.RoleId AND x.FormKey = @n)
+            """, ("@o", fromKey), ("@n", toKey));
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>從系統刪除已發布的畫面：畫面定義、選單、未放進選單的位置、角色權限一起刪，在同一個交易裡（稽核紀錄保留）</summary>
     public static void DeleteForm(string cs, string formKey)
     {

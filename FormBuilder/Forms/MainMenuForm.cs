@@ -61,6 +61,7 @@ public partial class MainMenuForm : Form
             var miOpen = nodeMenu.Items.Add("開啟", null, (s, e) => OpenSelected());
             var miDesign = nodeMenu.Items.Add("設計這個畫面", null, (s, e) => OpenDesigner());
             var miRename = nodeMenu.Items.Add("重新命名…", null, (s, e) => RenameSelected());
+            var miCopy = nodeMenu.Items.Add("複製畫面…", null, (s, e) => CopySelected());
             nodeMenu.Items.Add("新增資料夾…", null, (s, e) => AddFolder());
             var miDeleteFolder = nodeMenu.Items.Add("刪除資料夾", null, (s, e) => DeleteFolder());
             var miDeleteForm = nodeMenu.Items.Add("刪除畫面…", null, (s, e) => DeleteFormSelected());
@@ -75,7 +76,7 @@ public partial class MainMenuForm : Form
                 if (treeMenu.ClientRectangle.Contains(point) && treeMenu.GetNodeAt(point) == null) treeMenu.SelectedNode = null;
                 // 開啟、設計只對畫面；新增資料夾、新增表單在哪裡按右鍵都有
                 bool onForm = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false };
-                miOpen.Visible = miDesign.Visible = miDeleteForm.Visible = onForm;
+                miOpen.Visible = miDesign.Visible = miCopy.Visible = miDeleteForm.Visible = onForm;
                 miRename.Visible = treeMenu.SelectedNode?.Tag is MenuNode;                      // 畫面、資料夾都可以改名
                 miDeleteFolder.Visible = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: true };
             };
@@ -459,6 +460,76 @@ public partial class MainMenuForm : Form
         catch (Exception ex)
         {
             MessageBox.Show("重新命名失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+    }
+
+    // ================= 管理者：複製畫面 =================
+
+    /// <summary>
+    /// 複製畫面（右鍵）：用新的名稱、代號複製一份，發布到系統，放在選單上原本畫面的下面，角色權限照原本的畫面給；
+    /// 本機 Forms 資料夾也存一份新代號的畫面定義檔（之後用「設計這個畫面」修改）。
+    /// 內容用本機的畫面定義檔（比系統上的新時）或系統上已發布的版本，跟「設計這個畫面」打開的是同一份
+    /// </summary>
+    private void CopySelected()
+    {
+        if (!SysContext.User.IsAdmin || treeMenu.SelectedNode is not { Tag: MenuNode { IsFolder: false } node } source) return;
+        string oldKey = node.FormKey;
+        string folder = FormDefinition.DefaultFolder;
+        var published = SysDb.LoadPublished(SysContext.Connection, "form");
+        var item = published.FirstOrDefault(p => p.FormKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase));
+        string localPath = Path.Combine(folder, oldKey + ".json");
+        bool useLocal = File.Exists(localPath) && (item == null || item.PublishedAt <= File.GetLastWriteTime(localPath).AddMinutes(1));
+        if (item == null && !useLocal)
+        {
+            MessageBox.Show($"找不到畫面「{oldKey}」：系統裡沒有發布，本機也沒有 {localPath}。", "複製畫面");
+            return;
+        }
+
+        // 預設代號：原代號-複製、原代號-複製2…（不跟系統上、本機的畫面重複）
+        bool Taken(string key) => published.Any(p => p.FormKey.Equals(key, StringComparison.OrdinalIgnoreCase)) || File.Exists(Path.Combine(folder, key + ".json"));
+        string suggested = oldKey + "-複製";
+        for (int i = 2; Taken(suggested); i++) suggested = $"{oldKey}-複製{i}";
+        var bad = Path.GetInvalidFileNameChars();
+        var v = PromptDialog.Ask(this, "複製畫面", values =>
+        {
+            if (values[0] == "") return "請輸入名稱。";
+            if (values[1] == "") return "請輸入代號。";
+            if (values[1].IndexOfAny(bad) >= 0) return "代號是檔名，不能有 \\ / : * ? \" < > | 這些符號。";
+            if (values[1].Length > 200) return "代號太長（最多 200 個字）。";
+            if (published.Any(p => p.FormKey.Equals(values[1], StringComparison.OrdinalIgnoreCase))) return $"代號「{values[1]}」已經有別的畫面在用了。";
+            if (File.Exists(Path.Combine(folder, values[1] + ".json"))) return $"本機已經有 {values[1]}.json，請換一個代號。";
+            return null;
+        }, new PromptDialog.Field("名稱", (item?.Title ?? node.Title ?? oldKey) + "（複製）"), new PromptDialog.Field("代號（檔名）", suggested));
+        if (v == null) return;
+        string title = v[0], newKey = v[1];
+
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            var def = useLocal ? FormDefinition.Load(localPath) : FormDefinition.FromJson(SysDb.LoadContent(SysContext.Connection, oldKey));
+            def.Title = title;
+            Directory.CreateDirectory(folder);
+            string newPath = Path.Combine(folder, newKey + ".json");
+            def.Save(newPath);
+            var notes = new List<string>();
+            DesignerForm.PublishOne(SysContext.Connection, newKey, def, newPath, notes);
+            SysDb.CopyPermissions(SysContext.Connection, oldKey, newKey);
+            Audit.Write(newKey, def.TableName, "複製畫面", "FormKey=" + oldKey, $"「{item?.Title ?? oldKey}」（{oldKey}）→「{title}」（{newKey}）");
+            SysContext.ReloadPermissions();
+
+            // 選單上放在原本畫面的下面（原本在「未放進選單的畫面」裡就放在那裡）
+            var copy = new TreeNode(title) { Tag = new MenuNode { Title = title, FormKey = newKey } };
+            (source.Parent?.Nodes ?? treeMenu.Nodes).Insert(source.Index + 1, copy);
+            SaveMenuFromTree($"複製畫面「{item?.Title ?? oldKey}」→「{title}」", copy.FullPath);
+            if (notes.Count > 0) MessageBox.Show("已複製。" + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, notes.Distinct()), "複製畫面");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("複製畫面失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
