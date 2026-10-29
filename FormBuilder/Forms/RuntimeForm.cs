@@ -64,7 +64,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>最後存檔那筆的主鍵（刪除時是 null）</summary>
     public Dictionary<string, object> SavedKey { get; private set; }
     /// <summary>上一次查詢的 SQL 與參數：別的畫面存檔後，用同樣的條件重新查詢</summary>
-    private (string Sql, List<(string Name, object Value)> Params)? lastQuery;
+    private (string Sql, List<(string Name, object Value)> Params, bool Partial)? lastQuery;
+    /// <summary>
+    /// 清單查詢時沒有讀的欄位還沒補讀的列：單頭清單裡沒勾顯示的 JOIN 欄位（只給編輯視窗用）清單查詢時不 JOIN，
+    /// 開編輯視窗、切到那一筆時才用主鍵把整筆讀回來
+    /// </summary>
+    private HashSet<DataRow> partialRows;
     /// <summary>目前使用者對這個畫面的權限（沒登入 = 全開）</summary>
     private FormPermission perm = FormPermission.All;
 
@@ -543,11 +548,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
             : def.Fields.Where(f => !f.IsCalculated).Take(1).Select(MasterExpr)
                  .Concat(listDef?.Columns.Where(c => !c.IsJoin).Take(1).Select(c => GridSql.Base(Dialect, c.Column)) ?? Enumerable.Empty<string>())
                  .Take(1).ToList();
-        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns()} FROM {MasterFrom()}"
+        // 清單沒顯示的 JOIN 欄位先不查（條件有用到的 JOIN 照樣 JOIN），開編輯視窗時再補讀
+        var skip = ListOnlyJoins().Where(a => !where.Contains(Dialect.Quote(a) + ".")).ToHashSet();
+        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns(skip)} FROM {MasterFrom(skip)}"
                         + (where != "" ? " WHERE " + where : "")
                         + (orderColumns.Count > 0 ? " ORDER BY " + string.Join(", ", orderColumns) : "")
                         + Dialect.Limit(5000);
-        LoadResults(cmd);
+        LoadResults(cmd, partial: skip.Count > 0);
     }
 
     /// <summary>
@@ -673,10 +680,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>執行查詢，結果放到單頭（清單），顯示第一筆；quiet = 不跳「查無資料」之類的提醒（重新整理用）</summary>
-    private void LoadResults(DbCommand cmd, bool quiet = false)
+    private void LoadResults(DbCommand cmd, bool quiet = false, bool partial = false)
     {
         // 記下這次的查詢，別的畫面存檔後用同樣的條件重新整理
-        lastQuery = (cmd.CommandText, cmd.Parameters.Cast<DbParameter>().Select(p => (p.ParameterName, p.Value)).ToList());
+        lastQuery = (cmd.CommandText, cmd.Parameters.Cast<DbParameter>().Select(p => (p.ParameterName, p.Value)).ToList(), partial);
         DataTable table;
         try
         {
@@ -691,6 +698,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
 
         results = table;
+        partialRows = null;
+        if (partial)
+        {
+            // 沒查的欄位先放空的欄位，補讀時才有地方放
+            foreach (var c in listDef.Columns.Where(c => c.IsJoin && !table.Columns.Contains(c.Column)))
+                table.Columns.Add(c.Column, typeof(object));
+            partialRows = table.Rows.Cast<DataRow>().ToHashSet();
+        }
         current = table.Rows.Count > 0 ? 0 : -1;
         ShowCurrent();
         SetMode(Mode.Browse);
@@ -976,9 +991,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。
     /// 單頭資料表固定用別名 T0；單頭 JOIN 帶進來的欄位用「關聯資料表別名.原始欄位 AS 欄位名稱」
     /// </summary>
-    private string SelectColumns()
+    private string SelectColumns(ISet<string> skipJoins = null)
     {
-        var joins = def.Joins.Select(j => j.Alias).ToHashSet();
+        var joins = def.Joins.Select(j => j.Alias).Where(a => skipJoins == null || !skipJoins.Contains(a)).ToHashSet();
         var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         void Add(string name, string alias, string source)
         {
@@ -988,14 +1003,52 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
         foreach (var master in details.SelectMany(p => p.Def.Links).Select(l => l.Master))
             if (!columns.ContainsKey(master)) Add(master, null, null);
-        foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>()) Add(c.Column, c.JoinAlias, c.SourceColumn);
+        foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>())
+            if (!c.IsJoin || joins.Contains(c.JoinAlias)) Add(c.Column, c.JoinAlias, c.SourceColumn);
         return string.Join(", ", columns.Values);
     }
 
-    /// <summary>單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表</summary>
-    private string MasterFrom() =>
+    /// <summary>單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表；skipJoins 的 JOIN 不加</summary>
+    private string MasterFrom(ISet<string> skipJoins = null) =>
         GridSql.From(Dialect, def.FullTableName, def.Joins,
-                     def.Fields.Select(f => f.JoinAlias).Concat(listDef?.Columns.Select(c => c.JoinAlias) ?? Enumerable.Empty<string>()).Where(a => !string.IsNullOrEmpty(a)));
+                     def.Fields.Select(f => f.JoinAlias).Concat(listDef?.Columns.Select(c => c.JoinAlias) ?? Enumerable.Empty<string>())
+                        .Where(a => !string.IsNullOrEmpty(a) && (skipJoins == null || !skipJoins.Contains(a))));
+
+    /// <summary>
+    /// 只有單頭清單裡沒勾顯示的欄位用到的 JOIN（通常是給編輯視窗用的）：清單查詢時可以不 JOIN。
+    /// 單頭欄位、清單顯示的欄位、單身關聯用到的不算；沒有主鍵時不省（補讀要用主鍵）
+    /// </summary>
+    private HashSet<string> ListOnlyJoins()
+    {
+        if (listDef == null || !HasKey) return new HashSet<string>();
+        var masters = details.SelectMany(p => p.Def.Links).Select(l => l.Master).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var needed = def.Fields.Select(f => f.JoinAlias)
+            .Concat(listDef.Columns.Where(c => c.IsJoin && (c.Visible || masters.Contains(c.Column)
+                                                            || def.Fields.Any(f => f.Column.Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
+                                   .Select(c => c.JoinAlias))
+            .Where(a => !string.IsNullOrEmpty(a)).ToHashSet();
+        return listDef.Columns.Where(c => c.IsJoin && !needed.Contains(c.JoinAlias)).Select(c => c.JoinAlias).ToHashSet();
+    }
+
+    /// <summary>清單查詢時沒讀完整的列：用主鍵補讀沒查的欄位（編輯視窗要顯示這一筆之前呼叫）</summary>
+    private DataRow EnsureFullRow(DataRow row)
+    {
+        if (row == null || partialRows == null || !partialRows.Remove(row) || row.RowState is DataRowState.Detached or DataRowState.Deleted) return row;
+        try
+        {
+            DataRow fresh = LoadRowByKey(def.MasterKeys.ToDictionary(k => k.Column, k => row[k.Column]));
+            if (fresh == null) return row;
+            bool unchanged = row.RowState == DataRowState.Unchanged;
+            foreach (DataColumn col in fresh.Table.Columns)
+                if (row.Table.Columns.Contains(col.ColumnName)) row[col.ColumnName] = fresh[col.ColumnName];
+            if (unchanged) row.AcceptChanges();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("讀取資料失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        return row;
+    }
 
     /// <summary>單頭欄位在 SELECT / WHERE 裡的寫法：本身的欄位加別名 T0，JOIN 欄位用關聯資料表的欄位</summary>
     private string MasterExpr(FieldDefinition f) =>
@@ -1369,6 +1422,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             DataRow fresh = LoadRowByKey(CurrentKey());
             if (fresh == null) return false;
             foreach (DataColumn col in fresh.Table.Columns) results.Rows[current][col.ColumnName] = fresh[col.ColumnName];
+            partialRows?.Remove(results.Rows[current]);
             ShowCurrent();
             return true;
         }
@@ -1397,6 +1451,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void ShowCurrent()
     {
+        // 清單查詢沒讀的欄位：切到這一筆時補讀（按鈕的 @欄位、列印、編輯視窗都取得到）
+        if (HasCurrent) EnsureFullRow(results.Rows[current]);
         // 有單頭清單時，欄位只當查詢條件：點選清單不帶入，查詢完也清空（資料看清單、編輯用雙擊的編輯視窗）
         if (HasCurrent && listGrid == null)
         {
@@ -1710,7 +1766,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 p.Value = value;
                 cmd.Parameters.Add(p);
             }
-            LoadResults(cmd, quiet: true);
+            LoadResults(cmd, quiet: true, partial: last.Partial);
         }
         else if (key != null && key.Count > 0)
             RunQuery(cmd => AddKeyCondition(cmd, key.ToDictionary(k => k.Key, k => k.Value), GridSql.BaseAlias));
@@ -1870,7 +1926,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         public string FullTableName => Main.FullTableName;
         public int Count => Main.Count;
         public int Current => Index;
-        public DataRow CurrentRow => Index >= 0 ? row : null;
+        public DataRow CurrentRow => Index >= 0 ? form.EnsureFullRow(row) : null;
         public bool CanModify => Main.CanModify;
         public bool CanInsert => Main.CanInsert;
         public bool CanDelete => Main.CanDelete;
@@ -1923,7 +1979,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     string IRecordNavigator.FullTableName => def.FullTableName;
     int IRecordNavigator.Count => results.Rows.Count;
     int IRecordNavigator.Current => current;
-    DataRow IRecordNavigator.CurrentRow => HasCurrent ? results.Rows[current] : null;
+    DataRow IRecordNavigator.CurrentRow => HasCurrent ? EnsureFullRow(results.Rows[current]) : null;
     bool IRecordNavigator.CanModify => HasKey && perm.Modify;
     bool IRecordNavigator.CanInsert => perm.Insert;
     bool IRecordNavigator.CanDelete => HasKey && perm.Delete;
