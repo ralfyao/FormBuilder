@@ -1562,7 +1562,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             try
             {
-                grid.DataSource = SqlList.Load(def.ConnectionString, g.Sql, name =>
+                grid.DataSource = SqlList.Load(def.ConnectionString, SqlList.Compose(def.ConnectionString, g.Sql, g.Columns, g.Joins), name =>
                 {
                     if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
                     var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));

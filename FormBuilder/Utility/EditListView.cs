@@ -142,7 +142,7 @@ public class EditListView
             if (list.IsSqlList)
             {
                 // SQL 清單：@名稱 取編輯視窗（或上層清單）的值，沒有的當 NULL
-                Grid.DataSource = SqlList.Load(connectionString, list.Sql, valueOf);
+                Grid.DataSource = SqlList.Load(connectionString, SqlList.Compose(connectionString, list.Sql, list.Columns, list.Joins), valueOf);
                 return;
             }
             var d = DbDialect.Of(connectionString);

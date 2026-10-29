@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text.RegularExpressions;
 
 namespace FormBuilder;
 
@@ -46,6 +47,59 @@ public static class SqlList
         using var cmd = d.CreateCommand(conn, prepared);
         foreach (var (name, parameter) in parameters) d.AddParam(cmd, parameter, valueOf(name) ?? DBNull.Value);
         return d.Fill(cmd);
+    }
+
+    /// <summary>
+    /// SQL 清單有 JOIN 其他資料表時：自己寫的 SQL 當子查詢（別名 T0），外層 LEFT JOIN 關聯資料表帶出 JOIN 欄位；
+    /// 沒有 JOIN 欄位就是原本的 SQL。@參數照常使用
+    /// </summary>
+    public static string Compose(string connectionString, string sql, IList<GridColumnDefinition> columns, IList<GridJoinDefinition> joins)
+    {
+        if (joins == null || joins.Count == 0 || !columns.Any(c => c.IsJoin)) return sql;
+        var d = DbDialect.Of(connectionString);
+        string inner = sql.Trim().TrimEnd(';').TrimEnd();
+        if (Regex.IsMatch(inner, @"^\s*WITH\b", RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("SQL 用 WITH 開頭時不能再 JOIN 其他資料表，請把 JOIN 直接寫在 SQL 裡。");
+        // SQL Server 的子查詢不能有 ORDER BY（除非有 TOP 或 OFFSET）：加上 OFFSET 0 ROWS
+        string outer = TopLevel(inner);
+        if (d.Kind == DbKind.SqlServer && Regex.IsMatch(outer, @"\bORDER\s+BY\b", RegexOptions.IgnoreCase)
+            && !Regex.IsMatch(outer, @"^\s*SELECT\s+(ALL\s+|DISTINCT\s+)?TOP\b", RegexOptions.IgnoreCase)
+            && !Regex.IsMatch(outer, @"\bOFFSET\b", RegexOptions.IgnoreCase))
+            inner += "\nOFFSET 0 ROWS";
+        var select = columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joins.Any(j => j.Alias == c.JoinAlias))).ToList();
+        return GridSql.Select(d, "(" + inner + "\n)", select, joins);     // 換行再括號：SQL 最後一行是 -- 註解時才不會把括號註解掉
+    }
+
+    /// <summary>SQL 最外層的文字：括號、字串、[識別名稱]、註解裡的內容換成空白（找最外層的 ORDER BY、TOP 用）</summary>
+    private static string TopLevel(string sql)
+    {
+        var sb = new System.Text.StringBuilder(sql.Length);
+        int depth = 0;
+        for (int i = 0; i < sql.Length; i++)
+        {
+            char ch = sql[i];
+            if (ch == '\'' || ch == '[' || ch == '"')
+            {
+                char close = ch == '[' ? ']' : ch;
+                int end = sql.IndexOf(close, i + 1);
+                if (end < 0) end = sql.Length - 1;
+                sb.Append(' ', end - i + 1);
+                i = end;
+                continue;
+            }
+            if (ch == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                int end = sql.IndexOf('\n', i);
+                if (end < 0) end = sql.Length - 1;
+                sb.Append(' ', end - i + 1);
+                i = end;
+                continue;
+            }
+            if (ch == '(') depth++;
+            sb.Append(depth > 0 ? ' ' : ch);
+            if (ch == ')' && depth > 0) depth--;
+        }
+        return sb.ToString();
     }
 
     /// <summary>.NET 型別 → Grid 欄位用的資料型別名稱（決定顯示方式：日期、數字、勾選框）</summary>

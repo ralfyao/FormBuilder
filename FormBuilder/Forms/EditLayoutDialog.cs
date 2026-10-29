@@ -677,7 +677,7 @@ public partial class EditLayoutDialog : Form
     /// <summary>設定 SQL 清單的 SQL 與欄位（沿用畫面設計的 SQL 清單設定視窗）；按確定回傳 true</summary>
     private bool EditSqlList(EditListDefinition l)
     {
-        var temp = new GridDefinition { Title = l.Title, Sql = l.Sql, Columns = l.Columns };
+        var temp = new GridDefinition { Title = l.Title, Sql = l.Sql, Columns = l.Columns, Joins = l.Joins };
         // 可以用的 @參數：編輯視窗的欄位；有上層清單時是上層清單的欄位
         var parent = ParentListOf(l);
         var names = parent != null ? parent.Columns.Select(c => c.Column) : columns.Select(c => c.Column);
@@ -686,6 +686,7 @@ public partial class EditLayoutDialog : Form
         l.Title = temp.Title;
         l.Sql = temp.Sql;
         l.Columns = temp.Columns;
+        l.Joins = temp.Joins;
         return true;
     }
 
@@ -1090,7 +1091,7 @@ public partial class EditLayoutDialog : Form
                 var d = DbDialect.Of(connectionString);
                 if (copy.IsSqlList)
                 {
-                    data = SqlList.Load(connectionString, copy.Sql, name => null);      // SQL 清單：@參數當空值
+                    data = SqlList.Load(connectionString, SqlList.Compose(connectionString, copy.Sql, copy.Columns, copy.Joins), name => null);      // SQL 清單：@參數當空值
                 }
                 else
                 {
