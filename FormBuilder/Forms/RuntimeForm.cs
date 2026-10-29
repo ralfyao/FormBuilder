@@ -59,6 +59,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     public ConditionResult ConditionResult { get; private set; }
     /// <summary>新增、修改、刪除成功後自動關閉（別的畫面的「開啟畫面」按鈕設了「存檔後關閉並重新整理」）</summary>
     public bool CloseAfterSave { get; set; }
+    /// <summary>打開後直接新增（不先用傳入參數查詢）；傳入參數照樣帶進欄位（別的畫面的「開啟畫面」按鈕設了「開啟後直接新增」）</summary>
+    public bool StartInsert { get; set; }
     /// <summary>這個視窗開著的期間有沒有存檔成功過（開啟它的畫面據此重新整理）</summary>
     public bool Saved { get; private set; }
     /// <summary>最後存檔那筆的主鍵（刪除時是 null）</summary>
@@ -220,12 +222,19 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 查詢條件畫面：打開就是輸入條件
         if (conditionMode)
             Shown += (s, e) => BeginQuery();
-        // 有傳入參數時，打開後用同名的欄位當條件自動查詢
-        else if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
-            Shown += (s, e) => QueryByParams();
-        // 只放單頭清單、沒有可以輸入查詢條件的單頭欄位：打開就列出資料
-        else if (HasMasterTable && listDef != null && def.Fields.All(f => f.IsCalculated))
-            Shown += (s, e) => RunQuery();
+        else
+            Shown += (s, e) =>
+            {
+                // 開啟後直接新增（沒有新增權限時照一般方式打開）
+                if (StartInsert && !pickMode && btnInsert.Enabled)
+                    BeginInsert();
+                // 有傳入參數時，打開後用同名的欄位當條件自動查詢
+                else if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
+                    QueryByParams();
+                // 只放單頭清單、沒有可以輸入查詢條件的單頭欄位：打開就列出資料
+                else if (HasMasterTable && listDef != null && def.Fields.All(f => f.IsCalculated))
+                    RunQuery();
+            };
     }
 
     /// <summary>選取視窗：工具列最前面加「選取帶回」，視窗標題加上「選取：」</summary>

@@ -476,7 +476,7 @@ public static class ButtonRunner
     /// <summary>
     /// 使用者端的 ERP 外框設定這個，「開啟畫面」按鈕（不是選取視窗時）就開成外框裡的分頁；沒設定 = 開新視窗
     /// </summary>
-    public static Action<FormDefinition, IDictionary<string, object>> OpenInShell { get; set; }
+    public static Action<FormDefinition, IDictionary<string, object>, bool> OpenInShell { get; set; }
 
     /// <summary>
     /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
@@ -511,6 +511,7 @@ public static class ButtonRunner
                 using var form = new RuntimeForm(target, parameters, pickMode: false)
                 {
                     CloseAfterSave = true,
+                    StartInsert = b.OpenAsInsert,
                     ShowInTaskbar = false,
                     StartPosition = FormStartPosition.CenterParent,
                 };
@@ -520,9 +521,9 @@ public static class ButtonRunner
             }
             if (returns.Count == 0)
             {
-                if (OpenInShell != null && !b.OpenInNewWindow) OpenInShell(target, parameters);
+                if (OpenInShell != null && !b.OpenInNewWindow) OpenInShell(target, parameters, b.OpenAsInsert);
                 // ERP 外框分頁裡的畫面不是頂層視窗，不能當擁有者：改用它所在的外框視窗
-                else new RuntimeForm(target, parameters, pickMode: false).Show((owner as Control)?.TopLevelControl ?? owner);
+                else new RuntimeForm(target, parameters, pickMode: false) { StartInsert = b.OpenAsInsert }.Show((owner as Control)?.TopLevelControl ?? owner);
                 return;
             }
             // 選取視窗：使用者選一筆後關閉，依「回傳對應」把那筆的值帶回來

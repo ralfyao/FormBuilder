@@ -82,7 +82,7 @@ public partial class ErpShellForm : Form
         };
 
         // 畫面上的「開啟畫面」按鈕：開在分頁裡
-        ButtonRunner.OpenInShell = (def, parameters) => OpenForm(def, parameters);
+        ButtonRunner.OpenInShell = (def, parameters, startInsert) => OpenForm(def, parameters, startInsert);
         FormClosed += (s, e) => ButtonRunner.OpenInShell = null;
 
         LoadMenu();
@@ -224,7 +224,7 @@ public partial class ErpShellForm : Form
     // ================= 分頁 =================
 
     /// <summary>把畫面開在新的分頁裡（畫面本身是 RuntimeForm，嵌進分頁、去掉外框）</summary>
-    private void OpenForm(FormDefinition def, IDictionary<string, object> parameters)
+    private void OpenForm(FormDefinition def, IDictionary<string, object> parameters, bool startInsert = false)
     {
         if (!SysContext.PermissionFor(def.FormKey).Open)
         {
@@ -236,6 +236,7 @@ public partial class ErpShellForm : Form
             TopLevel = false,
             FormBorderStyle = FormBorderStyle.None,
             Dock = DockStyle.Fill,
+            StartInsert = startInsert,
         };
         var page = new TabPage(def.Title) { Tag = def.FormKey, ToolTipText = def.Title, BackColor = SystemColors.Control };
         page.Controls.Add(form);

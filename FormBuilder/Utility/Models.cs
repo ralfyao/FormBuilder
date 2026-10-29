@@ -943,6 +943,11 @@ public class ButtonDefinition
                + "開啟的畫面會開成獨立的視窗（不放在 ERP 外框的分頁裡）；沒有回傳對應時才有作用")]
     public bool RefreshAfterSave { get; set; }
 
+    [Category("開啟畫面"), DisplayName("開啟後直接新增"),
+     Description("True = 開啟的畫面打開就是新增狀態（欄位帶入預設值、編號規則），傳入參數直接填進同名的欄位，不先用傳入參數查詢；"
+               + "對方畫面沒有新增權限時照一般方式打開。有回傳對應（選取視窗）時沒有作用")]
+    public bool OpenAsInsert { get; set; }
+
     [Category("開啟畫面"), DisplayName("開新視窗"),
      Description("False = ERP 系統裡開在外框的分頁（設計工具、預覽沒有外框，一律開新視窗）；True = 一律開成獨立的新視窗。"
                + "有回傳對應（選取視窗）或「存檔後關閉並重新整理」時本來就是獨立視窗")]
