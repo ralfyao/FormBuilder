@@ -107,6 +107,7 @@ public partial class RecordNavigatorDialog : Form
             listViews.Add(view);
             body.Controls.Add(view.Host);                   // 圓角外框
         }
+        EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());

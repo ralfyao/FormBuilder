@@ -716,7 +716,7 @@ public class EditListDefinition
     [Category("資料"), DisplayName("資料表"), ReadOnly(true)]
     public string TableName { get; set; }
 
-    [Category("資料"), DisplayName("關聯欄位"), Description("編輯視窗欄位=明細欄位，多組用逗號分隔，例如：廠商編號=廠商編號。點一下清單可以用視窗設定")]
+    [Category("資料"), DisplayName("關聯欄位"), Description("編輯視窗欄位=明細欄位，多組用逗號分隔，例如：廠商編號=廠商編號；有設「上層清單」時，左邊是上層清單的欄位。點一下清單可以用視窗設定")]
     public string LinkText { get; set; } = "";
 
     [Category("畫面"), DisplayName("標題")]
@@ -745,6 +745,11 @@ public class EditListDefinition
     public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]
+    [Category("資料"), DisplayName("上層清單"), TypeConverter(typeof(PrintListConverter)),
+     Description("選版面上另一個明細清單（資料表名稱）：點上層清單的一列，這個清單就列出那一列的明細，例如上面報價單單頭、下面報價單明細；"
+               + "這時「關聯欄位」寫「上層清單欄位=明細欄位」。空白 = 依編輯視窗目前這筆列出")]
+    public string ParentList { get; set; }
+
     public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
 
     /// <summary>複製一份（版面設計器先改複本，按「確定」才寫回）</summary>
@@ -806,7 +811,7 @@ public enum ConditionJoin
     任一符合,
 }
 
-/// <summary>屬性面板「列印來源清單」的下拉清單：編輯視窗版面設計器把版面上的明細清單資料表放進 Available</summary>
+/// <summary>屬性面板「列印來源清單」、明細清單「上層清單」的下拉清單：編輯視窗版面設計器把版面上的明細清單資料表放進 Available</summary>
 public class PrintListConverter : StringConverter
 {
     public static List<string> Available { get; set; } = new();

@@ -95,8 +95,9 @@ public partial class RecordEditDialog : Form
             var view = new EditListView(l, connectionString);
             listViews.Add(view);
             body.Controls.Add(view.Host);                   // 圓角外框
-            view.Reload(currentValue);
         }
+        EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
+        foreach (var view in listViews) view.Reload(currentValue);
         var content = bodySize ?? InputHelper.ContentSize(fields, 360);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());

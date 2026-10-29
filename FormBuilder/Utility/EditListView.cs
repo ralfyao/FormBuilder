@@ -19,6 +19,13 @@ public class EditListView
     /// <summary>加到畫面上的是這個圓角外框（Grid 在裡面）</summary>
     public Control Host { get; }
 
+    /// <summary>上層清單（定義的「上層清單」）：有的話，關聯欄位的左邊取上層清單選取那一列的值；null = 取編輯視窗目前這筆</summary>
+    private EditListView parent;
+    /// <summary>以這個清單為上層清單的明細清單：點這個清單的一列時跟著重新載入</summary>
+    private readonly List<EditListView> children = new();
+    /// <summary>上次帶給下層清單的那一列（同一列不用重新查）</summary>
+    private DataRow lastParentRow;
+
     public EditListView(EditListDefinition definition, string connectionString)
     {
         list = definition;
@@ -47,14 +54,70 @@ public class EditListView
         Host = RoundedGridHost.Wrap(Grid);
         // 載入後不要自動選第一列：使用者自己點選的才算「選取」（列印選取的資料時用）
         Grid.DataBindingComplete += (s, e) => Grid.ClearSelection();
+        // 點選一列：下層清單列出這一列的明細
+        Grid.SelectionChanged += (s, e) => ReloadChildren(force: false);
+    }
+
+    /// <summary>
+    /// 依定義的「上層清單」（資料表名稱）把清單串起來；找不到、指到自己或繞成一圈的不串（照舊依編輯視窗目前這筆列出）。
+    /// 建好所有清單、還沒 Reload 前呼叫
+    /// </summary>
+    public static void Connect(IList<EditListView> views)
+    {
+        foreach (var view in views)
+        {
+            string name = view.list.ParentList?.Trim();
+            if (string.IsNullOrEmpty(name)) continue;
+            var parent = views.FirstOrDefault(v => v != view && v.list.TableName.Equals(name, StringComparison.OrdinalIgnoreCase));
+            bool loop = false;
+            for (var p = parent; p != null && !loop; p = p.parent) loop = p == view;
+            if (parent == null || loop) continue;
+            view.parent = parent;
+            parent.children.Add(view);
+        }
+    }
+
+    /// <summary>上層清單選取的那一列（第一個選取的）；沒有選取 = null</summary>
+    private DataRow ParentRow() => parent?.SelectedRows().FirstOrDefault();
+
+    private void ReloadChildren(bool force)
+    {
+        if (children.Count == 0) return;
+        var row = SelectedRows().FirstOrDefault();
+        if (!force && row == lastParentRow) return;
+        lastParentRow = row;
+        foreach (var child in children) child.Reload(null);
     }
 
     /// <summary>
     /// 重新載入：valueOf 回傳編輯視窗目前這筆的欄位值；關聯欄位的值是空的（例如新增中）就顯示空清單。
+    /// 有上層清單時不用 valueOf，改取上層清單選取那一列的值（沒選取就是空清單）。下層清單跟著重新載入。
     /// 查詢失敗時顯示訊息，不影響編輯視窗其他功能
     /// </summary>
     public void Reload(Func<string, object> valueOf)
     {
+        try
+        {
+            Load(valueOf);
+        }
+        finally
+        {
+            ReloadChildren(force: true);
+        }
+    }
+
+    private void Load(Func<string, object> valueOf)
+    {
+        if (parent != null)
+        {
+            var row = ParentRow();
+            valueOf = col => row != null && row.Table.Columns.Contains(col) ? row[col] : null;
+            if (row == null)
+            {
+                Grid.DataSource = null;                          // 上層清單還沒點選：沒有明細可列
+                return;
+            }
+        }
         var links = list.Links;
         var table = new DataTable();
         try
@@ -70,6 +133,9 @@ public class EditListView
             }
             // 主鍵就算沒顯示也要查出來（列印選取的那筆時用主鍵讀資料）
             visible.AddRange(list.Columns.Where(c => c.IsKey && !c.IsJoin && !visible.Contains(c)));
+            // 下層清單關聯要用的欄位就算沒顯示也要查出來
+            var childLinks = children.SelectMany(v => v.list.Links).Select(l => l.Master).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            visible.AddRange(list.Columns.Where(c => childLinks.Contains(c.Column) && !visible.Contains(c)));
             // 本身資料表固定用別名 T0（有 JOIN 時，欄位名稱才不會跟關聯資料表衝突）
             string select = GridSql.Select(d, list.FullTableName(d), visible, list.Joins, links.Count == 0 ? MaxRowsWithoutLink : null);
             if (links.Count == 0)

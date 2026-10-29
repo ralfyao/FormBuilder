@@ -208,6 +208,9 @@ public partial class EditLayoutDialog : Form
         // 右邊屬性面板：點選欄位後修改標籤、提示文字（placeholder）、寬度、位置
         propertyGrid.PropertyValueChanged += (s, e) =>
         {
+            // 明細清單改了上層清單：用上層清單的欄位重新推測關聯欄位
+            if (e.ChangedItem?.PropertyDescriptor?.Name == nameof(EditListDefinition.ParentList))
+                foreach (var l in selection.OfType<EditListBox>().Select(b => b.ListDef)) GuessListLinks(l);
             foreach (var b in selection) b.RefreshFromModel();
             UpdateCanvasSize();
         };
@@ -649,12 +652,41 @@ public partial class EditLayoutDialog : Form
             Columns = l.Columns,
             Joins = l.Joins,
         };
-        using var dlg = new GridColumnsDialog(temp, grid.Columns.Where(c => !c.IsJoin).Select(c => c.Column).ToList(), connectionString, forEditList: true);
+        // 關聯欄位的左邊：有上層清單時是上層清單的欄位，沒有就是編輯視窗的欄位
+        var parent = ParentListOf(l);
+        var masterColumns = parent != null ? parent.Columns.Select(c => c.Column).ToList() : columns.Where(c => !c.IsJoin).Select(c => c.Column).ToList();
+        using var dlg = new GridColumnsDialog(temp, masterColumns, connectionString, forEditList: true);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         l.LinkText = temp.LinkText;
         l.Joins = temp.Joins;
         box.RefreshFromModel();
         propertyGrid.Refresh();
+    }
+
+    /// <summary>明細清單設定的上層清單（版面上同資料表名稱的另一個清單）；沒設或找不到 = null</summary>
+    private EditListDefinition ParentListOf(EditListDefinition l)
+    {
+        string name = l.ParentList?.Trim();
+        if (string.IsNullOrEmpty(name)) return null;
+        return listBoxes.Select(b => b.ListDef).FirstOrDefault(x => x != l && x.TableName.Equals(name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>上層清單改了：用上層清單（沒有就用編輯視窗）的欄位推測關聯欄位；推測不出來就保留原本的，並提醒</summary>
+    private void GuessListLinks(EditListDefinition l)
+    {
+        var parent = ParentListOf(l);
+        if (!string.IsNullOrWhiteSpace(l.ParentList) && parent == null)
+        {
+            MessageBox.Show($"版面上沒有「{l.ParentList}」這個明細清單。", "提醒");
+            return;
+        }
+        var masterColumns = parent != null
+            ? parent.Columns.Where(c => !c.IsJoin).Select(c => new ColumnInfo { Name = c.Column, IsPrimaryKey = c.IsKey }).ToList()
+            : columns.Where(c => !c.IsJoin).Select(c => new ColumnInfo { Name = c.Column, IsPrimaryKey = c.IsKey }).ToList();
+        var detailColumns = l.Columns.Where(c => !c.IsJoin).Select(c => new ColumnInfo { Name = c.Column }).ToList();
+        string links = DesignerForm.GuessLinks(masterColumns, detailColumns);
+        if (links != "") l.LinkText = links;
+        else MessageBox.Show("推測不出關聯欄位，請點一下清單設定（上層清單欄位=明細欄位）。", "提醒");
     }
 
     /// <summary>下拉選單、日期選擇、勾選框、選項按鈕：從還沒放上版面的欄位選一個，放上去並設成對應的輸入方式</summary>
