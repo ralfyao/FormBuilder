@@ -11,6 +11,15 @@ namespace FormBuilder;
 public partial class EditLayoutDialog : Form
 {
     private readonly GridDefinition grid;
+    /// <summary>可以放上版面的欄位：Grid 的欄位，加上這裡「JOIN 其他資料表」新帶進來的欄位（接在後面，確定時才加到 Grid）</summary>
+    private readonly List<GridColumnDefinition> columns;
+    /// <summary>這裡新加的 JOIN（確定時才寫進 joinTarget）</summary>
+    private readonly List<GridJoinDefinition> newJoins = new();
+    /// <summary>JOIN 要寫到哪裡：單頭清單是畫面的單頭 JOIN，一般 Grid 是 Grid 自己的 Joins</summary>
+    private readonly List<GridJoinDefinition> joinTarget;
+    /// <summary>JOIN 帶進來的欄位不能用的名稱與別名（單頭已經用掉的欄位、設定視窗裡還沒存的 JOIN）</summary>
+    private readonly List<string> reservedNames;
+    private readonly List<string> reservedAliases;
     /// <summary>版面上的欄位（用 FieldDefinition 暫存位置，確定時再寫回 Grid 欄位）</summary>
     private readonly Dictionary<GridColumnDefinition, FieldBox> placed = new();
     /// <summary>版面上的按鈕（編輯的是複本，確定時才寫回）</summary>
@@ -54,10 +63,18 @@ public partial class EditLayoutDialog : Form
     private string editFontName;
     private float editFontSize;
 
-    public EditLayoutDialog(GridDefinition gridDefinition, string connectionString = null, Action saveForm = null, Font screenFont = null)
+    /// <param name="masterJoins">單頭清單才要傳：畫面的單頭 JOIN（這裡 JOIN 的資料表加在單頭主查詢上）</param>
+    /// <param name="reservedNames">JOIN 帶進來的欄位不能用的名稱（單頭已經用掉的欄位等）</param>
+    /// <param name="reservedAliases">JOIN 不能用的別名（設定視窗裡還沒存的 JOIN）</param>
+    public EditLayoutDialog(GridDefinition gridDefinition, string connectionString = null, Action saveForm = null, Font screenFont = null,
+                            List<GridJoinDefinition> masterJoins = null, IEnumerable<string> reservedNames = null, IEnumerable<string> reservedAliases = null)
     {
         InitializeComponent();
         grid = gridDefinition;
+        columns = grid.Columns.ToList();
+        joinTarget = masterJoins ?? grid.Joins;
+        this.reservedNames = reservedNames?.ToList() ?? new List<string>();
+        this.reservedAliases = reservedAliases?.ToList() ?? new List<string>();
         this.connectionString = connectionString;
         this.saveForm = saveForm;
         this.screenFont = screenFont ?? Font;
@@ -98,6 +115,11 @@ public partial class EditLayoutDialog : Form
         {
             if (lstAvailable.SelectedItem is GridColumnDefinition c) PlaceColumn(c, NextFreePoint());
         };
+        // JOIN 其他資料表：帶出關聯資料表的欄位放到編輯視窗上（只顯示，例如用客戶編號帶出客戶名稱）
+        var btnJoin = new Button { Text = "JOIN 其他資料表…", Dock = DockStyle.Bottom, Height = 28 };
+        btnJoin.Click += (s, e) => AddJoin();
+        tabColumns.Controls.Add(btnJoin);
+        lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.AddEntry("Label", "文字標籤 (Label)");
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
@@ -259,7 +281,7 @@ public partial class EditLayoutDialog : Form
         labelBoxes.Clear();
         foreach (var p in state.Fields)
         {
-            var column = grid.Columns.FirstOrDefault(c => c.Column == p.Column);
+            var column = columns.FirstOrDefault(c => c.Column == p.Column);
             if (column == null) continue;
             var box = new FieldBox(p.Field);
             placed[column] = box;
@@ -309,7 +331,7 @@ public partial class EditLayoutDialog : Form
         var skipped = new List<string>();
         foreach (var f in source.Fields.Where(f => !f.IsTextLabel))
         {
-            var column = grid.Columns.FirstOrDefault(c => c.Column.Equals(f.Column, StringComparison.OrdinalIgnoreCase));
+            var column = columns.FirstOrDefault(c => c.Column.Equals(f.Column, StringComparison.OrdinalIgnoreCase));
             if (column == null || fields.Any(p => p.Column == column.Column))
             {
                 skipped.Add(string.IsNullOrWhiteSpace(f.Label) ? f.Column : $"{f.Label}（{f.Column}）");
@@ -467,7 +489,7 @@ public partial class EditLayoutDialog : Form
     /// </summary>
     private void AddTextLabel(Point location)
     {
-        var used = new HashSet<string>(grid.Columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)), StringComparer.OrdinalIgnoreCase);
+        var used = new HashSet<string>(columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)), StringComparer.OrdinalIgnoreCase);
         int n = 1;
         while (used.Contains($"標籤{n}")) n++;
         AddLabelBox(new FieldDefinition
@@ -639,7 +661,7 @@ public partial class EditLayoutDialog : Form
     private void AddKindField(Point location, InputKind kind)
     {
         var (name, tip, minWidth) = DesignerForm.KindInfo(kind);
-        var available = grid.Columns.Where(c => !placed.ContainsKey(c)).ToList();
+        var available = columns.Where(c => !placed.ContainsKey(c)).ToList();
         if (available.Count == 0)
         {
             MessageBox.Show($"欄位都已經放在版面上了。要改成{name}，請點選該欄位，在屬性面板把「輸入方式」改成「{name}」。", "提醒");
@@ -673,12 +695,47 @@ public partial class EditLayoutDialog : Form
         UpdateCanvasSize();
     }
 
+    /// <summary>
+    /// 「欄位」頁籤的「JOIN 其他資料表」：選資料表、關聯條件（Grid 欄位 = 關聯資料表欄位）、要帶進來的欄位，
+    /// 帶進來的欄位放到版面上（只顯示、不寫回資料庫）。按「確定」才加到 Grid；Grid 上預設不顯示，要顯示請到單身欄位設定勾選
+    /// </summary>
+    private void AddJoin()
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("沒有資料庫連線，不能 JOIN 其他資料表。請先在主畫面連線。", "提醒");
+            return;
+        }
+        var aliases = new HashSet<string>(joinTarget.Concat(newJoins).Select(j => j.Alias).Concat(reservedAliases), StringComparer.OrdinalIgnoreCase);
+        int n = 1;
+        while (aliases.Contains($"J{n}")) n++;
+        var localColumns = columns.Where(c => !c.IsJoin)
+            .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, IsPrimaryKey = c.IsKey }).ToList();
+        var used = columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)).Concat(reservedNames);
+        using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, used);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        newJoins.Add(dlg.Join);
+        var location = NextFreePoint();
+        var boxes = new List<DesignBox>();
+        foreach (var c in dlg.NewColumns)
+        {
+            c.Visible = false;                             // 加在編輯視窗用的；Grid 上要顯示到單身欄位設定勾選
+            columns.Add(c);
+            PlaceColumn(c, location, select: false);
+            boxes.Add(placed[c]);
+            location = NextFreePoint();
+        }
+        SetSelection(boxes);
+        history.Check();
+        lblHint.Text = $"  已 JOIN {dlg.Join.TableName}（{dlg.Join.LinkText}），帶進來 {dlg.NewColumns.Count} 個欄位，只顯示、不會存檔；按「確定」才會加到 Grid";
+    }
+
     /// <summary>左邊清單 = 還沒放上版面的欄位，依原本欄位順序</summary>
     private void RefreshAvailable()
     {
         lstAvailable.BeginUpdate();
         lstAvailable.Items.Clear();
-        foreach (var c in grid.Columns.Where(c => !placed.ContainsKey(c))) lstAvailable.Items.Add(c);
+        foreach (var c in columns.Where(c => !placed.ContainsKey(c))) lstAvailable.Items.Add(c);
         lstAvailable.EndUpdate();
     }
 
@@ -852,10 +909,16 @@ public partial class EditLayoutDialog : Form
             MessageBox.Show("編輯視窗至少要有一個欄位。", "提醒");
             return false;
         }
-        for (int i = 0; i < grid.Columns.Count; i++)
+        // 這裡 JOIN 新帶進來的欄位接在 Grid 欄位後面（預覽用的複本加的是複製品），JOIN 本身加到單頭 JOIN 或 Grid 的 Joins
+        for (int i = target.Columns.Count; i < columns.Count; i++)
+            target.Columns.Add(target == grid ? columns[i]
+                : System.Text.Json.JsonSerializer.Deserialize<GridColumnDefinition>(System.Text.Json.JsonSerializer.Serialize(columns[i])));
+        if (target == grid)
+            joinTarget.AddRange(newJoins.Where(j => !joinTarget.Any(x => x.Alias == j.Alias)));
+        for (int i = 0; i < columns.Count; i++)
         {
             var c = target.Columns[i];
-            if (placed.TryGetValue(grid.Columns[i], out var box))
+            if (placed.TryGetValue(columns[i], out var box))
             {
                 c.EditVisible = true;
                 c.EditX = box.Field.X;

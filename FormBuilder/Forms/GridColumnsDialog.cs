@@ -108,8 +108,19 @@ public partial class GridColumnsDialog : Form
         btnLayout.Click += (s, e) =>
         {
             // 版面設計器有自己的確定 / 取消，確定後版面就存在 Grid 上
-            using var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont);
+            // 版面設計器也可以 JOIN 其他資料表：別名、欄位名稱不能跟這裡還沒存的 JOIN 重複
+            dgvColumns.EndEdit();
+            using var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont, masterJoins,
+                                                    workColumns.Select(c => c.Column).Concat(usedNames), workJoins.Select(j => j.Alias));
             layout.ShowDialog(this);
+            // 版面設計器 JOIN 進來的（已經加到 Grid 上了）也加進這裡，按「確定」時才不會被蓋掉
+            foreach (var j in (masterJoins ?? grid.Joins).Where(j => !workJoins.Any(x => x.Alias == j.Alias)))
+                workJoins.Add(j.Clone());
+            foreach (var c in grid.Columns.Where(c => !workColumns.Contains(c)).ToList())
+            {
+                workColumns.Add(c);
+                AddColumnRow(c);
+            }
         };
         btnOk.Click += (s, e) => Apply();
     }
