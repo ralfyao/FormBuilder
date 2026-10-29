@@ -49,7 +49,7 @@ public partial class PrintDesignerForm : Form
     {
         InitializeComponent();
         sourceColumns = recordColumns?.ToList();
-        this.editLists = editLists?.Where(l => !string.IsNullOrWhiteSpace(l.TableName)).ToList() ?? new();
+        this.editLists = editLists?.Where(l => !string.IsNullOrWhiteSpace(l.TableName) && !l.IsSqlList).ToList() ?? new();
         this.connectionString = connectionString;
         this.defaultFolder = defaultFolder;
         this.defaultName = defaultName;

@@ -122,6 +122,12 @@ public class EditListView
         var table = new DataTable();
         try
         {
+            if (list.IsSqlList)
+            {
+                // SQL 清單：@名稱 取編輯視窗（或上層清單）的值，沒有的當 NULL
+                Grid.DataSource = SqlList.Load(connectionString, list.Sql, valueOf);
+                return;
+            }
             var d = DbDialect.Of(connectionString);
             using var conn = d.Open(connectionString);
             using var cmd = d.CreateCommand(conn);
@@ -133,8 +139,9 @@ public class EditListView
             }
             // 主鍵就算沒顯示也要查出來（列印選取的那筆時用主鍵讀資料）
             visible.AddRange(list.Columns.Where(c => c.IsKey && !c.IsJoin && !visible.Contains(c)));
-            // 下層清單關聯要用的欄位就算沒顯示也要查出來
-            var childLinks = children.SelectMany(v => v.list.Links).Select(l => l.Master).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // 下層清單關聯要用的欄位（SQL 清單是 @參數）就算沒顯示也要查出來
+            var childLinks = children.SelectMany(v => v.list.IsSqlList ? ButtonRunner.ParameterNames(v.list.Sql) : v.list.Links.Select(l => l.Master))
+                                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
             visible.AddRange(list.Columns.Where(c => childLinks.Contains(c.Column) && !visible.Contains(c)));
             // 本身資料表固定用別名 T0（有 JOIN 時，欄位名稱才不會跟關聯資料表衝突）
             string select = GridSql.Select(d, list.FullTableName(d), visible, list.Joins, links.Count == 0 ? MaxRowsWithoutLink : null);

@@ -742,6 +742,16 @@ public class EditListDefinition
     [Browsable(false)]
     public List<GridJoinDefinition> Joins { get; set; } = new();
 
+    /// <summary>
+    /// SQL 清單：資料來自這個 SELECT（唯讀），@名稱 取編輯視窗目前這筆的欄位值（有上層清單時取上層清單選取那一列的值）；
+    /// 空白 = 一般的資料表清單。SQL 清單的 TableName 只是識別用的名稱（上層清單、列印來源清單用），不是資料表
+    /// </summary>
+    [Browsable(false)]
+    public string Sql { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
+
     public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]

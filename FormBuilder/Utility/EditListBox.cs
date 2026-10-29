@@ -37,7 +37,8 @@ public class EditListBox : DesignBox
     public override void RefreshFromModel()
     {
         SetBounds(ListDef.X, ListDef.Y, Math.Max(ListDef.Width, MinWidth), Math.Max(ListDef.Height, MinHeight));
-        string link = string.IsNullOrWhiteSpace(ListDef.LinkText) ? "未設定關聯欄位" : "關聯：" + ListDef.LinkText;
+        string link = ListDef.IsSqlList ? "SQL 清單，@名稱 取編輯視窗的欄位值"
+                    : string.IsNullOrWhiteSpace(ListDef.LinkText) ? "未設定關聯欄位" : "關聯：" + ListDef.LinkText;
         if (!string.IsNullOrWhiteSpace(ListDef.ParentList)) link = $"上層清單 {ListDef.ParentList}，{link}";
         tip.SetToolTip(this, $"明細清單：{ListDef.Title ?? ListDef.TableName}（{link}）{Environment.NewLine}點一下設定欄位");
         Invalidate();

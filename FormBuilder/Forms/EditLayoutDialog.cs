@@ -122,6 +122,7 @@ public partial class EditLayoutDialog : Form
         lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.AddEntry("Label", "文字標籤 (Label)");
+        toolbox.AddEntry("SqlList", "SQL 清單（Grid，唯讀）");
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // ---- 左邊「資料表」頁籤：拖到版面或雙擊，加入依關聯欄位列出明細的清單 ----
@@ -210,7 +211,7 @@ public partial class EditLayoutDialog : Form
         {
             // 明細清單改了上層清單：用上層清單的欄位重新推測關聯欄位
             if (e.ChangedItem?.PropertyDescriptor?.Name == nameof(EditListDefinition.ParentList))
-                foreach (var l in selection.OfType<EditListBox>().Select(b => b.ListDef)) GuessListLinks(l);
+                foreach (var l in selection.OfType<EditListBox>().Select(b => b.ListDef).Where(l => !l.IsSqlList)) GuessListLinks(l);
             foreach (var b in selection) b.RefreshFromModel();
             UpdateCanvasSize();
         };
@@ -484,6 +485,7 @@ public partial class EditLayoutDialog : Form
         else if (kind == "CheckBox") AddKindField(location, InputKind.勾選框);
         else if (kind == "RadioButton") AddKindField(location, InputKind.選項按鈕);
         else if (kind == "Label") AddTextLabel(location);
+        else if (kind == "SqlList") AddSqlList(location);
     }
 
     /// <summary>
@@ -626,6 +628,50 @@ public partial class EditLayoutDialog : Form
         if (list.Links.Count == 0) MessageBox.Show("推測不出關聯欄位，請點一下清單設定（編輯視窗欄位=明細欄位）。", "提醒");
     }
 
+    /// <summary>
+    /// 工具箱的「SQL 清單」：資料來自自己寫的 SELECT（唯讀），@名稱 取編輯視窗目前這筆的欄位值，切換資料時重查；
+    /// 設了上層清單時取上層清單選取那一列的值
+    /// </summary>
+    private void AddSqlList(Point location)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            MessageBox.Show("沒有資料庫連線，不能加入 SQL 清單。請先在主畫面連線。", "提醒");
+            return;
+        }
+        // 識別用的名稱（上層清單、列印來源清單選的就是它），不能跟其他清單重複
+        var names = new HashSet<string>(listBoxes.Select(b => b.ListDef.TableName), StringComparer.OrdinalIgnoreCase);
+        int n = 1;
+        while (names.Contains($"SQL清單{n}")) n++;
+        var list = new EditListDefinition
+        {
+            TableName = $"SQL清單{n}",
+            Title = $"SQL清單{n}",
+            X = location.X,
+            Y = location.Y,
+            Width = Math.Max(300, formSize.Width - location.X - 10),
+            Height = 150,
+        };
+        if (!EditSqlList(list)) return;
+        AddListBox(list);
+        lblHint.Text = $"  已加入 SQL 清單「{list.TableName}」：點一下可以修改 SQL 與欄位";
+    }
+
+    /// <summary>設定 SQL 清單的 SQL 與欄位（沿用畫面設計的 SQL 清單設定視窗）；按確定回傳 true</summary>
+    private bool EditSqlList(EditListDefinition l)
+    {
+        var temp = new GridDefinition { Title = l.Title, Sql = l.Sql, Columns = l.Columns };
+        // 可以用的 @參數：編輯視窗的欄位；有上層清單時是上層清單的欄位
+        var parent = ParentListOf(l);
+        var names = parent != null ? parent.Columns.Select(c => c.Column) : columns.Select(c => c.Column);
+        using var dlg = new SqlListDialog(temp, connectionString, names);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+        l.Title = temp.Title;
+        l.Sql = temp.Sql;
+        l.Columns = temp.Columns;
+        return true;
+    }
+
     private void AddListBox(EditListDefinition list, bool select = true)
     {
         var box = new EditListBox(list);
@@ -644,6 +690,13 @@ public partial class EditLayoutDialog : Form
     private void EditListColumns(EditListBox box)
     {
         var l = box.ListDef;
+        if (l.IsSqlList)
+        {
+            if (!EditSqlList(l)) return;
+            box.RefreshFromModel();
+            propertyGrid.Refresh();
+            return;
+        }
         var temp = new GridDefinition
         {
             TableSchema = l.TableSchema,
