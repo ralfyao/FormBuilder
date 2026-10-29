@@ -720,9 +720,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
         DataTable table;
         try
         {
-            using var conn = Dialect.Open(def.ConnectionString);
-            cmd.Connection = conn;
-            table = Dialect.Fill(cmd);
+            // 背景查詢，久一點就顯示「查詢中…」（可以取消）
+            table = Loading.Run(this, "查詢中…", () =>
+            {
+                using var conn = Dialect.Open(def.ConnectionString);
+                cmd.Connection = conn;
+                return Dialect.Fill(cmd);
+            }, cancel: cmd.Cancel);
+        }
+        catch (OperationCanceledException)
+        {
+            return;                                        // 使用者按了取消：保留原本的清單
         }
         catch (Exception ex)
         {
@@ -1590,13 +1598,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             try
             {
-                grid.DataSource = SqlList.Load(def.ConnectionString, SqlList.Compose(def.ConnectionString, g.Sql, g.Columns, g.Joins), name =>
+                // @參數的值先在畫面的執行緒取好（要讀輸入框），再到背景查詢；久一點就顯示「查詢中…」
+                var values = ButtonRunner.ParameterNames(g.Sql).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(name => name, name =>
                 {
                     if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
                     var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                     if (field != null) return GetValue(field);
                     return openParams.TryGetValue(name, out var v) ? v : null;
-                });
+                }, StringComparer.OrdinalIgnoreCase);
+                string sql = SqlList.Compose(def.ConnectionString, g.Sql, g.Columns, g.Joins);
+                grid.DataSource = Loading.Run(this, $"讀取「{g.Title}」…",
+                    () => SqlList.Load(def.ConnectionString, sql, name => values.TryGetValue(name, out var v) ? v : null));
             }
             catch (Exception ex)
             {
