@@ -32,7 +32,7 @@ public partial class RecordEditDialog : Form
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
         foreach (var (f, input) in inputs)
         {
-            InputHelper.SetValue(input, currentValue(f.Column));
+            if (!f.QueryOnly) InputHelper.SetValue(input, currentValue(f.Column));     // 畫面欄位不從資料帶值
             // 只顯示的欄位（主鍵、自動編號、關聯欄位等）不能改
             if (f.NoEntry || f.IsReadOnly)
             {
@@ -121,7 +121,7 @@ public partial class RecordEditDialog : Form
         Values.Clear();
         try
         {
-            foreach (var f in fields.Where(f => !f.NoEntry))
+            foreach (var f in fields.Where(f => !f.NoEntry && !f.QueryOnly))     // 畫面欄位不寫回資料庫
                 Values[f.Column] = InputHelper.GetValue(f, inputs[f]);
         }
         catch (FormatException ex)

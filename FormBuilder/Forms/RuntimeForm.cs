@@ -1015,7 +1015,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             // 資料表有同名欄位（而且有修改權限）的可以改，型別、長度、必填照資料表；其他只顯示
             var fields = g.EditColumns.Select(c =>
             {
-                if (!perm.Modify || !tableColumns.TryGetValue(c.Column, out var t)) return InputHelper.FromGridColumn(c, true);
+                if (!perm.Modify || !tableColumns.TryGetValue(c.Column, out var t)) return InputHelper.FromGridColumn(c, true);   // 畫面欄位照樣可以輸入
                 var f = InputHelper.FromGridColumn(c, false);
                 f.DataType = t.DataType;
                 f.MaxLength = t.MaxLength;
@@ -1080,7 +1080,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var master in details.SelectMany(p => p.Def.Links).Select(l => l.Master))
             if (!columns.ContainsKey(master)) Add(master, null, null);
         foreach (var c in listDef?.Columns ?? new List<GridColumnDefinition>())
-            if (!c.IsJoin || joins.Contains(c.JoinAlias)) Add(c.Column, c.JoinAlias, c.SourceColumn);
+            if (!c.ScreenOnly && (!c.IsJoin || joins.Contains(c.JoinAlias))) Add(c.Column, c.JoinAlias, c.SourceColumn);
         return string.Join(", ", columns.Values);
     }
 
@@ -1616,7 +1616,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         };
         GridCells.ApplyGridLines(grid);
         // 欄位依「輸入方式」建立：文字框、下拉選單、勾選框、日期選擇
-        foreach (var c in g.Columns.Where(c => c.Visible))
+        foreach (var c in g.Columns.Where(c => c.Visible && !c.ScreenOnly))
         {
             // 生效欄位（輸入方式沒特別設定時）：不管欄位是文字還是數字，都顯示成唯讀的勾選框
             bool effective = c.CellType == GridCellKind.自動 && !TypeHelper.IsBool(c.DataType)

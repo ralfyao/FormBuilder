@@ -727,7 +727,7 @@ public static class GridSql
     /// 要取前 n 筆時，SQL Server 的 TOP n 已經放在這裡；Oracle、MySQL 要在整句最後加上 d.Limit(n)
     /// </summary>
     public static string Select(DbDialect d, string fullTableName, IList<GridColumnDefinition> columns, IEnumerable<GridJoinDefinition> joins, int? top = null) =>
-        $"SELECT {d.Top(top)}{string.Join(", ", columns.Select(c => Expr(d, c)))} FROM {From(d, fullTableName, joins, columns)}";
+        $"SELECT {d.Top(top)}{string.Join(", ", columns.Where(c => !c.ScreenOnly).Select(c => Expr(d, c)))} FROM {From(d, fullTableName, joins, columns)}";
 }
 
 /// <summary>
@@ -1094,6 +1094,12 @@ public class GridColumnDefinition
 
     [JsonIgnore]
     public bool IsJoin => !string.IsNullOrEmpty(JoinAlias);
+
+    /// <summary>
+    /// 畫面欄位：不是資料表（或 SQL 清單）的欄位，只放在編輯視窗上（例如匯入現有畫面時對不上的欄位）。
+    /// 不查詢、不存檔，可以輸入，按鈕的 SQL 用 @欄位 取得
+    /// </summary>
+    public bool ScreenOnly { get; set; }
 
     // ---- 雙擊 Grid 開啟的編輯視窗版面 ----
     /// <summary>編輯視窗是否顯示這個欄位；null = 跟 Grid 的「顯示」一樣</summary>

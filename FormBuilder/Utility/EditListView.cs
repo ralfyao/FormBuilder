@@ -44,7 +44,7 @@ public class EditListView
         };
         GridCells.ApplyGridLines(Grid);
         // 欄位依「輸入方式」顯示：下拉選單顯示選項文字、勾選框顯示打勾、日期依格式顯示
-        foreach (var c in list.Columns.Where(c => c.Visible))
+        foreach (var c in list.Columns.Where(c => c.Visible && !c.ScreenOnly))
         {
             var col = GridCells.CreateColumn(c, connectionString);
             col.SortMode = DataGridViewColumnSortMode.Automatic;

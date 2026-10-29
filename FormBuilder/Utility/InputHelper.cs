@@ -385,7 +385,8 @@ public static class InputHelper
         UncheckedValue = c.EditUncheckedValue ?? "0",
         Width = c.EditWidth > 0 ? c.EditWidth : Math.Clamp(c.Width, 120, 400),
         Height = c.EditHeight > 0 ? c.EditHeight : FieldDefinition.DefaultHeight,
-        NoEntry = readOnly,
+        NoEntry = readOnly && !c.ScreenOnly,           // 畫面欄位不存檔，一直可以輸入
+        QueryOnly = c.ScreenOnly,                      // 編輯視窗：不從資料帶值、不寫回資料庫
     };
 
     /// <summary>

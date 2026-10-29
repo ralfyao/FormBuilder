@@ -305,6 +305,7 @@ public partial class EditLayoutDialog : Form
 
     /// <summary>
     /// 檔案 → 匯入現有畫面：讀一個畫面定義檔，跟這個 Grid 同名的欄位照那個畫面的位置、大小、標籤與輸入方式放上版面，
+    /// 對不上的欄位加成「畫面欄位」（不查詢、不存檔，可以輸入，按鈕的 SQL 用 @欄位 取得）；
     /// 文字標籤、按鈕、版面大小、底色、字型也一起帶入（取代目前的版面，可以按 Ctrl+Z 復原）；Grid 不帶入
     /// </summary>
     private void ImportForm()
@@ -332,26 +333,39 @@ public partial class EditLayoutDialog : Form
         }
 
         var fields = new List<PlacedField>();
-        var skipped = new List<string>();
+        var screenOnly = new List<GridColumnDefinition>();
         foreach (var f in source.Fields.Where(f => !f.IsTextLabel))
         {
-            var column = columns.FirstOrDefault(c => c.Column.Equals(f.Column, StringComparison.OrdinalIgnoreCase));
-            if (column == null || fields.Any(p => p.Column == column.Column))
+            var column = columns.Concat(screenOnly).FirstOrDefault(c => c.Column.Equals(f.Column, StringComparison.OrdinalIgnoreCase));
+            if (column != null && fields.Any(p => p.Column == column.Column)) continue;     // 來源畫面同一個欄位放了兩次
+            if (column == null)
             {
-                skipped.Add(string.IsNullOrWhiteSpace(f.Label) ? f.Column : $"{f.Label}（{f.Column}）");
-                continue;
+                // 對不上的欄位：加成畫面欄位（Grid 上不顯示）
+                column = new GridColumnDefinition
+                {
+                    Column = f.Column,
+                    Header = string.IsNullOrWhiteSpace(f.Label) ? f.Column : f.Label,
+                    DataType = f.DataType,
+                    MaxLength = f.MaxLength,
+                    IsNullable = true,
+                    Width = Math.Clamp(f.Width, 60, 200),
+                    Visible = false,
+                    ScreenOnly = true,
+                };
+                screenOnly.Add(column);
             }
             // 複製一份（不動到來源畫面），主鍵、不能輸入照這個 Grid 的欄位
             var copy = System.Text.Json.JsonSerializer.Deserialize<FieldDefinition>(System.Text.Json.JsonSerializer.Serialize(f));
             copy.Column = column.Column;
             copy.IsKey = column.IsKey;
-            copy.NoEntry = f.NoEntry || column.NoEntry || column.IsIdentity;
+            copy.NoEntry = column.ScreenOnly ? f.NoEntry : f.NoEntry || column.NoEntry || column.IsIdentity;
+            copy.QueryOnly = column.ScreenOnly;
             fields.Add(new PlacedField { Column = column.Column, Field = copy });
         }
         string name = string.IsNullOrWhiteSpace(source.Title) ? Path.GetFileNameWithoutExtension(path) : source.Title;
         if (fields.Count == 0)
         {
-            MessageBox.Show($"「{name}」的欄位跟這個 Grid（{grid.TableName}）沒有同名的欄位，沒有匯入。", "匯入現有畫面");
+            MessageBox.Show($"「{name}」沒有可以匯入的欄位。", "匯入現有畫面");
             return;
         }
         var labels = source.Fields.Where(f => f.IsTextLabel).Select(f => f.Clone()).ToList();
@@ -359,6 +373,7 @@ public partial class EditLayoutDialog : Form
             MessageBox.Show("匯入會取代目前的版面（之後可以按 Ctrl+Z 復原），確定要匯入嗎？", "匯入現有畫面",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
+        columns.AddRange(screenOnly);                      // 按「確定」時接在 Grid 欄位後面
         RestoreLayout(System.Text.Json.JsonSerializer.Serialize(new LayoutState
         {
             Fields = fields,
@@ -377,8 +392,10 @@ public partial class EditLayoutDialog : Form
         }
         history.Check();
         lblHint.Text = $"  已匯入「{name}」：{fields.Count} 個欄位、{labels.Count} 個文字標籤、{source.Buttons.Count} 個按鈕";
-        if (skipped.Count > 0)
-            MessageBox.Show($"這些欄位在 {grid.TableName} 沒有同名的欄位，沒有匯入：" + Environment.NewLine + string.Join("、", skipped), "匯入現有畫面");
+        if (screenOnly.Count > 0)
+            MessageBox.Show($"這些欄位在{(grid.IsSqlList ? " SQL 清單" : $" {grid.TableName} ")}沒有同名的欄位，匯入成「畫面欄位」"
+                            + "（不讀資料、不存檔，可以輸入，按鈕的 SQL 可以用 @欄位 取得）：" + Environment.NewLine
+                            + string.Join("、", screenOnly.Select(c => c.Header == c.Column ? c.Column : $"{c.Header}（{c.Column}）")), "匯入現有畫面");
     }
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / (double)DesignBox.Grid) * DesignBox.Grid);

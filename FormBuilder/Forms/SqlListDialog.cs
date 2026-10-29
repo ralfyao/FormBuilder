@@ -30,7 +30,7 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Column", typeof(string));
         columnTable.Columns.Add("Header", typeof(string));
         columnTable.Columns.Add("Width", typeof(int));
-        foreach (var c in grid.Columns) columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width);
+        foreach (var c in grid.Columns.Where(c => !c.ScreenOnly)) columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width);   // 編輯視窗的畫面欄位不是 SQL 的欄位
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => e.Cancel = true;
 
@@ -120,11 +120,13 @@ public partial class SqlListDialog : Form
             var existing = grid.Columns.FirstOrDefault(c => c.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             var c = existing ?? new GridColumnDefinition { Column = name, IsNullable = true, NoEntry = true };
             if (types.TryGetValue(name, out var t)) c.DataType = t.DataType;
+            c.ScreenOnly = false;                          // SQL 現在有這個欄位了
             c.Visible = r["Visible"] is true;
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
             return c;
-        }).ToList();
+        }).Concat(grid.Columns.Where(c => c.ScreenOnly && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
+          .ToList();                                       // 編輯視窗的畫面欄位保留（SQL 有同名欄位時就用 SQL 的）
         return true;
     }
 }

@@ -156,7 +156,7 @@ public partial class RecordNavigatorDialog : Form
     private void ShowRecord()
     {
         DataRow row = nav.CurrentRow;
-        foreach (var f in fields)
+        foreach (var f in fields.Where(f => !f.QueryOnly))                    // 畫面欄位不從資料帶值
             InputHelper.SetValue(inputs[f], row != null && row.Table.Columns.Contains(f.Column) ? row[f.Column] : null);
         ButtonRunner.RefreshTextLabels(inputs, connectionString, ValueOf);     // 文字標籤用欄位的執行後動作帶出來
         ReloadLists(row);
@@ -412,7 +412,7 @@ public partial class RecordNavigatorDialog : Form
     private void Accept()
     {
         var values = new Dictionary<string, object>();
-        var editable = fields.Where(f => !f.NoEntry && (mode == EditMode.Insert || !f.IsKey)).ToList();
+        var editable = fields.Where(f => !f.NoEntry && !f.QueryOnly && (mode == EditMode.Insert || !f.IsKey)).ToList();     // 畫面欄位不寫回資料庫
         try
         {
             foreach (var f in editable)
