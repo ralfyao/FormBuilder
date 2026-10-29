@@ -39,6 +39,7 @@ public static class SqlList
     /// <summary>執行 SQL 讀出資料；@參數的值由 valueOf 提供（沒有 = NULL）</summary>
     public static DataTable Load(string connectionString, string sql, Func<string, object> valueOf)
     {
+        valueOf = SysParams.With(valueOf);                    // @登入帳號、@登入姓名
         var d = DbDialect.Of(connectionString);
         var (prepared, parameters) = d.PrepareUserSql(sql);
         using var conn = d.Open(connectionString);

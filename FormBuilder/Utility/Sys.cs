@@ -261,6 +261,32 @@ public record RolePermission(FormPermission Permission, string Note, DateTime? V
 public record SysUser(string UserId, string UserName, bool IsAdmin);
 
 /// <summary>
+/// 系統參數：所有 SQL（SQL 清單、執行SQL、預設值、執行後動作、傳入參數、自訂查詢）都能用的 @名稱。
+/// @登入帳號 = 登入的帳號，@登入姓名 = 登入者的姓名（沒登入時都是 Windows 帳號）。
+/// 畫面上有同名的欄位而且有值時，以畫面上的值為準
+/// </summary>
+public static class SysParams
+{
+    public static bool TryGet(string name, out object value)
+    {
+        value = name switch
+        {
+            "登入帳號" => SysContext.User?.UserId ?? Environment.UserName,
+            "登入姓名" => SysContext.User?.UserName ?? Environment.UserName,
+            _ => null,
+        };
+        return value != null;
+    }
+
+    /// <summary>valueOf 取不到值（null 或 DBNull）時改用系統參數</summary>
+    public static Func<string, object> With(Func<string, object> valueOf) => name =>
+    {
+        var v = valueOf?.Invoke(name);
+        return (v == null || v == DBNull.Value) && TryGet(name, out var sys) ? sys : v;
+    };
+}
+
+/// <summary>
 /// 目前登入的狀態：使用者、系統資料庫連線、各畫面的權限。
 /// 沒有登入（開發時用 --designer 或直接開畫面檔）時 Active = false，權限全開、不寫稽核紀錄、畫面從檔案讀
 /// </summary>

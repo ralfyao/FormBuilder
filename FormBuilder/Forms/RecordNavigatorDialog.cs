@@ -108,6 +108,7 @@ public partial class RecordNavigatorDialog : Form
             body.Controls.Add(view.Host);                   // 圓角外框
         }
         EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
+        foreach (var view in listViews) view.HookOpenForm(sourcePath, this, ValueOf, connectionString);   // 雙擊一列開啟畫面
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());
@@ -264,15 +265,11 @@ public partial class RecordNavigatorDialog : Form
             case ButtonAction.離開: Close(); break;
             case ButtonAction.執行SQL:
             {
-                // @欄位名稱：先找視窗上的欄位，沒有就用目前這筆資料；SQL 查出來的值等重讀完再填進視窗上的欄位
+                // @欄位名稱：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；SQL 查出來的值等重讀完再填進視窗上的欄位
+                var sqlValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
+                if (sqlValueOf == null) break;
                 IReadOnlyDictionary<string, object> result = null;
-                if (ButtonRunner.RunSql(b, connectionString, name =>
-                    {
-                        var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                        if (f != null) return InputHelper.GetValue(f, inputs[f]);
-                        DataRow row = nav.CurrentRow;
-                        return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-                    }, onResult: values => result = values) && nav.CurrentRow != null && mode == EditMode.Browse)   // 新增、修改中不重讀，才不會蓋掉正在輸入的內容
+                if (ButtonRunner.RunSql(b, connectionString, sqlValueOf, onResult: values => result = values) && nav.CurrentRow != null && mode == EditMode.Browse)   // 新增、修改中不重讀，才不會蓋掉正在輸入的內容
                 {
                     nav.Refresh();                         // 資料可能被 SQL 改過，重讀
                     ShowRecord();
@@ -293,15 +290,13 @@ public partial class RecordNavigatorDialog : Form
                 break;
             }
             case ButtonAction.開啟畫面:
-                // 傳入參數的 @欄位：先找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
-                ButtonRunner.OpenForm(b, sourcePath, this, name =>
-                {
-                    var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                    if (f != null) return InputHelper.GetValue(f, inputs[f]);
-                    DataRow row = nav.CurrentRow;
-                    return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
-                }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
+            {
+                // 傳入參數的 @欄位：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
+                var openValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
+                if (openValueOf == null) break;
+                ButtonRunner.OpenForm(b, sourcePath, this, openValueOf, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
                 break;
+            }
         }
     }
 
@@ -387,7 +382,7 @@ public partial class RecordNavigatorDialog : Form
         foreach (var f in fields) InputHelper.SetValue(inputs[f], null);
         foreach (var f in inputs.Keys.Where(f => f.IsTextLabel)) InputHelper.SetValue(inputs[f], f.Label);   // 文字標籤恢復原本的文字
         ReloadLists(null);
-        DefaultValue.FillInputs(inputs);                                         // 欄位的預設值
+        DefaultValue.FillInputs(inputs, connectionString);                       // 欄位的預設值（可以是 SQL）
         NumberRule.FillInputs(inputs, connectionString, nav.FullTableName);     // 有編號規則的欄位自動帶入下一個編號
         SetMode(EditMode.Insert);
     }

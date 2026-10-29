@@ -67,22 +67,16 @@ public partial class RecordEditDialog : Form
                     case ButtonAction.取消:
                     case ButtonAction.離開: DialogResult = DialogResult.Cancel; break;
                     case ButtonAction.執行SQL:
-                        ButtonRunner.RunSql(b, connectionString, name =>
-                        {
-                            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
-                        }, onResult: values => ButtonRunner.FillFields(values, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn)));
+                        if (ButtonRunner.WithSourceList(b, listViews, ValueOf) is not { } sqlValueOf) break;   // 有來源清單：先取清單選取那一列
+                        ButtonRunner.RunSql(b, connectionString, sqlValueOf, onResult: values => ButtonRunner.FillFields(values, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn)));
                         break;
                     case ButtonAction.列印報表:
                         if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, name => currentValue(name), this)) break;   // 依下方清單選取的資料列印
                         ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => currentValue(name) }, this);
                         break;
                     case ButtonAction.開啟畫面:
-                        ButtonRunner.OpenForm(b, sourcePath, this, name =>
-                        {
-                            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
-                        }, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
+                        if (ButtonRunner.WithSourceList(b, listViews, ValueOf) is not { } openValueOf) break;
+                        ButtonRunner.OpenForm(b, sourcePath, this, openValueOf, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
                         break;
                 }
             };
@@ -97,7 +91,18 @@ public partial class RecordEditDialog : Form
             body.Controls.Add(view.Host);                   // 圓角外框
         }
         EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
-        foreach (var view in listViews) view.Reload(currentValue);
+        foreach (var view in listViews)
+        {
+            view.HookOpenForm(sourcePath, this, ValueOf, connectionString);   // 雙擊一列開啟畫面
+            view.Reload(currentValue);
+        }
+
+        // @名稱：先找視窗上的欄位，沒有就用目前這筆
+        object ValueOf(string name)
+        {
+            var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
+        }
         var content = bodySize ?? InputHelper.ContentSize(fields, 360);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());

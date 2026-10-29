@@ -1245,6 +1245,8 @@ public partial class DesignerForm : Form
         form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
             .Concat(form.Fields.Select(ButtonRunner.PickerButton))
             .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
+            .Concat(form.Grids.Select(g => ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams)))                  // 清單的雙擊開啟畫面
+            .Concat(form.Grids.SelectMany(g => g.EditLists).Select(l => ButtonRunner.ListOpenButton(l.Title, l.OpenForm, l.OpenParams)))
             .Where(b => b != null).ToList();
 
     /// <summary>發布時的畫面名稱：沒有改過標題（還是預設的「新畫面」或空白）就用檔名（不含副檔名）</summary>

@@ -372,7 +372,10 @@ public class FieldDefinition
 
     [Category("編號"), DisplayName("預設值"),
      Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；"
-               + "USER() = 登入帳號。也可以用 {今天} {現在} {使用者} {使用者名稱} 夾在文字裡。有設「編號規則」時以編號規則為準")]
+               + "USER() = 登入帳號。也可以用 {今天} {現在} {使用者} {使用者名稱} 夾在文字裡。"
+               + "也可以寫 SELECT 查資料庫，取第一筆的第一個欄位，@欄位名稱 取畫面上的值，例如：SELECT 姓名 FROM H員工清冊 WHERE 工號 = @員工編號。"
+               + "文字標籤的預設值是顯示的文字，每次切換資料都會重新帶出。有設「編號規則」時以編號規則為準"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string DefaultValue { get; set; }
 
     [Category("日期選擇"), DisplayName("日期格式"),
@@ -487,6 +490,17 @@ public class GridDefinition
 
     [Browsable(false), JsonIgnore]
     public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
+
+    [Category("雙擊開啟畫面"), DisplayName("畫面定義檔"),
+     Description("SQL 清單才有作用：在清單上雙擊一列就開啟這個畫面，並把「傳入參數」帶過去（選取視窗模式時雙擊仍是選取帶回）。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string OpenForm { get; set; }
+
+    [Category("雙擊開啟畫面"), DisplayName("傳入參數"),
+     Description("雙擊一列時帶給對方畫面的值，用逗號或換行分隔「對方欄位=值」：@清單欄位（雙擊那一列的值，清單上沒有的取視窗上的欄位），"
+               + "例如 QUONO=@QUONO；也可以是 SQL 運算式或固定值（同按鈕的「傳入參數」）。對方畫面上有同名欄位時會自動查詢，對方的 SQL 也可以用 @名稱 取得"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string OpenParams { get; set; }
 
     [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
     public string TableSchema { get; set; }
@@ -752,6 +766,17 @@ public class EditListDefinition
     [Browsable(false), JsonIgnore]
     public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
 
+    [Category("雙擊開啟畫面"), DisplayName("畫面定義檔"),
+     Description("有設定時，在清單上雙擊一列就開啟這個畫面，並把「傳入參數」帶過去。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    public string OpenForm { get; set; }
+
+    [Category("雙擊開啟畫面"), DisplayName("傳入參數"),
+     Description("雙擊一列時帶給對方畫面的值，用逗號或換行分隔「對方欄位=值」：@清單欄位（雙擊那一列的值，清單上沒有的取視窗上的欄位），"
+               + "例如 QUONO=@QUONO；也可以是 SQL 運算式或固定值（同按鈕的「傳入參數」）。對方畫面上有同名欄位時會自動查詢，對方的 SQL 也可以用 @名稱 取得"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string OpenParams { get; set; }
+
     public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]
@@ -931,6 +956,11 @@ public class ButtonDefinition
      Description("空白 = 印目前這筆（主檔）。選編輯視窗上的明細清單（資料表名稱）= 依清單上選取的資料列印（可多選；沒選會提醒）。"
                + "樣板一樣以主檔（單頭）為主，選取那筆的欄位（例如詢價日期）可以放到樣板上，或在「設定單身」拿來對應單身")]
     public string PrintListTable { get; set; }
+
+    [Category("按鈕"), DisplayName("來源清單"), TypeConverter(typeof(PrintListConverter)),
+     Description("編輯視窗的按鈕才有作用。選編輯視窗上的明細清單或 SQL 清單（名稱）＝「開啟畫面」的傳入參數、「執行SQL」的 @欄位 先取那個清單選取那一列的值，"
+               + "清單上沒有的再取視窗上的欄位（沒選取會提醒）。空白 = 取視窗上的欄位、目前這筆")]
+    public string SourceList { get; set; }
 
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設外觀
     [Browsable(false)]

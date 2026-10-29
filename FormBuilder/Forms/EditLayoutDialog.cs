@@ -1170,7 +1170,9 @@ public class EditFieldView
                + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
     public string NumberRule { get => field.NumberRule; set => field.NumberRule = value; }
 
-    [DisplayName("預設值"), Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；USER() = 登入帳號；有設編號規則時以編號規則為準")]
+    [DisplayName("預設值"), Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；USER() = 登入帳號；"
+                                     + "也可以寫 SELECT 查資料庫，取第一筆的第一個欄位，@欄位名稱 取視窗上的值，例如：SELECT 姓名 FROM H員工清冊 WHERE 工號 = @員工編號。有設編號規則時以編號規則為準"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string DefaultValue { get => field.DefaultValue; set => field.DefaultValue = value; }
 
     [DisplayName("日期格式"), Description("日期選擇用在文字、數字欄位時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]

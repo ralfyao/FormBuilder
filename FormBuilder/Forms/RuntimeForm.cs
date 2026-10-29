@@ -154,7 +154,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         btnDetail.Visible = HasDetail;
         foreach (var g in def.Grids.Where(g => g.IsSqlList))
-            sqlGrids.Add((g, CreateDetailGrid(g, def.ConnectionString)));   // 唯讀
+        {
+            var sqlGrid = CreateDetailGrid(g, def.ConnectionString);         // 唯讀
+            sqlGrids.Add((g, sqlGrid));
+            HookSqlListOpen(g, sqlGrid);
+        }
         listDef = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
         if (listDef != null)
         {
@@ -443,7 +447,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         ClearInputs();
         ClearDetail();
-        DefaultValue.FillInputs(inputs);                                          // 欄位的預設值
+        DefaultValue.FillInputs(inputs, def.ConnectionString);                   // 欄位的預設值（可以是 SQL）
         NumberRule.FillInputs(inputs, def.ConnectionString, def.FullTableName);   // 有編號規則的欄位自動帶入下一個編號
         FillParams();                                                             // 別的畫面開啟時帶進來的值（例如廠商編號）直接帶入
         SetMode(Mode.Insert);
@@ -559,6 +563,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>執行使用者寫的 SELECT，結果放到單頭（清單）；@名稱 的值由 valueOf 提供（格式不對丟 FormatException）</summary>
     private void RunSelect(string userSql, Func<string, object> valueOf)
     {
+        valueOf = SysParams.With(valueOf);                    // @登入帳號、@登入姓名
         var (sql, parameters) = Dialect.PrepareUserSql(userSql);     // @欄位名稱 轉成這個資料庫的參數寫法
         using var cmd = Dialect.CreateCommand(sql: sql);
         try
@@ -920,6 +925,30 @@ public partial class RuntimeForm : Form, IRecordNavigator
             results.Columns.Contains(name) ? results.Rows[r][name]
             : def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } field ? GetValue(field) : null)).ToList();
         ButtonRunner.Print(b, def.SourcePath, def.ConnectionString, records, this);
+    }
+
+    /// <summary>
+    /// SQL 清單的「雙擊開啟畫面」：雙擊一列開啟設定的畫面，傳入參數的 @名稱 先取那一列的值，再找畫面上的欄位、目前這筆、開啟時的傳入參數。
+    /// 只放 SQL 清單的選取視窗，雙擊仍是選取帶回
+    /// </summary>
+    private void HookSqlListOpen(GridDefinition g, DataGridView grid)
+    {
+        var button = ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams);
+        if (button == null) return;
+        grid.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || pickMode && !HasMasterTable) return;
+            if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
+            var row = view.Row;
+            ButtonRunner.OpenForm(button, def.SourcePath, this, name =>
+            {
+                if (row.Table.Columns.Contains(name)) return row[name];
+                var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (field != null) return GetValue(field);
+                if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+                return openParams.TryGetValue(name, out var v) ? v : null;
+            }, connectionString: def.ConnectionString);
+        };
     }
 
     /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位（欄位的開窗選取也用這個）</summary>
@@ -1503,8 +1532,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
             // 新增明細時先帶入欄位的預設值
             foreach (var c in gridDef.Columns.Where(c => !string.IsNullOrWhiteSpace(c.EditDefaultValue) && e.Row.Table.Columns.Contains(c.Column)))
             {
-                try { e.Row[c.Column] = DefaultValue.Resolve(c.EditDefaultValue); }
-                catch (Exception) { }                           // 型別對不上就不帶
+                // SQL 的預設值：@名稱 取這筆明細已經帶好的值，沒有就取單頭目前這筆
+                try
+                {
+                    e.Row[c.Column] = DefaultValue.Resolve(c.EditDefaultValue, def.ConnectionString, name =>
+                        e.Row.Table.Columns.Contains(name) && e.Row[name] != DBNull.Value ? e.Row[name]
+                        : HasCurrent && results.Columns.Contains(name) ? results.Rows[current][name] : null) ?? DBNull.Value;
+                }
+                catch (Exception) { }                           // 型別對不上、SQL 錯誤就不帶
             }
             if (!HasCurrent) return;
             foreach (var (master, detail) in gridDef.Links)

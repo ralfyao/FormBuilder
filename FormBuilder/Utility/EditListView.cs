@@ -77,6 +77,23 @@ public class EditListView
         }
     }
 
+    /// <summary>
+    /// 清單的「雙擊開啟畫面」：雙擊一列開啟設定的畫面，傳入參數的 @名稱 先取那一列的值，清單上沒有的交給 fallback（視窗上的欄位、目前這筆）。
+    /// 沒設定畫面就不動作
+    /// </summary>
+    public void HookOpenForm(string sourcePath, IWin32Window owner, Func<string, object> fallback, string connectionString)
+    {
+        var button = ButtonRunner.ListOpenButton(list.Title ?? list.TableName, list.OpenForm, list.OpenParams);
+        if (button == null) return;
+        Grid.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || Grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
+            var row = view.Row;
+            ButtonRunner.OpenForm(button, sourcePath, owner, name => row.Table.Columns.Contains(name) ? row[name] : fallback(name),
+                                  connectionString: connectionString);
+        };
+    }
+
     /// <summary>上層清單選取的那一列（第一個選取的）；沒有選取 = null</summary>
     private DataRow ParentRow() => parent?.SelectedRows().FirstOrDefault();
 

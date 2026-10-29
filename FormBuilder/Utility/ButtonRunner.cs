@@ -114,8 +114,9 @@ public static class ButtonRunner
         using var cmd = d.CreateCommand(conn, sql);
         cmd.Transaction = tran;
         int affected = 0;
-        foreach (var valueOf in rows)
+        foreach (var rowValueOf in rows)
         {
+            var valueOf = SysParams.With(rowValueOf);         // @登入帳號、@登入姓名
             // 傳入參數用同一條連線、同一個交易計算（看得到前面幾筆剛改的資料）
             var computed = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             object ValueOf(string name)
@@ -212,6 +213,18 @@ public static class ButtonRunner
         var labels = inputs.Where(p => p.Key.IsTextLabel).ToDictionary(p => p.Key, p => p.Value);
         if (labels.Count == 0) return;
         foreach (var (f, input) in labels) InputHelper.SetValue(input, f.Label);
+        // 文字標籤有預設值（固定文字或 SQL）就顯示預設值；之後欄位的執行後動作有帶出值的話以執行後動作為準
+        foreach (var (f, input) in labels.Where(p => !string.IsNullOrWhiteSpace(p.Key.DefaultValue)))
+        {
+            try
+            {
+                if (DefaultValue.Resolve(f.DefaultValue, connectionString, valueOf) is { } value) DefaultValue.Apply(f, input, value);
+            }
+            catch (Exception)
+            {
+                // 預設值的 SQL 錯誤：維持原本的文字
+            }
+        }
         foreach (var f in inputs.Keys.Where(f => !f.IsTextLabel && f.AfterSelectSql?.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) == true))
         {
             try
@@ -300,6 +313,7 @@ public static class ButtonRunner
     public static object ParamValue(string name, string source, Func<string, object> valueOf, string connectionString,
                                     DbConnection conn = null, DbTransaction tran = null)
     {
+        valueOf = SysParams.With(valueOf);                    // @登入帳號、@登入姓名
         if (FieldRef.IsMatch(source)) return valueOf?.Invoke(source[1..]) ?? DBNull.Value;
         if (QuotedText.IsMatch(source)) return source[1..^1].Replace("''", "'");   // 'A(1), B'：單引號括起來的固定文字
         if (!HasFieldRef.IsMatch(source) && !source.Contains('(')) return source;
@@ -349,6 +363,39 @@ public static class ButtonRunner
         }
         if (missing.Count > 0 && reportMissing)
             MessageBox.Show("「回傳對應」裡這些欄位不在這個視窗上，沒有帶入：" + string.Join("、", missing), "提醒");
+    }
+
+    /// <summary>清單的「雙擊開啟畫面」轉成「開啟畫面」按鈕；沒設定回傳 null</summary>
+    public static ButtonDefinition ListOpenButton(string title, string openForm, string openParams) =>
+        string.IsNullOrWhiteSpace(openForm) ? null : new ButtonDefinition
+        {
+            Text = title,
+            Action = ButtonAction.開啟畫面,
+            TargetForm = openForm.Trim(),
+            OpenParams = openParams,
+        };
+
+    /// <summary>
+    /// 按鈕的「來源清單」：@名稱 先取那個清單選取那一列（第一個選取的）的值，清單上沒有的交給 fallback。
+    /// 沒設來源清單直接回傳 fallback；找不到清單或沒選取時提醒並回傳 null（呼叫端就不要執行）
+    /// </summary>
+    public static Func<string, object> WithSourceList(ButtonDefinition b, IEnumerable<EditListView> views, Func<string, object> fallback)
+    {
+        string name = b.SourceList?.Trim();
+        if (string.IsNullOrEmpty(name)) return fallback;
+        var view = views.FirstOrDefault(v => v.Definition.TableName.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (view == null)
+        {
+            MessageBox.Show($"這個視窗上找不到來源清單「{name}」，請到編輯視窗版面檢查按鈕「{b.Text}」的設定。", "提醒");
+            return null;
+        }
+        var row = view.SelectedRows().FirstOrDefault();
+        if (row == null)
+        {
+            MessageBox.Show($"請先在「{view.Definition.Title ?? view.Definition.TableName}」清單選取一列。", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+        return n => row.Table.Columns.Contains(n) ? row[n] : fallback(n);
     }
 
     /// <summary>有設定開窗選取的欄位（SetValue 把帶回來的值加進下拉選項用）</summary>

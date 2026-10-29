@@ -138,7 +138,11 @@ public static class InputHelper
             {
                 var d = DbDialect.Of(connectionString);
                 using var conn = d.Open(connectionString);
-                using var cmd = d.CreateCommand(conn, d.PrepareUserSql(f.ItemsSql).Sql);
+                var (sql, parameters) = d.PrepareUserSql(f.ItemsSql);
+                using var cmd = d.CreateCommand(conn, sql);
+                // 選項只在建立時查一次：只認得系統參數（@登入帳號、@登入姓名），其他 @名稱 當 NULL
+                foreach (var (name, parameter) in parameters)
+                    d.AddParam(cmd, parameter, SysParams.TryGet(name, out var v) ? v : DBNull.Value);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
