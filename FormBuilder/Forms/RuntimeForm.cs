@@ -16,6 +16,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private readonly FormDefinition def;
     private readonly Dictionary<FieldDefinition, Control> inputs = new();
+    /// <summary>輸入框的游標順序（畫面位置由上而下、由左而右）</summary>
+    private List<Control> focusOrder = new();
     private Mode mode = Mode.Browse;
     /// <summary>查詢結果；current 是目前顯示第幾筆（0 起算，-1 = 沒有資料）</summary>
     private DataTable results = new();
@@ -130,6 +132,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
+        focusOrder = InputHelper.ApplyFocusOrder(inputs);    // Tab / Enter 照畫面位置由左而右、由上而下
         // 欄位的開窗選取：瀏覽時不開（跟選取視窗按鈕一樣，輸入中、查詢中才能用）
         ButtonRunner.AttachPickers(inputs, b => { if (mode != Mode.Browse) OpenOtherForm(b); });
         // 下拉選單的執行後動作：@名稱 先找畫面上的欄位，再找目前這筆、開啟時的傳入參數；查出來的值填回畫面上的欄位
@@ -370,16 +373,35 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>
-    /// 輸入時按 Enter = 確定、Esc = 取消（像 4GL 的 accept / cancel）。
-    /// 單身輸入時不攔截，讓 Enter / Esc 照常在 Grid 裡換列、取消儲存格編輯
+    /// 輸入時 Esc = 取消；Enter：新增、修改時跳到下一個輸入框（最後一個輸入框再按 Enter：有單身就跳到單身，沒有就確定），
+    /// 查詢時 = 開始查詢（像 4GL 的 accept / cancel）。
+    /// 游標在單身 Grid 裡時不攔截，讓 Enter / Esc 照常在 Grid 裡換列、取消儲存格編輯
     /// </summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         bool headerEditing = mode is Mode.Query or Mode.Insert or Mode.Modify;
+        if (headerEditing && details.Any(p => p.Grid.ContainsFocus)) return base.ProcessCmdKey(ref msg, keyData);
         if (headerEditing && keyData == Keys.Escape) { CancelEdit(); return true; }
-        if (headerEditing && keyData == Keys.Enter) { Accept(); return true; }
+        if (headerEditing && keyData == Keys.Enter)
+        {
+            if (mode is Mode.Insert or Mode.Modify)
+            {
+                if (InputHelper.FocusNext(focusOrder, out bool last)) return true;
+                if (!last && focusOrder.Any(c => c.ContainsFocus)) return base.ProcessCmdKey(ref msg, keyData);   // 多行文字框換行、下拉選單選取
+                if (last && InlineDetail && details.Count > 0)
+                {
+                    details[0].Grid.Focus();
+                    return true;
+                }
+            }
+            Accept();
+            return true;
+        }
         return base.ProcessCmdKey(ref msg, keyData);
     }
+
+    /// <summary>新增、修改單頭時，單身也可以直接在 Grid 輸入，按「確定」跟單頭一起存</summary>
+    private bool InlineDetail => HasDetail && (mode == Mode.Insert ? perm.Insert : mode == Mode.Modify && perm.Modify);
 
     // ================= 模式與按鈕狀態 =================
 
@@ -406,7 +428,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         foreach (var part in details)
         {
-            bool detailEditing = mode == Mode.Detail;
+            bool detailEditing = mode == Mode.Detail || InlineDetail;          // 新增、修改單頭時單身也可以一起輸入
             part.Grid.ReadOnly = !detailEditing;
             part.Grid.AllowUserToAddRows = detailEditing;
             part.Grid.AllowUserToDeleteRows = detailEditing;
@@ -452,7 +474,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 && (ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         if (mode == Mode.Detail) details[0].Grid.Focus();
-        else if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
+        else if (!browsing) InputHelper.FocusFirst(focusOrder);           // 游標放在第一個可以輸入的欄位（照畫面位置）
     }
 
     // ================= 按鈕動作 =================
@@ -470,6 +492,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         ClearInputs();
         ClearDetail();
+        if (HasDetail && perm.Insert)
+            foreach (var part in details) LoadDetail(part, empty: true);          // 單身可以跟單頭一起輸入：先放空白的明細
         DefaultValue.FillInputs(inputs, def.ConnectionString);                   // 欄位的預設值（可以是 SQL）
         NumberRule.FillInputs(inputs, def.ConnectionString, def.FullTableName);   // 有編號規則的欄位自動帶入下一個編號
         FillParams();                                                             // 別的畫面開啟時帶進來的值（例如廠商編號）直接帶入
@@ -1344,8 +1368,46 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var values = CollectValues();
         if (values == null) return;
-        if (InsertValues(values.ToDictionary(v => v.Key.Column, v => v.Value)) && HasDetail && HasCurrent)
-            BeginDetail();                                 // 像 4GL：單頭存好直接進單身
+        var pending = PendingDetail();                     // 跟單頭一起輸入的單身（單頭存檔後畫面會重讀，先留住）
+        if (pending == null) return;
+        if (!InsertValues(values.ToDictionary(v => v.Key.Column, v => v.Value), notify: pending.Count == 0)) return;
+        if (pending.Count > 0) SaveInlineDetail(pending, "新增完成");
+        else if (HasDetail && HasCurrent) BeginDetail();   // 像 4GL：單頭存好直接進單身
+    }
+
+    /// <summary>
+    /// 新增、修改單頭時一起輸入的單身：有異動的單身（part、明細表）；沒有異動 = 空的清單；必填沒填時提醒並回傳 null
+    /// </summary>
+    private List<(DetailPart Part, DataTable Table)> PendingDetail()
+    {
+        var pending = new List<(DetailPart, DataTable)>();
+        if (!InlineDetail) return pending;
+        foreach (var part in details)
+        {
+            part.Grid.EndEdit();
+            if (BindingContext[part.Table] is CurrencyManager cm) cm.EndCurrentEdit();
+            DropBlankRows(part);
+            var changed = part.Table.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Unchanged).ToList();
+            if (changed.Count == 0) continue;
+            if (!ValidateDetail(part, changed)) return null;
+            pending.Add((part, part.Table));
+        }
+        return pending;
+    }
+
+    /// <summary>單頭存好後，把一起輸入的單身放回去（新增的列帶入單頭的關聯欄位值）再存單身；單身存失敗時進入單身輸入，修正後再按確定</summary>
+    private void SaveInlineDetail(List<(DetailPart Part, DataTable Table)> pending, string doneMessage)
+    {
+        foreach (var (part, table) in pending)
+        {
+            if (HasCurrent)
+                foreach (var r in table.Rows.Cast<DataRow>().Where(r => r.RowState == DataRowState.Added))
+                    foreach (var (master, detail) in part.Def.Links)
+                        if (table.Columns.Contains(detail) && results.Columns.Contains(master)) r[detail] = results.Rows[current][master];
+            part.Table = table;
+            part.Grid.DataSource = table;
+        }
+        if (!SaveDetail(doneMessage)) SetMode(Mode.Detail);
     }
 
     /// <summary>新增一筆單頭（key = 欄位名稱）；成功後讀回這筆、加到查詢結果並設為目前這筆</summary>
@@ -1397,12 +1459,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var values = CollectValues();
         if (values == null) return;
+        var pending = PendingDetail();                     // 跟單頭一起改的單身
+        if (pending == null) return;
         // 修改模式不改主鍵
-        UpdateValues(values.Where(v => !v.Key.IsKey).ToDictionary(v => v.Key.Column, v => v.Value));
+        if (UpdateValues(values.Where(v => !v.Key.IsKey).ToDictionary(v => v.Key.Column, v => v.Value), notify: pending.Count == 0) && pending.Count > 0)
+            SaveInlineDetail(pending, "修改完成");
     }
 
     /// <summary>修改目前這筆單頭（key = 欄位名稱，不含主鍵）；成功後重讀並顯示</summary>
-    private bool UpdateValues(Dictionary<string, object> values, string doneMessage = "修改完成。")
+    /// <param name="notify">false = 不跳完成訊息（單身接著存，由單身存檔一起提示）</param>
+    private bool UpdateValues(Dictionary<string, object> values, string doneMessage = "修改完成。", bool notify = true)
     {
         if (values.Count == 0)
         {
@@ -1438,8 +1504,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RefreshCurrentRow();
             ShowCurrent();
             SetMode(Mode.Browse);
-            MessageBox.Show(doneMessage, Text);
-            AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
+            if (notify)
+            {
+                MessageBox.Show(doneMessage, Text);
+                AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
+            }
             return true;
         }
         catch (Exception ex)
@@ -1701,18 +1770,19 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var part in details) LoadDetail(part);
     }
 
-    private void LoadDetail(DetailPart part)
+    /// <param name="empty">true = 只要欄位、不要資料（新增單頭時讓單身可以一起輸入）</param>
+    private void LoadDetail(DetailPart part, bool empty = false)
     {
         var gridDef = part.Def;
         var table = new DataTable();
-        if (HasCurrent)
+        if (HasCurrent || empty)
         {
             try
             {
                 var d = Dialect;
                 using var conn = d.Open(def.ConnectionString);
                 using var cmd = d.CreateCommand(conn);
-                string where = AddDetailCondition(cmd, part, GridSql.BaseAlias);    // 有 JOIN 時，本身的欄位要加別名
+                string where = empty ? "1 = 0" : AddDetailCondition(cmd, part, GridSql.BaseAlias);    // 有 JOIN 時，本身的欄位要加別名
                 var orderColumns = gridDef.KeyColumns.Count > 0 ? gridDef.KeyColumns : gridDef.Columns.Where(c => !c.IsJoin).Take(1).ToList();
                 cmd.CommandText = GridSql.Select(d, gridDef.FullTableName(d), gridDef.Columns, gridDef.Joins, 5000)
                                 + (where != "" ? " WHERE " + where : "")
@@ -1736,11 +1806,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 {
                     e.Row[c.Column] = DefaultValue.Resolve(c.EditDefaultValue, def.ConnectionString, name =>
                         e.Row.Table.Columns.Contains(name) && e.Row[name] != DBNull.Value ? e.Row[name]
+                        : mode is Mode.Insert or Mode.Modify && def.Fields.FirstOrDefault(f => !f.IsCalculated && f.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } hf ? GetValue(hf)
                         : HasCurrent && results.Columns.Contains(name) ? results.Rows[current][name] : null) ?? DBNull.Value;
                 }
                 catch (Exception) { }                           // 型別對不上、SQL 錯誤就不帶
             }
-            if (!HasCurrent) return;
+            if (!HasCurrent || mode == Mode.Insert) return;    // 新增單頭時，關聯欄位等單頭存檔後再帶
             foreach (var (master, detail) in gridDef.Links)
                 if (e.Row.Table.Columns.Contains(detail))
                     e.Row[detail] = results.Rows[current][master];
@@ -1774,41 +1845,24 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 單身存檔：每個單身新增的列 INSERT、改過的列 UPDATE、刪掉的列 DELETE，全部單身在同一個交易裡，
     /// 任何一筆失敗就全部不變（像 4GL 單身的 BEGIN WORK / COMMIT WORK）
     /// </summary>
-    private void SaveDetail()
+    /// <param name="doneMessage">完成訊息的開頭（跟單頭一起存時是「新增完成」「修改完成」）；回傳是否存好（沒有異動也算）</param>
+    private bool SaveDetail(string doneMessage = null)
     {
         var changes = new List<(DetailPart Part, List<DataRow> Rows)>();
         foreach (var part in details)
         {
             part.Grid.EndEdit();
             if (BindingContext[part.Table] is CurrencyManager cm) cm.EndCurrentEdit();
+            DropBlankRows(part);
             var rows = part.Table.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Unchanged).ToList();
             if (rows.Count > 0) changes.Add((part, rows));
         }
         if (changes.Count == 0)
         {
             SetMode(Mode.Browse);
-            return;
+            return true;
         }
-        string NameOf(DetailPart part) => details.Count > 1 ? $"單身「{part.Def.Title ?? part.Def.TableName}」" : "單身";
-        foreach (var (part, changed) in changes)
-        {
-            if (part.Def.KeyColumns.Count == 0 && changed.Any(r => r.RowState is DataRowState.Modified or DataRowState.Deleted))
-            {
-                MessageBox.Show($"{NameOf(part)}沒有設定主鍵，只能新增明細，不能修改或刪除。請按「取消」放棄修改的部分。", "提醒");
-                return;
-            }
-            // 必填檢查：顯示在 Grid 上、不允許 NULL 的欄位
-            foreach (var r in changed.Where(r => r.RowState != DataRowState.Deleted))
-            {
-                var empty = part.Def.Columns.FirstOrDefault(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.NoEntry && r[c.Column] == DBNull.Value);
-                if (empty != null)
-                {
-                    MessageBox.Show($"{NameOf(part)}第 {part.Table.Rows.IndexOf(r) + 1} 列請輸入「{empty.Header}」。", "提醒");
-                    part.Grid.Focus();
-                    return;
-                }
-            }
-        }
+        if (changes.Any(c => !ValidateDetail(c.Part, c.Rows))) return false;
 
         try
         {
@@ -1860,13 +1914,47 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         catch (Exception ex)
         {
-            MessageBox.Show("單身儲存失敗（全部未存）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
+            MessageBox.Show((doneMessage != null ? "單頭已存檔，" : "") + "單身儲存失敗（全部未存）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
         LoadDetail();
         SetMode(Mode.Browse);
-        MessageBox.Show($"單身已儲存（{changes.Sum(c => c.Rows.Count)} 筆異動）。", "單身");
+        MessageBox.Show(doneMessage != null ? $"{doneMessage}（單身 {changes.Sum(c => c.Rows.Count)} 筆異動）。" : $"單身已儲存（{changes.Sum(c => c.Rows.Count)} 筆異動）。",
+                        doneMessage != null ? Text : "單身");
         AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
+        return true;
+    }
+
+    /// <summary>游標停在 Grid 最後的空白列時會多出一列什麼都沒填的新增列：不算異動，拿掉</summary>
+    private void DropBlankRows(DetailPart part)
+    {
+        foreach (var r in part.Table.Rows.Cast<DataRow>().Where(r => r.RowState == DataRowState.Added).ToList())
+            if (part.Def.Columns.Where(c => !c.IsIdentity && !IsLinkColumn(part, c.Column) && part.Table.Columns.Contains(c.Column))
+                                .All(c => r[c.Column] == DBNull.Value || r[c.Column] is string s && s.Trim() == ""))
+                part.Table.Rows.Remove(r);
+    }
+
+    /// <summary>單身存檔前的檢查：沒有主鍵不能改、刪；顯示在 Grid 上、不允許 NULL 的欄位要填（關聯欄位存檔時自動帶，不用檢查）</summary>
+    private bool ValidateDetail(DetailPart part, List<DataRow> changed)
+    {
+        string name = details.Count > 1 ? $"單身「{part.Def.Title ?? part.Def.TableName}」" : "單身";
+        if (part.Def.KeyColumns.Count == 0 && changed.Any(r => r.RowState is DataRowState.Modified or DataRowState.Deleted))
+        {
+            MessageBox.Show($"{name}沒有設定主鍵，只能新增明細，不能修改或刪除。請按「取消」放棄修改的部分。", "提醒");
+            return false;
+        }
+        foreach (var r in changed.Where(r => r.RowState != DataRowState.Deleted))
+        {
+            var empty = part.Def.Columns.FirstOrDefault(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.NoEntry && !IsLinkColumn(part, c.Column)
+                                                          && r.Table.Columns.Contains(c.Column) && r[c.Column] == DBNull.Value);
+            if (empty != null)
+            {
+                MessageBox.Show($"{name}第 {part.Table.Rows.IndexOf(r) + 1} 列請輸入「{empty.Header}」。", "提醒");
+                part.Grid.Focus();
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>

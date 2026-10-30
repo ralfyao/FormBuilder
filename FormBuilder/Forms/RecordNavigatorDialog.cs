@@ -43,6 +43,8 @@ public partial class RecordNavigatorDialog : Form
     private readonly string baseTitle;
     private readonly List<FieldDefinition> fields;
     private readonly Dictionary<FieldDefinition, Control> inputs;
+    /// <summary>輸入框的游標順序（畫面位置由上而下、由左而右）</summary>
+    private readonly List<Control> focusOrder;
     private EditMode mode = EditMode.Browse;
 
     /// <summary>後台在編輯視窗版面放的按鈕</summary>
@@ -88,6 +90,7 @@ public partial class RecordNavigatorDialog : Form
         // 欄位照後台「編輯視窗版面」設計的位置擺放（依定義動態產生到 body）
         // 文字標籤也放上去（inputs 裡有，fields 裡沒有：不讀資料、不存檔，只讓執行後動作填值）
         inputs = InputHelper.LayoutFields(body, fields.Concat(textLabels ?? new List<FieldDefinition>()), connectionString);     // 連線字串給下拉選單的選項 SQL 用
+        focusOrder = InputHelper.ApplyFocusOrder(inputs);    // Tab / Enter 照畫面位置由左而右、由上而下
         // 欄位的開窗選取（跟「開啟畫面」按鈕一樣開啟、帶回）；瀏覽時不開
         ButtonRunner.AttachPickers(inputs, b => { if (mode != EditMode.Browse) RunButton(b); });
         // 下拉選單的執行後動作：@名稱 先找視窗上的欄位，沒有就用目前這筆資料；查出來的值填回視窗上的欄位
@@ -130,7 +133,7 @@ public partial class RecordNavigatorDialog : Form
         SetMode(EditMode.Browse);
     }
 
-    /// <summary>Esc：輸入中 = 取消，瀏覽時 = 關閉視窗</summary>
+    /// <summary>Esc：輸入中 = 取消，瀏覽時 = 關閉視窗；輸入中 Enter 跳到下一個輸入框，最後一個輸入框再按 = 確定</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         if (keyData == Keys.Escape)
@@ -139,6 +142,7 @@ public partial class RecordNavigatorDialog : Form
             else CancelEdit();
             return true;
         }
+        if (keyData == Keys.Enter && mode != EditMode.Browse && InputHelper.FocusNext(focusOrder, out _)) return true;
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -225,7 +229,7 @@ public partial class RecordNavigatorDialog : Form
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, nav.Permission)       // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action));
-        if (!browsing) inputs.Values.FirstOrDefault(c => c is TextBox { ReadOnly: false } || c is not TextBox && c.Enabled)?.Focus();
+        if (!browsing) InputHelper.FocusFirst(focusOrder);                 // 游標放在第一個可以輸入的欄位（照畫面位置）
     }
 
     // ================= 後台設計的按鈕 =================

@@ -8,6 +8,8 @@ public partial class RecordEditDialog : Form
 {
     private readonly List<FieldDefinition> fields;
     private readonly Dictionary<FieldDefinition, Control> inputs;
+    /// <summary>輸入框的游標順序（畫面位置由上而下、由左而右）</summary>
+    private readonly List<Control> focusOrder;
 
     /// <summary>按「確定」後，可修改欄位的新值（key = 欄位名稱）</summary>
     public Dictionary<string, object> Values { get; } = new();
@@ -30,6 +32,8 @@ public partial class RecordEditDialog : Form
 
         // 欄位照後台「編輯視窗版面」設計的位置擺放（body 在 Designer.cs，欄位依定義動態產生）
         inputs = InputHelper.LayoutFields(body, fields, connectionString);     // 連線字串給下拉選單的選項 SQL 用
+        focusOrder = InputHelper.ApplyFocusOrder(inputs);    // Tab / Enter 照畫面位置由左而右、由上而下
+        Shown += (s, e) => InputHelper.FocusFirst(focusOrder);                 // 打開時游標放在第一個可以輸入的欄位
         foreach (var (f, input) in inputs)
         {
             if (!f.QueryOnly) InputHelper.SetValue(input, currentValue(f.Column));     // 畫面欄位不從資料帶值
@@ -115,6 +119,13 @@ public partial class RecordEditDialog : Form
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         ClientSize = new Size(Math.Min(Math.Max(content.Width, 360), screen.Width - 40),
                               Math.Min(content.Height + bottom.Height, screen.Height - 80));
+    }
+
+    /// <summary>Enter 跳到下一個輸入框，最後一個輸入框再按 = 確定</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Enter && InputHelper.FocusNext(focusOrder, out _)) return true;
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void Accept()

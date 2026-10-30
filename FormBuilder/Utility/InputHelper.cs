@@ -421,6 +421,57 @@ public static class InputHelper
         return inputs;
     }
 
+    /// <summary>
+    /// 輸入框的游標順序：照畫面位置由上而下、同一列由左而右（Y 差不到 12 點算同一列）；
+    /// 文字標籤不算。順序同時寫進 TabIndex，按 Tab 也照這個順序
+    /// </summary>
+    public static List<Control> ApplyFocusOrder(IReadOnlyDictionary<FieldDefinition, Control> inputs)
+    {
+        var sorted = inputs.Where(p => !p.Key.IsTextLabel).OrderBy(p => p.Key.Y).ThenBy(p => p.Key.X).ToList();
+        var rows = new List<List<KeyValuePair<FieldDefinition, Control>>>();
+        foreach (var p in sorted)
+        {
+            if (rows.Count == 0 || p.Key.Y - rows[^1][0].Key.Y >= 12) rows.Add(new());
+            rows[^1].Add(p);
+        }
+        var order = rows.SelectMany(r => r.OrderBy(p => p.Key.X)).Select(p => p.Value).ToList();
+        for (int i = 0; i < order.Count; i++) order[i].TabIndex = i;
+        return order;
+    }
+
+    /// <summary>這個輸入框現在可以輸入（看得到、沒停用、不是唯讀文字框）</summary>
+    public static bool CanEnter(Control c) => c.Visible && c.Enabled && c is not Label && c is not TextBox { ReadOnly: true };
+
+    /// <summary>游標放到第一個可以輸入的輸入框；都不能輸入時回傳 false</summary>
+    public static bool FocusFirst(IReadOnlyList<Control> order)
+    {
+        var first = order.FirstOrDefault(CanEnter);
+        first?.Focus();
+        return first != null;
+    }
+
+    /// <summary>
+    /// Enter 跳到下一個可以輸入的輸入框。回傳 true = 已經跳過去；false = 不處理（游標不在輸入框上、多行文字框要換行、
+    /// 下拉選單展開中要選取），呼叫端照原本的方式處理；last = 已經是最後一個可以輸入的輸入框（沒有跳）
+    /// </summary>
+    public static bool FocusNext(IReadOnlyList<Control> order, out bool last)
+    {
+        last = false;
+        int index = order.ToList().FindIndex(c => c.ContainsFocus);
+        if (index < 0) return false;
+        var c = order[index];
+        if (c is TextBox { Multiline: true, AcceptsReturn: true, ReadOnly: false } || c is ComboBox { DroppedDown: true }) return false;
+        var next = order.Skip(index + 1).FirstOrDefault(CanEnter);
+        if (next == null)
+        {
+            last = true;
+            return false;
+        }
+        next.Focus();
+        if (next is TextBox tb) tb.SelectAll();
+        return true;
+    }
+
     /// <summary>欄位排版後需要的內容大小（右下角再留邊）</summary>
     public static Size ContentSize(IEnumerable<FieldDefinition> fields, int minWidth)
     {

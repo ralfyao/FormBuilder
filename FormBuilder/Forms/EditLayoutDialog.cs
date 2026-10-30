@@ -444,8 +444,15 @@ public partial class EditLayoutDialog : Form
             f.SourceColumn = c.SourceColumn;
             return f;
         }).ToList();
-        var usedAliases = columnsOnLayout.Where(c => c.IsJoin).Select(c => c.JoinAlias).ToHashSet();
-        var joins = joinTarget.Concat(newJoins).Where(j => usedAliases.Contains(j.Alias))
+        ResolveListSqlColumns(copy, fields, notes);
+        var usedAliases = fields.Where(f => !string.IsNullOrEmpty(f.JoinAlias)).Select(f => f.JoinAlias).ToHashSet();
+        var allJoins = joinTarget.Concat(newJoins).ToList();
+        for (bool added = true; added;)                    // 關聯條件用到別的 JOIN（「J1.COMPANY」）的，那個 JOIN 也要帶過去
+            added = allJoins.Where(j => usedAliases.Contains(j.Alias)).SelectMany(j => j.Links)
+                            .Select(l => l.Master.IndexOf('.') is > 0 and var dot ? l.Master[..dot] : null)
+                            .Where(a => a != null && allJoins.Any(j => j.Alias == a)).ToList()
+                            .Aggregate(false, (any, a) => usedAliases.Add(a) | any);
+        var joins = allJoins.Where(j => usedAliases.Contains(j.Alias))
             .GroupBy(j => j.Alias).Select(g => g.First().Clone()).ToList();
         fields.AddRange(copy.EditTextLabels.Select(f => f.Clone()));
 
@@ -524,6 +531,53 @@ public partial class EditLayoutDialog : Form
                         + Environment.NewLine + "用畫面設計開啟這個檔案就可以繼續修改，要放進 ERP 選單請發布。"
                         + (notes.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Select(n => "　" + n))),
                         "匯出成獨立畫面");
+    }
+
+    /// <summary>
+    /// 匯出成獨立畫面：單頭清單 SQL 帶出來、資料表本身沒有的欄位（獨立畫面沒有清單 SQL，查詢會「無效的資料行名稱」）——
+    /// JOIN 的資料表有同名欄位就改成從那個 JOIN 帶出來（只顯示），都沒有就改成計算欄位（不查詢、不存檔）
+    /// </summary>
+    private void ResolveListSqlColumns(GridDefinition copy, List<FieldDefinition> fields, List<string> notes)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        var candidates = fields.Where(f => !f.IsCalculated && !f.QueryOnly && string.IsNullOrEmpty(f.JoinAlias)).ToList();
+        if (candidates.Count == 0) return;
+        try
+        {
+            var own = SchemaReader.GetColumns(connectionString, copy.TableSchema, copy.TableName).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (own.Count == 0) return;                         // 讀不到資料表欄位就不動
+            var available = joinTarget.Concat(newJoins).GroupBy(j => j.Alias).Select(g => g.First()).ToList();
+            var joinColumns = new Dictionary<string, HashSet<string>>();
+            HashSet<string> ColumnsOf(GridJoinDefinition j) =>
+                joinColumns.TryGetValue(j.Alias, out var set) ? set
+                : joinColumns[j.Alias] = SchemaReader.GetColumns(connectionString, j.TableSchema, j.TableName).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var joined = new List<string>();
+            var screenOnly = new List<string>();
+            foreach (var f in candidates.Where(f => !own.Contains(f.Column)))
+            {
+                var j = available.FirstOrDefault(j => ColumnsOf(j).Contains(f.Column));
+                if (j != null)
+                {
+                    f.JoinAlias = j.Alias;
+                    f.SourceColumn = f.Column;
+                    f.NoEntry = true;
+                    joined.Add($"{f.Column}（{j.Alias} {j.TableName}）");
+                }
+                else
+                {
+                    f.IsCalculated = true;                  // 計算欄位：不查詢、不存檔，值可以用執行後動作 / 顯示後動作填進來
+                    screenOnly.Add(f.Column);
+                }
+            }
+            if (joined.Count > 0)
+                notes.Add("這些欄位是清單 SQL 帶出來的，改成從 JOIN 帶出（只顯示）：" + string.Join("、", joined));
+            if (screenOnly.Count > 0)
+                notes.Add("這些欄位是清單 SQL 帶出來的，資料表和 JOIN 都沒有，改成計算欄位（不帶資料）；要顯示資料請到畫面設計 JOIN，或用顯示後動作帶出：" + string.Join("、", screenOnly));
+        }
+        catch (Exception ex)
+        {
+            notes.Add("讀不到資料表欄位，清單 SQL 帶出來的欄位沒有檢查：" + ex.Message);
+        }
     }
 
     /// <summary>
