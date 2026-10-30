@@ -984,13 +984,29 @@ public partial class DesignerForm : Form
             .Concat(defTableColumns.Select(c => c.Name)).Distinct().ToList();
         // 版面設計器的「檔案 → 儲存」直接存這個畫面定義檔；畫面字型給版面設計器預覽用
         // 單頭清單的 JOIN 加在單頭主查詢上（畫面的單頭 JOIN），帶進來的欄位名稱不能跟單頭欄位重複
-        using var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString, saveForm: () => SaveForm(false), screenFont: def.ScreenFont(Font),
-                                              masterList: box.GridDef.IsMasterList ? (def, UsedFieldNames()) : null);
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        box.RefreshFromModel();
-        propertyGrid.Refresh();
-        UpdateStatus();
+        // 不用 ShowDialog：開著的時候還可以切到其他畫面的設計視窗對照；同一個 Grid 只開一個
+        if (gridDialogs.TryGetValue(box.GridDef, out var open))
+        {
+            if (open.WindowState == FormWindowState.Minimized) open.WindowState = FormWindowState.Normal;
+            open.Activate();
+            return;
+        }
+        var dlg = new GridColumnsDialog(box.GridDef, masterColumns, connectionString, saveForm: () => SaveForm(false), screenFont: def.ScreenFont(Font),
+                                        masterList: box.GridDef.IsMasterList ? (def, UsedFieldNames()) : null);
+        gridDialogs[box.GridDef] = dlg;
+        dlg.FormClosed += (s, e) =>
+        {
+            gridDialogs.Remove(box.GridDef);
+            if (dlg.DialogResult != DialogResult.OK || IsDisposed) return;
+            box.RefreshFromModel();
+            propertyGrid.Refresh();
+            UpdateStatus();
+        };
+        dlg.Show(this);
     }
+
+    /// <summary>開著的單身欄位設定視窗（key = Grid）</summary>
+    private readonly Dictionary<GridDefinition, GridColumnsDialog> gridDialogs = new();
 
     /// <summary>
     /// 在欄位上按下滑鼠：按住 Ctrl 是加選 / 取消選取；

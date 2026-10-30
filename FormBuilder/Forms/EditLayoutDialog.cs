@@ -237,6 +237,7 @@ public partial class EditLayoutDialog : Form
         btnArrange.Click += (s, e) => ArrangeAll();
         btnRemove.Click += (s, e) => RemoveSelected();
         btnOk.Click += (s, e) => Apply();
+        btnCancel.Click += (s, e) => { if (!Modal) Close(); };      // 非強制回應視窗（從單身欄位設定開的）
 
         // 目前的版面（還沒設計過就先排成一欄）
         canvas.Font = CurrentEditFont();                                       // 先設字型，欄位示意才會照字型排
@@ -1192,13 +1193,20 @@ public partial class EditLayoutDialog : Form
     {
         if (saveForm == null || !WriteBack()) return;
         saveForm();
-        if (close) DialogResult = DialogResult.OK;
+        if (close) Finish();
         else lblHint.Text = $"  已儲存（{DateTime.Now:HH:mm:ss}）";
     }
 
     private void Apply()
     {
-        if (WriteBack()) DialogResult = DialogResult.OK;
+        if (WriteBack()) Finish();
+    }
+
+    /// <summary>確定關閉：非強制回應視窗設 DialogResult 不會自己關，要另外 Close</summary>
+    private void Finish()
+    {
+        DialogResult = DialogResult.OK;
+        if (!Modal) Close();
     }
 
     /// <summary>把目前的版面寫回 GridDefinition；版面上沒有欄位時不寫，回傳 false</summary>

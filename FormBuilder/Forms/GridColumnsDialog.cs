@@ -111,26 +111,39 @@ public partial class GridColumnsDialog : Form
             // 版面設計器也可以 JOIN 其他資料表：別名、欄位名稱不能跟這裡還沒存的 JOIN 重複
             dgvColumns.EndEdit();
             var before = grid.Columns.ToList();
-            using var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont, masterJoins,
-                                                    workColumns.Select(c => c.Column).Concat(usedNames), workJoins.Select(j => j.Alias));
-            layout.ShowDialog(this);
-            // 版面設計器 JOIN 進來的（已經加到 Grid 上了）也加進這裡，按「確定」時才不會被蓋掉
-            foreach (var j in (masterJoins ?? grid.Joins).Where(j => !workJoins.Any(x => x.Alias == j.Alias)))
-                workJoins.Add(j.Clone());
-            foreach (var c in grid.Columns.Where(c => !workColumns.Contains(c)).ToList())
+            var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont, masterJoins,
+                                              workColumns.Select(c => c.Column).Concat(usedNames), workJoins.Select(j => j.Alias));
+            // 不用 ShowDialog：版面設計器開著時還可以切到其他畫面對照；這個視窗先停用，版面設計器關掉才同步回來
+            Enabled = false;
+            layout.FormClosed += (s, e) =>
             {
-                workColumns.Add(c);
-                AddColumnRow(c);
-            }
-            // 版面設計器移除的 JOIN 欄位（已經從 Grid 拿掉了）這裡也拿掉
-            foreach (var c in before.Where(c => !grid.Columns.Contains(c)))
-            {
-                workColumns.Remove(c);
-                columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column)?.Delete();
-            }
-            columnTable.AcceptChanges();
+                Enabled = true;
+                if (!IsDisposed) SyncFromLayout(before);
+            };
+            layout.Show(this);
         };
         btnOk.Click += (s, e) => Apply();
+        btnCancel.Click += (s, e) => { if (!Modal) Close(); };      // 非強制回應視窗設 DialogResult 不會自己關
+    }
+
+    /// <summary>版面設計器關掉後，把它在 Grid 上加的 JOIN、欄位，移除的 JOIN 欄位同步到這裡的清單</summary>
+    private void SyncFromLayout(List<GridColumnDefinition> before)
+    {
+        // 版面設計器 JOIN 進來的（已經加到 Grid 上了）也加進這裡，按「確定」時才不會被蓋掉
+        foreach (var j in (masterJoins ?? grid.Joins).Where(j => !workJoins.Any(x => x.Alias == j.Alias)))
+            workJoins.Add(j.Clone());
+        foreach (var c in grid.Columns.Where(c => !workColumns.Contains(c)).ToList())
+        {
+            workColumns.Add(c);
+            AddColumnRow(c);
+        }
+        // 版面設計器移除的 JOIN 欄位（已經從 Grid 拿掉了）這裡也拿掉
+        foreach (var c in before.Where(c => !grid.Columns.Contains(c)))
+        {
+            workColumns.Remove(c);
+            columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column)?.Delete();
+        }
+        columnTable.AcceptChanges();
     }
 
     private void AddColumnRow(GridColumnDefinition c)
@@ -256,5 +269,6 @@ public partial class GridColumnsDialog : Form
         }
         else grid.Joins = workJoins;
         DialogResult = DialogResult.OK;
+        if (!Modal) Close();
     }
 }
