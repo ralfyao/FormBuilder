@@ -408,7 +408,14 @@ public partial class MainMenuForm : Form
             {
                 string content = SysDb.LoadContent(cs, p.FormKey);
                 if (content == null) continue;
-                files.Add((p.FormKey + ".json", content));
+                // 不匯出連線字串（帳號密碼不外流；匯入時用目標系統的連線）
+                var exportJson = System.Text.Json.Nodes.JsonNode.Parse(FormDefinition.FromJson(content).ToJson()).AsObject();
+                exportJson.Remove(nameof(FormDefinition.ConnectionString));
+                files.Add((p.FormKey + ".json", exportJson.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,   // 中文直接寫
+                })));
                 try
                 {
                     foreach (var b in DesignerForm.AllButtons(FormDefinition.FromJson(content))
@@ -505,7 +512,7 @@ public partial class MainMenuForm : Form
     private void ImportFormsFrom(string folder)
     {
         var cs = SysContext.Connection;
-        var forms = new List<(string Key, string Title, string Content)>();
+        var forms = new List<(string Key, string Title, FormDefinition Def)>();
         var prints = new List<(string Key, string Content)>();
         var failed = new List<string>();
         MenuExportFile menu = null;
@@ -521,7 +528,8 @@ public partial class MainMenuForm : Form
                 else
                 {
                     string key = Path.GetFileNameWithoutExtension(file);
-                    forms.Add((key, DesignerForm.PublishTitle(FormDefinition.FromJson(text), key), text));   // 讀得出來才算畫面定義檔
+                    var def = FormDefinition.FromJson(text);                          // 讀得出來才算畫面定義檔
+                    forms.Add((key, DesignerForm.PublishTitle(def, key), def));
                 }
             }
             catch (Exception ex)
@@ -535,6 +543,24 @@ public partial class MainMenuForm : Form
             return;
         }
 
+        // 匯出的畫面不帶連線字串：選這些畫面要連的資料庫（先帶入系統裡其他畫面最常用的連線）
+        var noConnection = forms.Where(f => string.IsNullOrWhiteSpace(f.Def.ConnectionString)).ToList();
+        if (noConnection.Count > 0)
+        {
+            var (guess, kind) = CommonConnection(cs);
+            MessageBox.Show($"有 {noConnection.Count} 個畫面沒有資料庫連線（匯出時不帶連線字串），接著請設定這些畫面要連的資料庫。"
+                            + (guess != null ? $"{Environment.NewLine}{Environment.NewLine}已經先帶入系統裡其他畫面最常用的連線，沒問題直接按確定。" : ""),
+                            "匯入 JSON");
+            using var dlg = new ConnectionDialog(guess, kind);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            foreach (var f in noConnection)
+            {
+                f.Def.DatabaseType = dlg.DatabaseType;
+                f.Def.ConnectionString = dlg.ConnectionString;
+            }
+        }
+        var contents = forms.ToDictionary(f => f.Key, f => f.Def.ToJson(), StringComparer.OrdinalIgnoreCase);
+
         int published = 0, unchanged = 0, skipped = 0, placed = 0;
         try
         {
@@ -542,7 +568,7 @@ public partial class MainMenuForm : Form
             // 系統裡已經有、內容不一樣的：問要不要覆蓋
             var current = forms.Select(f => f.Key).Concat(prints.Select(p => p.Key))
                 .ToDictionary(k => k, k => SysDb.LoadContent(cs, k), StringComparer.OrdinalIgnoreCase);
-            var differ = forms.Select(f => (f.Key, f.Content)).Concat(prints).Where(x => current[x.Key] != null && current[x.Key] != x.Content).Select(x => x.Key).ToList();
+            var differ = forms.Select(f => (f.Key, Content: contents[f.Key])).Concat(prints).Where(x => current[x.Key] != null && current[x.Key] != x.Content).Select(x => x.Key).ToList();
             Cursor = Cursors.Default;
             if (MessageBox.Show($"要從 {folder} 匯入 {forms.Count} 個畫面、{prints.Count} 個列印樣板嗎？"
                                 + (menu != null ? $"{Environment.NewLine}{Environment.NewLine}會照選單架構檔把畫面放回選單（原本的選單保留，已經在選單上的畫面不動）。" : "")
@@ -577,7 +603,7 @@ public partial class MainMenuForm : Form
                 }
             }
             foreach (var p in prints) Publish(p.Key, "print", p.Key, p.Content);
-            var inSystem = forms.Where(f => Publish(f.Key, "form", f.Title, f.Content)).Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var inSystem = forms.Where(f => Publish(f.Key, "form", f.Title, contents[f.Key])).Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             // 選單：照匯出時的架構合併進目前的選單
             if (menu != null)
@@ -607,6 +633,25 @@ public partial class MainMenuForm : Form
                         + (menu != null ? $"{Environment.NewLine}{placed} 個畫面照選單架構放進選單。" : $"{Environment.NewLine}資料夾裡沒有選單架構檔（{MenuExportFile.FileName}），新的畫面在「未放進選單的畫面」。")
                         + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "有問題的：" + Environment.NewLine + string.Join(Environment.NewLine, failed.Select(x => "　" + x)) : ""),
                         "匯入 JSON", MessageBoxButtons.OK, failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+    }
+
+    /// <summary>系統裡已發布的畫面最常用的資料庫連線（匯入沒有連線的畫面時預設用它）；沒有畫面時回傳 null</summary>
+    private static (string ConnectionString, DbKind Kind) CommonConnection(string cs)
+    {
+        var used = new List<(string, DbKind)>();
+        foreach (var p in SysDb.LoadPublished(cs, "form"))
+        {
+            try
+            {
+                var def = FormDefinition.FromJson(SysDb.LoadContent(cs, p.FormKey));
+                if (!string.IsNullOrWhiteSpace(def.ConnectionString)) used.Add((def.ConnectionString, def.DatabaseType));
+            }
+            catch
+            {
+                // 讀不出來的畫面略過
+            }
+        }
+        return used.GroupBy(x => x).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault((null, DbKind.SqlServer));
     }
 
     // ================= 管理者：全部發布 =================
