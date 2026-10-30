@@ -159,13 +159,14 @@ public partial class RecordNavigatorDialog : Form
         foreach (var f in fields.Where(f => !f.QueryOnly))                    // 畫面欄位不從資料帶值
             InputHelper.SetValue(inputs[f], row != null && row.Table.Columns.Contains(f.Column) ? row[f.Column] : null);
         ButtonRunner.RefreshTextLabels(inputs, connectionString, ValueOf);     // 文字標籤用欄位的執行後動作帶出來
+        if (row != null) ButtonRunner.RunAfterShow(inputs, connectionString, ValueOf);
         ReloadLists(row);
     }
 
     /// <summary>SQL 的 @名稱：先找視窗上的欄位，沒有就用目前這筆資料</summary>
     private object ValueOf(string name)
     {
-        var f = fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var f = inputs.Keys.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));   // 含文字標籤
         if (f != null) return InputHelper.GetValue(f, inputs[f]);
         DataRow row = nav.CurrentRow;
         return row != null && row.Table.Columns.Contains(name) ? row[name] : null;

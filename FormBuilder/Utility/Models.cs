@@ -415,6 +415,20 @@ public class FieldDefinition
     [Category("下拉選單"), DisplayName("執行後動作回傳對應"), Description("SQL 查出資料時，第一筆要填進畫面上的哪些欄位：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：地址=ADDRESS, 電話=TEL。空白 = SQL 的每個欄位填進畫面上同名的欄位（畫面上沒有的略過）")]
     public string AfterSelectReturn { get; set; }
 
+    [Category("顯示後動作"), DisplayName("顯示後動作"),
+     Description("每次顯示一筆資料（查詢、切換上一筆 / 下一筆、存檔後、打開編輯視窗）就執行這段 SELECT，不用等使用者選擇；@名稱 取「顯示後動作傳入參數」或畫面上任何欄位的值。"
+               + "查出來的第一筆依「顯示後動作回傳對應」填進畫面上的元件（只是顯示，不會存檔），"
+               + "例如：SELECT 中分類名稱 AS 業別名稱 FROM C產業代碼 WHERE 中分類碼 = @INDUSTRYCODE。只能用 SELECT（或 WITH 開頭的查詢）"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterShowSql { get; set; }
+
+    [Category("顯示後動作"), DisplayName("顯示後動作傳入參數"), Description("同「執行後動作傳入參數」：「名稱=值」，多組用逗號或換行分隔，SQL 裡用 @名稱 取得；沒列在這裡的 @名稱 直接取畫面上同名欄位的值"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterShowParams { get; set; }
+
+    [Category("顯示後動作"), DisplayName("顯示後動作回傳對應"), Description("查出來的第一筆要填進畫面上的哪些元件：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：業別名稱=中分類名稱。空白 = SQL 的每個欄位填進畫面上同名的元件")]
+    public string AfterShowReturn { get; set; }
+
     [Category("開窗選取"), DisplayName("開窗畫面"),
      Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
@@ -1147,6 +1161,10 @@ public class GridColumnDefinition
     public string EditAfterSelectSql { get; set; }
     public string EditAfterSelectParams { get; set; }
     public string EditAfterSelectReturn { get; set; }
+    /// <summary>編輯視窗欄位的顯示後動作（同 FieldDefinition.AfterShowSql / AfterShowParams / AfterShowReturn）</summary>
+    public string EditAfterShowSql { get; set; }
+    public string EditAfterShowParams { get; set; }
+    public string EditAfterShowReturn { get; set; }
     /// <summary>編輯視窗的日期選擇格式、勾選框的值（同 FieldDefinition）</summary>
     public string EditDateFormat { get; set; }
     /// <summary>編輯視窗新增時的自動編號規則（同 FieldDefinition.NumberRule）</summary>

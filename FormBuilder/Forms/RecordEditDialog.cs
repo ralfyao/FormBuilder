@@ -53,6 +53,7 @@ public partial class RecordEditDialog : Form
             return f != null ? InputHelper.GetValue(f, inputs[f]) : currentValue(name);
         });
         InputHelper.AttachDependentItems(inputs, connectionString, ValueOf);   // 選項 SQL 用到 @視窗欄位的下拉選單：欄位改了就重查選項
+        ButtonRunner.RunAfterShow(inputs, connectionString, ValueOf);          // 元件的顯示後動作
         // 後台在編輯視窗版面放的按鈕：明細編輯只支援確定、取消、離開、執行SQL、開啟畫面
         foreach (var b in buttons ?? new List<ButtonDefinition>())
         {

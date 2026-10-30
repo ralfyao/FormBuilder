@@ -615,6 +615,9 @@ public partial class EditLayoutDialog : Form
             AfterSelectSql = c.EditAfterSelectSql,
             AfterSelectParams = c.EditAfterSelectParams,
             AfterSelectReturn = c.EditAfterSelectReturn,
+            AfterShowSql = c.EditAfterShowSql,
+            AfterShowParams = c.EditAfterShowParams,
+            AfterShowReturn = c.EditAfterShowReturn,
             DateFormat = c.EditDateFormat,
             NumberRule = c.EditNumberRule,
             DefaultValue = c.EditDefaultValue,
@@ -1239,6 +1242,9 @@ public partial class EditLayoutDialog : Form
                 c.EditAfterSelectSql = string.IsNullOrWhiteSpace(box.Field.AfterSelectSql) ? null : box.Field.AfterSelectSql;
                 c.EditAfterSelectParams = string.IsNullOrWhiteSpace(box.Field.AfterSelectParams) ? null : box.Field.AfterSelectParams;
                 c.EditAfterSelectReturn = string.IsNullOrWhiteSpace(box.Field.AfterSelectReturn) ? null : box.Field.AfterSelectReturn;
+                c.EditAfterShowSql = string.IsNullOrWhiteSpace(box.Field.AfterShowSql) ? null : box.Field.AfterShowSql;
+                c.EditAfterShowParams = string.IsNullOrWhiteSpace(box.Field.AfterShowParams) ? null : box.Field.AfterShowParams;
+                c.EditAfterShowReturn = string.IsNullOrWhiteSpace(box.Field.AfterShowReturn) ? null : box.Field.AfterShowReturn;
                 c.EditDateFormat = string.IsNullOrWhiteSpace(box.Field.DateFormat) ? null : box.Field.DateFormat.Trim();
                 c.EditNumberRule = string.IsNullOrWhiteSpace(box.Field.NumberRule) ? null : box.Field.NumberRule.Trim();
                 c.EditDefaultValue = string.IsNullOrWhiteSpace(box.Field.DefaultValue) ? null : box.Field.DefaultValue.Trim();
@@ -1448,6 +1454,18 @@ public class EditFieldView
 
     [DisplayName("執行後動作回傳對應"), Description("SQL 查出資料時，第一筆要填進畫面上的哪些欄位：「畫面欄位=SQL 欄位」，多組用逗號分隔，例如：地址=ADDRESS, 電話=TEL。空白 = SQL 的每個欄位填進畫面上同名的欄位（畫面上沒有的略過）")]
     public string AfterSelectReturn { get => field.AfterSelectReturn; set => field.AfterSelectReturn = value; }
+
+    [DisplayName("顯示後動作"), Description("每次顯示一筆資料（打開編輯視窗、切換上一筆 / 下一筆、存檔後）就執行這段 SELECT，不用等使用者選擇；@名稱 取「顯示後動作傳入參數」或視窗上任何欄位的值。"
+                                       + "查出來的第一筆依「顯示後動作回傳對應」填進視窗上的元件（只是顯示，不會存檔），例如：SELECT 中分類名稱 AS 業別名稱 FROM C產業代碼 WHERE 中分類碼 = @INDUSTRYCODE"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterShowSql { get => field.AfterShowSql; set => field.AfterShowSql = value; }
+
+    [DisplayName("顯示後動作傳入參數"), Description("同「執行後動作傳入參數」：「名稱=值」，多組用逗號或換行分隔；沒列在這裡的 @名稱 直接取視窗上同名欄位的值"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterShowParams { get => field.AfterShowParams; set => field.AfterShowParams = value; }
+
+    [DisplayName("顯示後動作回傳對應"), Description("查出來的第一筆要填進視窗上的哪些元件：「視窗欄位=SQL 欄位」，多組用逗號分隔；空白 = SQL 的每個欄位填進同名的元件")]
+    public string AfterShowReturn { get => field.AfterShowReturn; set => field.AfterShowReturn = value; }
 
     [DisplayName("字體大小"), DefaultValue(0f), Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高")]
     public float FontSize { get => field.FontSize; set => field.FontSize = Math.Clamp(value, 0, 72); }

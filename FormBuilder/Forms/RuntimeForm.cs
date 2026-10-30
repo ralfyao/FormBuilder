@@ -1589,12 +1589,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
             // 只當查詢條件的欄位不顯示資料
             foreach (var f in def.Fields.Where(f => !f.IsTextLabel))    // 文字標籤另外用執行後動作帶出
                 SetValue(f, !f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
-            ButtonRunner.RefreshTextLabels(inputs, def.ConnectionString, name =>
+            object ValueOf(string name)
             {
                 var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (field != null) return GetValue(field);
                 return results.Columns.Contains(name) ? results.Rows[current][name] : null;
-            });
+            }
+            ButtonRunner.RefreshTextLabels(inputs, def.ConnectionString, ValueOf);
+            ButtonRunner.RunAfterShow(inputs, def.ConnectionString, ValueOf);           // 元件的顯示後動作
         }
         else
         {

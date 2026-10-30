@@ -245,6 +245,32 @@ public static class ButtonRunner
     }
 
     /// <summary>
+    /// 顯示一筆資料後，執行每個元件的「顯示後動作」（只能是 SELECT / WITH 開頭的查詢）：查出來的第一筆依回傳對應填進畫面上的元件，
+    /// 只是顯示，不跳訊息（查不到就不動；SQL 錯了在「SQL 紀錄（Debug）」看得到）
+    /// </summary>
+    public static void RunAfterShow(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString, Func<string, object> valueOf)
+    {
+        foreach (var f in inputs.Keys.Where(f => !string.IsNullOrWhiteSpace(f.AfterShowSql)).ToList())
+        {
+            string sql = f.AfterShowSql.TrimStart();
+            if (!sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) && !sql.StartsWith("WITH", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                ExecuteSql(f.AfterShowSql, f.AfterShowParams, connectionString, new Func<string, object>[] { valueOf }, out var row);
+                if (row == null) continue;
+                var map = ParsePairs(f.AfterShowReturn).ToList();
+                var values = map.Count == 0 ? row
+                    : map.Where(m => row.ContainsKey(m.Right.TrimStart('@'))).ToDictionary(m => m.Left, m => row[m.Right.TrimStart('@')], StringComparer.OrdinalIgnoreCase);
+                FillFields(values, inputs, reportMissing: false);
+            }
+            catch (Exception)
+            {
+                // 帶不出來只是少了顯示，不影響資料
+            }
+        }
+    }
+
+    /// <summary>
     /// 「執行前檢查」：rows 裡不符合 condition（DataTable 篩選寫法）的資料列，依原本順序；
     /// 條件寫錯時丟 EvaluateException / SyntaxErrorException
     /// </summary>
