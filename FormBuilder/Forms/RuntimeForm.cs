@@ -581,8 +581,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 return;
             }
         }
-        // 清單 SQL 已經帶出 JOIN 的欄位：外層只 JOIN 查詢條件有用到的
-        if (listFrom != null) skip = def.Joins.Select(j => j.Alias).Where(a => !where.Contains(Dialect.Quote(a) + ".")).ToHashSet();
+        // 清單 SQL 已經帶出 JOIN 的欄位：外層只 JOIN 查詢條件有用到的，和清單 SQL 沒帶出來的 JOIN 欄位（之後才 JOIN 的）
+        if (listFrom != null)
+        {
+            var missing = ListSqlMissingJoins();
+            skip = def.Joins.Select(j => j.Alias).Where(a => !where.Contains(Dialect.Quote(a) + ".") && !missing.Contains(a)).ToHashSet();
+        }
         cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns(skip, listFrom != null)} FROM {MasterFrom(skip, listFrom)}"
                         + (where != "" ? " WHERE " + where : "")
                         + (orderColumns.Count > 0 ? " ORDER BY " + string.Join(", ", orderColumns) : "")
@@ -1099,14 +1103,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。
     /// 單頭資料表固定用別名 T0；單頭 JOIN 帶進來的欄位用「關聯資料表別名.原始欄位 AS 欄位名稱」
     /// </summary>
-    /// <param name="fromListSql">清單查詢的資料來自清單 SQL（別名 T0）：每個欄位都直接取 T0 的同名欄位，清單 SQL 帶出來的欄位也查</param>
+    /// <param name="fromListSql">清單查詢的資料來自清單 SQL（別名 T0）：欄位直接取 T0 的同名欄位，清單 SQL 帶出來的欄位也查；清單 SQL 沒帶出來的 JOIN 欄位照樣從 JOIN 取</param>
     private string SelectColumns(ISet<string> skipJoins = null, bool fromListSql = false)
     {
         var joins = def.Joins.Select(j => j.Alias).Where(a => skipJoins == null || !skipJoins.Contains(a)).ToHashSet();
         var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         void Add(string name, string alias, string source)
         {
-            if (string.IsNullOrEmpty(alias) || fromListSql) columns.TryAdd(name, GridSql.Base(Dialect, name));
+            if (string.IsNullOrEmpty(alias) || fromListSql && ListSqlProvides(name)) columns.TryAdd(name, GridSql.Base(Dialect, name));
             else if (joins.Contains(alias)) columns.TryAdd(name, $"{GridSql.Joined(Dialect, alias, source)} AS {Dialect.Quote(name)}");
         }
         foreach (var f in def.Fields.Where(f => !f.IsCalculated)) Add(f.Column, f.JoinAlias, f.SourceColumn);
@@ -1116,6 +1120,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (!c.ScreenOnly && (fromListSql || !c.FromListSql) && (fromListSql || !c.IsJoin || joins.Contains(c.JoinAlias))) Add(c.Column, c.JoinAlias, c.SourceColumn);
         return string.Join(", ", columns.Values);
     }
+
+    /// <summary>清單 SQL 裡有沒有這個欄位名稱（有寫到就當作清單 SQL 會帶出來，例如 [J1].[姓名] AS [姓名]）</summary>
+    private bool ListSqlProvides(string column) =>
+        !string.IsNullOrWhiteSpace(listDef?.ListSql)
+        && System.Text.RegularExpressions.Regex.IsMatch(listDef.ListSql, $@"(?<![\p{{L}}\p{{N}}_]){System.Text.RegularExpressions.Regex.Escape(column)}(?![\p{{L}}\p{{N}}_])",
+                                                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>JOIN 欄位清單 SQL 沒帶出來的 JOIN（清單 SQL 寫好之後才 JOIN 的）：外層要自己 JOIN</summary>
+    private HashSet<string> ListSqlMissingJoins() =>
+        def.Fields.Where(f => f.IsJoin && !f.IsCalculated).Select(f => (f.Column, f.JoinAlias))
+            .Concat((listDef?.Columns ?? new List<GridColumnDefinition>()).Where(c => c.IsJoin && !c.ScreenOnly).Select(c => (c.Column, c.JoinAlias)))
+            .Where(x => !ListSqlProvides(x.Column)).Select(x => x.JoinAlias).ToHashSet();
 
     /// <summary>
     /// 單頭的 FROM：單頭資料表（別名 T0），有單頭 JOIN 欄位時 LEFT JOIN 關聯資料表；skipJoins 的 JOIN 不加；

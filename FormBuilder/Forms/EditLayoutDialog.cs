@@ -987,11 +987,16 @@ public partial class EditLayoutDialog : Form
         var aliases = new HashSet<string>(joinTarget.Concat(newJoins).Select(j => j.Alias).Concat(reservedAliases), StringComparer.OrdinalIgnoreCase);
         int n = 1;
         while (aliases.Contains($"J{n}")) n++;
-        var localColumns = columns.Where(c => !c.IsJoin && !c.ScreenOnly)
+        // 關聯條件左邊：Grid 本身的欄位，也可以是別的 JOIN 帶進來的欄位（例如用 J1 帶出的客戶再 JOIN 客戶資料）
+        var localColumns = columns.Where(c => !c.ScreenOnly && !removedColumns.Contains(c))
             .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, IsPrimaryKey = c.IsKey }).ToList();
         var used = columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)).Concat(reservedNames);
         using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, used);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        // JOIN 欄位當條件：存成「別名.原始欄位」（查詢時接在那個 JOIN 後面）
+        dlg.Join.LinkText = string.Join(", ", dlg.Join.Links.Select(l =>
+            columns.FirstOrDefault(c => c.IsJoin && c.Column.Equals(l.Master, StringComparison.OrdinalIgnoreCase)) is { } jc
+                ? $"{jc.JoinAlias}.{jc.SourceColumn}={l.Detail}" : $"{l.Master}={l.Detail}"));
         newJoins.Add(dlg.Join);
         var location = NextFreePoint();
         var boxes = new List<DesignBox>();

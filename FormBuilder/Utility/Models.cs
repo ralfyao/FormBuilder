@@ -718,14 +718,24 @@ public static class GridSql
     public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns) =>
         From(d, fullTableName, joins, columns.Where(c => c.IsJoin).Select(c => c.JoinAlias));
 
-    /// <summary>FROM 子句：只 JOIN usedAliases 裡的資料表（單頭 JOIN 也用這個）</summary>
+    /// <summary>
+    /// FROM 子句：只 JOIN usedAliases 裡的資料表（單頭 JOIN 也用這個）。
+    /// 關聯條件左邊可以是別的 JOIN 帶進來的欄位（寫成「別名.原始欄位」，例如 J1.COMPANY）：那個 JOIN 也會一起加，排在前面
+    /// </summary>
     public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<string> usedAliases)
     {
-        var used = usedAliases.ToHashSet();
+        var list = joins.ToList();
+        var aliases = list.Select(j => j.Alias).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string JoinOf(string master) => master.IndexOf('.') is > 0 and var dot && aliases.Contains(master[..dot]) ? master[..dot] : null;
+        string Left(string master) => JoinOf(master) is { } alias ? Joined(d, alias, master[(alias.Length + 1)..]) : Base(d, master);
+        var used = usedAliases.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (bool added = true; added;)                    // 用到的 JOIN 所依賴的 JOIN 也要加
+            added = list.Where(j => used.Contains(j.Alias)).SelectMany(j => j.Links).Select(l => JoinOf(l.Master))
+                        .Where(a => a != null).ToList().Aggregate(false, (any, a) => used.Add(a) | any);
         var sql = new System.Text.StringBuilder(fullTableName + d.TableAlias(BaseAlias));
-        foreach (var j in joins.Where(j => used.Contains(j.Alias)))
+        foreach (var j in list.Where(j => used.Contains(j.Alias)))
             sql.Append($" LEFT JOIN {j.FullTableName(d)}{d.TableAlias(j.Alias)} ON "
-                     + string.Join(" AND ", j.Links.Select(l => $"{Base(d, l.Master)} = {d.Quote(j.Alias)}.{d.Quote(l.Detail)}")));
+                     + string.Join(" AND ", j.Links.Select(l => $"{Left(l.Master)} = {d.Quote(j.Alias)}.{d.Quote(l.Detail)}")));
         return sql.ToString();
     }
 
