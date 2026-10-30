@@ -110,6 +110,7 @@ public partial class GridColumnsDialog : Form
             // 版面設計器有自己的確定 / 取消，確定後版面就存在 Grid 上
             // 版面設計器也可以 JOIN 其他資料表：別名、欄位名稱不能跟這裡還沒存的 JOIN 重複
             dgvColumns.EndEdit();
+            var before = grid.Columns.ToList();
             using var layout = new EditLayoutDialog(grid, connectionString, saveForm, screenFont, masterJoins,
                                                     workColumns.Select(c => c.Column).Concat(usedNames), workJoins.Select(j => j.Alias));
             layout.ShowDialog(this);
@@ -121,6 +122,13 @@ public partial class GridColumnsDialog : Form
                 workColumns.Add(c);
                 AddColumnRow(c);
             }
+            // 版面設計器移除的 JOIN 欄位（已經從 Grid 拿掉了）這裡也拿掉
+            foreach (var c in before.Where(c => !grid.Columns.Contains(c)))
+            {
+                workColumns.Remove(c);
+                columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column)?.Delete();
+            }
+            columnTable.AcceptChanges();
         };
         btnOk.Click += (s, e) => Apply();
     }

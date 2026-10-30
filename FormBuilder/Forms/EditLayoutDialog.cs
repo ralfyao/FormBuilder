@@ -120,6 +120,19 @@ public partial class EditLayoutDialog : Form
         btnJoin.Click += (s, e) => AddJoin();
         tabColumns.Controls.Add(btnJoin);
         lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
+        // JOIN 帶進來的欄位按右鍵可以移除（確定時從 Grid 拿掉）
+        var availableMenu = new ContextMenuStrip();
+        availableMenu.Items.Add("移除這個 JOIN 欄位", null, (s, e) =>
+        {
+            if (lstAvailable.SelectedItem is GridColumnDefinition { IsJoin: true } c) RemoveJoinColumn(c);
+        });
+        availableMenu.Opening += (s, e) => e.Cancel = lstAvailable.SelectedItem is not GridColumnDefinition { IsJoin: true };
+        lstAvailable.MouseDown += (s, e) =>
+        {
+            int i = lstAvailable.IndexFromPoint(e.Location);
+            if (e.Button == MouseButtons.Right && i >= 0) lstAvailable.SelectedIndex = i;
+        };
+        lstAvailable.ContextMenuStrip = availableMenu;
         // ---- 左邊「工具箱」頁籤 ----
         toolbox.AddEntry("Label", "文字標籤 (Label)");
         toolbox.AddEntry("SqlList", "SQL 清單（Grid，唯讀）");
@@ -995,12 +1008,29 @@ public partial class EditLayoutDialog : Form
         lblHint.Text = $"  已 JOIN {dlg.Join.TableName}（{dlg.Join.LinkText}），帶進來 {dlg.NewColumns.Count} 個欄位，只顯示、不會存檔；按「確定」才會加到 Grid";
     }
 
+    /// <summary>移除的 JOIN 欄位（還留在 columns 裡，欄位順序才對得上 Grid；確定時從 Grid 拿掉）</summary>
+    private readonly HashSet<GridColumnDefinition> removedColumns = new();
+
+    /// <summary>
+    /// 移除 JOIN 帶進來的欄位：從編輯視窗與 Grid 拿掉（按「確定」或「儲存」才生效）；
+    /// JOIN 本身留著（沒有欄位用到就不會 JOIN，不影響查詢）
+    /// </summary>
+    private void RemoveJoinColumn(GridColumnDefinition c)
+    {
+        if (MessageBox.Show($"確定要移除 JOIN 欄位「{c.Header}」（{c.Column}）嗎？{Environment.NewLine}{Environment.NewLine}"
+                            + "編輯視窗和清單上都不會再有這個欄位（按「確定」或「儲存」才生效）。",
+                            "移除 JOIN 欄位", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        removedColumns.Add(c);
+        RefreshAvailable();
+        lblHint.Text = $"  已移除 JOIN 欄位「{c.Header}」，按「確定」或「儲存」才會從 Grid 拿掉";
+    }
+
     /// <summary>左邊清單 = 還沒放上版面的欄位，依原本欄位順序</summary>
     private void RefreshAvailable()
     {
         lstAvailable.BeginUpdate();
         lstAvailable.Items.Clear();
-        foreach (var c in columns.Where(c => !placed.ContainsKey(c))) lstAvailable.Items.Add(c);
+        foreach (var c in columns.Where(c => !placed.ContainsKey(c) && !removedColumns.Contains(c))) lstAvailable.Items.Add(c);
         lstAvailable.EndUpdate();
     }
 
@@ -1219,6 +1249,14 @@ public partial class EditLayoutDialog : Form
             {
                 c.EditVisible = false;
             }
+        }
+        // 移除的 JOIN 欄位從 Grid 拿掉；寫回 Grid 本身（儲存後還要繼續編輯）時 columns 也拿掉，順序才繼續對得上
+        var removed = Enumerable.Range(0, columns.Count).Where(i => removedColumns.Contains(columns[i])).Select(i => target.Columns[i]).ToList();
+        foreach (var c in removed) target.Columns.Remove(c);
+        if (target == grid)
+        {
+            columns.RemoveAll(removedColumns.Contains);
+            removedColumns.Clear();
         }
         target.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
         target.EditLists = listBoxes.Select(b => b.ListDef).ToList();
