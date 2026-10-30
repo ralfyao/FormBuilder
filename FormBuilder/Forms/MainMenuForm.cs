@@ -54,6 +54,19 @@ public partial class MainMenuForm : Form
                 {
                     ToolTipText = "把 Forms 資料夾裡所有的畫面定義檔（*.json）連同用到的列印樣板發布到系統；內容跟系統裡一樣的略過",
                 });
+        // 全部匯出：系統資料庫裡已發布的畫面、列印樣板匯出成 JSON 檔（備份、搬到別的系統）
+        if (user.IsAdmin)
+            btnAdmin.DropDownItems.Insert(btnAdmin.DropDownItems.IndexOf(miDesigner) + 2,
+                new ToolStripMenuItem("全部匯出（系統資料庫的畫面 → JSON 檔）…", null, (s, e) => ExportForms(null, "全部"))
+                {
+                    ToolTipText = "把系統資料庫裡所有已發布的畫面與列印樣板，匯出成畫面定義檔（*.json）到指定的資料夾，選單架構也一起存",
+                });
+        if (user.IsAdmin)
+            btnAdmin.DropDownItems.Insert(btnAdmin.DropDownItems.IndexOf(miDesigner) + 3,
+                new ToolStripMenuItem("匯入（JSON 檔 → 系統資料庫）…", null, (s, e) => ImportForms())
+                {
+                    ToolTipText = "把匯出的資料夾裡的畫面、列印樣板發布到系統，照匯出時的選單架構放回選單",
+                });
         // 管理者：選單上按右鍵 → 開啟 / 設計這個畫面
         if (user.IsAdmin)
         {
@@ -69,11 +82,20 @@ public partial class MainMenuForm : Form
             // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
             nodeMenu.Items.Add("新增表單", null, (s, e) => new DesignerForm().Show());
             nodeMenu.Items.Add("全部發布…", null, (s, e) => PublishAll());
+            var miExport = nodeMenu.Items.Add("匯出 JSON…", null, (s, e) => ExportSelected());
+            nodeMenu.Items.Add("匯入 JSON…", null, (s, e) => ImportForms());
             nodeMenu.Opening += (s, e) =>
             {
                 // 在空白處按右鍵：取消選取（新增資料夾會加在最上層）
                 var point = treeMenu.PointToClient(MousePosition);
                 if (treeMenu.ClientRectangle.Contains(point) && treeMenu.GetNodeAt(point) == null) treeMenu.SelectedNode = null;
+                // 匯出：資料夾 = 裡面的畫面，畫面 = 這一個，空白處 = 全部
+                miExport.Text = treeMenu.SelectedNode switch
+                {
+                    { Tag: MenuNode { IsFolder: false } } => "匯出這個畫面（JSON）…",
+                    null => "全部匯出（JSON）…",
+                    _ => "匯出這個資料夾的畫面（JSON）…",
+                };
                 // 開啟、設計只對畫面；新增資料夾、新增表單在哪裡按右鍵都有
                 bool onForm = treeMenu.SelectedNode?.Tag is MenuNode { IsFolder: false };
                 miOpen.Visible = miDesign.Visible = miCopy.Visible = miDeleteForm.Visible = onForm;
@@ -335,10 +357,262 @@ public partial class MainMenuForm : Form
         }
     }
 
+    // ================= 管理者：匯出 JSON =================
+
+    /// <summary>右鍵「匯出 JSON」：選的是資料夾就匯出裡面（含子資料夾）的畫面，選的是畫面就匯出它，沒選就全部</summary>
+    private void ExportSelected()
+    {
+        var sel = treeMenu.SelectedNode;
+        if (sel == null)
+        {
+            ExportForms(null, "全部");
+            return;
+        }
+        var keys = AllNodes(sel.Nodes).Prepend(sel).Select(n => n.Tag).OfType<MenuNode>().Where(n => !n.IsFolder)
+            .Select(n => n.FormKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (keys.Count == 0)
+        {
+            MessageBox.Show("這個資料夾裡沒有畫面。", "匯出 JSON");
+            return;
+        }
+        ExportForms(keys, sel.Tag is MenuNode { IsFolder: false } ? $"畫面「{sel.Text}」" : $"資料夾「{sel.Text.Replace("📁 ", "")}」");
+    }
+
+    /// <summary>
+    /// 從系統資料庫匯出畫面定義（代號.json）與列印樣板到使用者選的資料夾：keys = null 匯出全部畫面與全部列印樣板；
+    /// 指定畫面時一起匯出這些畫面按鈕用到的列印樣板。資料夾裡已經有同名檔案時，問要覆蓋還是略過
+    /// </summary>
+    private void ExportForms(List<string> keys, string what)
+    {
+        if (!SysContext.User.IsAdmin) return;
+        using var pick = new FolderBrowserDialog
+        {
+            Description = $"匯出{what}的畫面：選擇要存放 JSON 檔的資料夾",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+        };
+        if (pick.ShowDialog(this) == DialogResult.OK) ExportFormsTo(pick.SelectedPath, keys, what);
+    }
+
+    private void ExportFormsTo(string folder, List<string> keys, string what)
+    {
+        var cs = SysContext.Connection;
+        var files = new List<(string Name, string Content)>();
+        var failed = new List<string>();
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            var forms = SysDb.LoadPublished(cs, "form").Where(p => keys == null || keys.Contains(p.FormKey, StringComparer.OrdinalIgnoreCase)).ToList();
+            var prints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in forms)
+            {
+                string content = SysDb.LoadContent(cs, p.FormKey);
+                if (content == null) continue;
+                files.Add((p.FormKey + ".json", content));
+                try
+                {
+                    foreach (var b in DesignerForm.AllButtons(FormDefinition.FromJson(content))
+                                 .Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
+                        prints.Add(Path.GetFileName(b.PrintTemplate.Trim()));
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"{p.FormKey}：讀不出按鈕用到的列印樣板（{ex.Message}），畫面本身照樣匯出");
+                }
+            }
+            // 列印樣板：全部匯出時全部都匯，指定畫面時只匯用到的
+            foreach (var p in SysDb.LoadPublished(cs, "print").Where(p => keys == null || prints.Contains(p.FormKey)))
+                if (SysDb.LoadContent(cs, p.FormKey) is { } content) files.Add((p.FormKey, content));
+            // 選單架構：匯出的畫面放在哪些資料夾（匯入時照這個放回選單）
+            var exported = forms.Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (exported.Count > 0)
+                files.Add((MenuExportFile.FileName, new MenuExportFile
+                {
+                    Menu = MenuExportFile.Build(SysDb.LoadMenu(cs), exported.Contains),
+                    Unlisted = MenuExportFile.Build(SysDb.LoadUnlisted(cs), exported.Contains),
+                }.ToJson()));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("讀取系統資料庫失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+        if (files.Count == 0)
+        {
+            MessageBox.Show("系統裡沒有可以匯出的畫面。", "匯出 JSON");
+            return;
+        }
+        var bad = Path.GetInvalidFileNameChars();
+        int existing = files.Count(f => File.Exists(Path.Combine(folder, f.Name)));
+        bool overwrite = true;
+        if (existing > 0)
+        {
+            var answer = MessageBox.Show($"{folder} 裡已經有 {existing} 個同名的檔案。{Environment.NewLine}{Environment.NewLine}是 = 覆蓋；否 = 略過已經有的；取消 = 不匯出",
+                                         "匯出 JSON", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel) return;
+            overwrite = answer == DialogResult.Yes;
+        }
+        int written = 0, skipped = 0;
+        foreach (var (name, content) in files)
+        {
+            string path = Path.Combine(folder, name);
+            try
+            {
+                if (name.IndexOfAny(bad) >= 0) throw new IOException("檔名有不能用的符號");
+                if (File.Exists(path) && !overwrite)
+                {
+                    skipped++;
+                    continue;
+                }
+                File.WriteAllText(path, content);
+                written++;
+            }
+            catch (Exception ex)
+            {
+                failed.Add($"{name}：{ex.Message}");
+            }
+        }
+        Audit.Write(null, "SYS_Form", "匯出", null, $"{what}：{written} 個檔案匯出到 {folder}");
+        MessageBox.Show($"已匯出 {written} 個檔案到：{Environment.NewLine}{folder}"
+                        + (skipped > 0 ? $"{Environment.NewLine}{Environment.NewLine}略過已經有的 {skipped} 個" : "")
+                        + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "有問題的：" + Environment.NewLine
+                                              + string.Join(Environment.NewLine, failed.Select(x => "　" + x)) : ""),
+                        "匯出 JSON", MessageBoxButtons.OK, failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+    }
+
+    // ================= 管理者：匯入 JSON =================
+
+    private void ImportForms()
+    {
+        if (!SysContext.User.IsAdmin) return;
+        using var pick = new FolderBrowserDialog
+        {
+            Description = "匯入：選擇匯出的資料夾（裡面的畫面、列印樣板發布到系統，照選單架構檔放回選單）",
+            UseDescriptionForTitle = true,
+        };
+        if (pick.ShowDialog(this) == DialogResult.OK) ImportFormsFrom(pick.SelectedPath);
+    }
+
+    /// <summary>
+    /// 匯入：資料夾裡的畫面定義檔（代號 = 檔名）與列印樣板（*.print.json）發布到系統；系統裡已經有、內容不一樣的先問要不要覆蓋。
+    /// 有選單架構檔時，照匯出時的資料夾把畫面放回選單、「未放進選單的畫面」：同名資料夾沿用、沒有就新增，
+    /// 已經在選單上的畫面不動，原本的選單其他部分都保留
+    /// </summary>
+    private void ImportFormsFrom(string folder)
+    {
+        var cs = SysContext.Connection;
+        var forms = new List<(string Key, string Title, string Content)>();
+        var prints = new List<(string Key, string Content)>();
+        var failed = new List<string>();
+        MenuExportFile menu = null;
+        foreach (var file in Directory.GetFiles(folder, "*.json").OrderBy(f => f))
+        {
+            string name = Path.GetFileName(file);
+            try
+            {
+                string text = File.ReadAllText(file);
+                if (name.Equals(MenuExportFile.FileName, StringComparison.OrdinalIgnoreCase)) menu = MenuExportFile.FromJson(text);
+                else if (name.EndsWith(".menu.json", StringComparison.OrdinalIgnoreCase)) continue;
+                else if (name.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)) prints.Add((name, text));
+                else
+                {
+                    string key = Path.GetFileNameWithoutExtension(file);
+                    forms.Add((key, DesignerForm.PublishTitle(FormDefinition.FromJson(text), key), text));   // 讀得出來才算畫面定義檔
+                }
+            }
+            catch (Exception ex)
+            {
+                failed.Add($"{name}：{ex.Message}");
+            }
+        }
+        if (forms.Count == 0)
+        {
+            MessageBox.Show($"{folder} 裡沒有畫面定義檔。" + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, failed) : ""), "匯入 JSON");
+            return;
+        }
+
+        int published = 0, unchanged = 0, skipped = 0, placed = 0;
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            // 系統裡已經有、內容不一樣的：問要不要覆蓋
+            var current = forms.Select(f => f.Key).Concat(prints.Select(p => p.Key))
+                .ToDictionary(k => k, k => SysDb.LoadContent(cs, k), StringComparer.OrdinalIgnoreCase);
+            var differ = forms.Select(f => (f.Key, f.Content)).Concat(prints).Where(x => current[x.Key] != null && current[x.Key] != x.Content).Select(x => x.Key).ToList();
+            Cursor = Cursors.Default;
+            if (MessageBox.Show($"要從 {folder} 匯入 {forms.Count} 個畫面、{prints.Count} 個列印樣板嗎？"
+                                + (menu != null ? $"{Environment.NewLine}{Environment.NewLine}會照選單架構檔把畫面放回選單（原本的選單保留，已經在選單上的畫面不動）。" : "")
+                                + (differ.Count > 0 ? $"{Environment.NewLine}{Environment.NewLine}其中 {differ.Count} 個系統裡已經有、內容不一樣，等一下會再問要不要覆蓋。" : ""),
+                                "匯入 JSON", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            bool overwrite = true;
+            if (differ.Count > 0)
+            {
+                var answer = MessageBox.Show("這些系統裡已經有，內容跟要匯入的不一樣：" + Environment.NewLine + Environment.NewLine
+                                             + string.Join(Environment.NewLine, differ.Take(30).Select(k => "　" + k)) + (differ.Count > 30 ? $"{Environment.NewLine}　…共 {differ.Count} 個" : "")
+                                             + $"{Environment.NewLine}{Environment.NewLine}是 = 覆蓋（版本 +1）；否 = 保留系統裡的；取消 = 不匯入",
+                                             "匯入 JSON", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                if (answer == DialogResult.Cancel) return;
+                overwrite = answer == DialogResult.Yes;
+            }
+            Cursor = Cursors.WaitCursor;
+            bool Publish(string key, string kind, string title, string content)
+            {
+                if (current[key] == content) { unchanged++; return true; }
+                if (current[key] != null && !overwrite) { skipped++; return true; }
+                try
+                {
+                    int version = SysDb.Publish(cs, key, kind, title, content, SysContext.User.UserId);
+                    if (kind == "form") Audit.Write(key, null, "發布", "FormKey=" + key, $"匯入，第 {version} 版");
+                    published++;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"{key}：{ex.Message}");
+                    return false;
+                }
+            }
+            foreach (var p in prints) Publish(p.Key, "print", p.Key, p.Content);
+            var inSystem = forms.Where(f => Publish(f.Key, "form", f.Title, f.Content)).Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // 選單：照匯出時的架構合併進目前的選單
+            if (menu != null)
+            {
+                var roots = MenuExportFile.ToTrees(SysDb.LoadMenu(cs));
+                var unlisted = MenuExportFile.ToTrees(SysDb.LoadUnlisted(cs));
+                var inMenu = MenuExportFile.Keys(roots).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                placed += MenuExportFile.Merge(roots, menu.Menu, inMenu, inSystem.Contains);
+                MenuExportFile.Remove(unlisted, inMenu);           // 放進選單的，不要再留在「未放進選單的畫面」的資料夾裡
+                var anywhere = new HashSet<string>(inMenu.Concat(MenuExportFile.Keys(unlisted)), StringComparer.OrdinalIgnoreCase);
+                placed += MenuExportFile.Merge(unlisted, menu.Unlisted, anywhere, inSystem.Contains);
+                SysDb.SaveMenu(cs, roots, unlisted);
+                Audit.Write(null, "SYS_Menu", "修改選單", null, $"匯入 JSON：{placed} 個畫面照選單架構放回選單");
+            }
+        }
+        catch (Exception ex)
+        {
+            failed.Add(ex.Message);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+        SysContext.ReloadPermissions();
+        LoadMenu();
+        MessageBox.Show($"已發布 {published} 個，沒有變更 {unchanged} 個" + (skipped > 0 ? $"，保留系統裡的 {skipped} 個" : "") + "。"
+                        + (menu != null ? $"{Environment.NewLine}{placed} 個畫面照選單架構放進選單。" : $"{Environment.NewLine}資料夾裡沒有選單架構檔（{MenuExportFile.FileName}），新的畫面在「未放進選單的畫面」。")
+                        + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "有問題的：" + Environment.NewLine + string.Join(Environment.NewLine, failed.Select(x => "　" + x)) : ""),
+                        "匯入 JSON", MessageBoxButtons.OK, failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+    }
+
     // ================= 管理者：全部發布 =================
 
     /// <summary>
-    /// 全部發布：本機 Forms 資料夾裡的畫面定義檔（*.json，列印樣板 *.print.json 除外）全部發布到系統，
+    /// 全部發布：本機 Forms 資料夾裡的畫面定義檔（*.json，列印樣板 *.print.json、選單架構檔 *.menu.json 除外）全部發布到系統，
     /// 代號 = 檔名，按鈕用到的列印樣板一起發布（同畫面設計的「發布到系統」）；內容跟系統裡已發布的一樣就略過，不增加版本
     /// </summary>
     private void PublishAll()
@@ -346,7 +620,7 @@ public partial class MainMenuForm : Form
         if (!SysContext.User.IsAdmin) return;
         string folder = FormDefinition.DefaultFolder;
         var files = Directory.Exists(folder)
-            ? Directory.GetFiles(folder, "*.json").Where(f => !f.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f).ToList()
+            ? Directory.GetFiles(folder, "*.json").Where(f => !f.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase) && !f.EndsWith(".menu.json", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f).ToList()
             : new List<string>();
         if (files.Count == 0)
         {
