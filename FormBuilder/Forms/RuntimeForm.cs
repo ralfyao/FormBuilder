@@ -181,6 +181,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             listGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             listGrid.MultiSelect = true;                     // 按住 Ctrl / Shift 可以選多筆，右鍵選單批次刪除、生效
             SetupListBatchMenu();
+            SetupListSort();
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
             HookEditDialog(listGrid, EditMasterRow);
             if (listDef.AllowInsert) SetupListInsert();
@@ -2040,6 +2041,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
         private int Index => row == null ? -1 : form.results.Rows.IndexOf(row);
         private IRecordNavigator Main => form;
 
+        /// <summary>清單排序後查詢結果換成新的資料列：改成記新的那一列</summary>
+        public void Remap(IReadOnlyDictionary<DataRow, DataRow> map)
+        {
+            if (row != null && map.TryGetValue(row, out var moved)) row = moved;
+        }
+
         /// <summary>主畫面切到這一筆（存檔、刪除都是對主畫面的目前這筆做）</summary>
         private void Select()
         {
@@ -2206,14 +2213,65 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     // ================= 單頭清單 =================
 
+    /// <summary>點清單欄位標題排序的欄位與方向（重新查詢後照樣排）；null = 照查詢的順序</summary>
+    private (string Column, SortOrder Direction)? listSort;
+
+    /// <summary>
+    /// 點清單的欄位標題排序，再點一次反過來：查詢結果本身照新的順序重排（清單第幾列 = 第幾筆，切換單頭、編輯視窗才對得上）。
+    /// 輸入中、有還沒存的新增列時不排
+    /// </summary>
+    private void SetupListSort()
+    {
+        foreach (DataGridViewColumn col in listGrid.Columns)
+            if (!string.IsNullOrEmpty(col.DataPropertyName)) col.SortMode = DataGridViewColumnSortMode.Programmatic;
+        listGrid.ColumnHeaderMouseClick += (s, e) =>
+        {
+            if (e.Button != MouseButtons.Left || e.ColumnIndex < 0) return;
+            var col = listGrid.Columns[e.ColumnIndex];
+            if (col.SortMode != DataGridViewColumnSortMode.Programmatic || mode != Mode.Browse || !results.Columns.Contains(col.DataPropertyName)) return;
+            if (results.Rows.Cast<DataRow>().Any(IsPendingRow)) return;
+            var direction = listSort is { } now && now.Column == col.DataPropertyName && now.Direction == SortOrder.Ascending ? SortOrder.Descending : SortOrder.Ascending;
+            listSort = (col.DataPropertyName, direction);
+            SortResults();
+            SyncList();
+        };
+    }
+
+    /// <summary>查詢結果照 listSort 重排（換成新的 DataTable），目前這筆、開著的編輯視窗跟著同一筆資料</summary>
+    private void SortResults()
+    {
+        if (listSort is not { } sort || !results.Columns.Contains(sort.Column)) return;
+        var view = new DataView(results) { Sort = $"[{sort.Column}] {(sort.Direction == SortOrder.Descending ? "DESC" : "ASC")}" };
+        var sorted = results.Clone();
+        var map = new Dictionary<DataRow, DataRow>();
+        foreach (DataRowView v in view)
+        {
+            sorted.ImportRow(v.Row);
+            map[v.Row] = sorted.Rows[sorted.Rows.Count - 1];
+        }
+        DataRow currentRow = HasCurrent ? results.Rows[current] : null;
+        results = sorted;
+        if (currentRow != null && map.TryGetValue(currentRow, out var moved)) current = results.Rows.IndexOf(moved);
+        foreach (var (_, cursor) in editWindows) cursor.Remap(map);
+    }
+
     /// <summary>清單顯示查詢結果，並把目前這筆設為選取列</summary>
     private void SyncList()
     {
         if (listGrid == null) return;
+        // 新的查詢結果：照使用者點過的欄位標題排序（有還沒存的新增列時不排）
+        if (listSort != null && listGrid.DataSource != results && !results.Rows.Cast<DataRow>().Any(IsPendingRow)) SortResults();
         syncingList = true;
         try
         {
-            if (listGrid.DataSource != results) listGrid.DataSource = results;
+            if (listGrid.DataSource != results)
+            {
+                listGrid.DataSource = results;
+                // 排序箭頭（換 DataSource 時 Grid 會清掉，要重新標）
+                foreach (DataGridViewColumn c in listGrid.Columns)
+                    if (c.SortMode == DataGridViewColumnSortMode.Programmatic)
+                        c.HeaderCell.SortGlyphDirection = listSort is { } sort && c.DataPropertyName == sort.Column ? sort.Direction : SortOrder.None;
+            }
             listGrid.AllowUserToAddRows = CanInsertInList;            // 查詢之後才有欄位可以新增
             // 使用者在清單上點選（含 Ctrl / Shift 多選）造成的切換：保留使用者選的列
             if (HasCurrent && current < listGrid.Rows.Count && listGrid.CurrentRow?.Index == current && listGrid.Rows[current].Selected) return;
