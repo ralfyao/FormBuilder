@@ -94,6 +94,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         perm = SysContext.PermissionFor(def.FormKey);                        // 登入時依角色權限；沒登入、系統管理者 = 全開
         // 「編修」權限 = 新增、修改、刪除（主畫面、編輯視窗的按鈕都看這裡；舊資料的新增、刪除勾選不再使用）
         perm = perm with { Insert = perm.Modify, Delete = perm.Modify };
+        // 畫面設定不顯示新增、修改、刪除、輸出按鈕：編輯視窗、清單右鍵選單也不能做（只要查詢的畫面）
+        perm = perm with
+        {
+            Insert = perm.Insert && def.Toolbar.HasFlag(ToolbarButtons.新增),
+            Modify = perm.Modify && def.Toolbar.HasFlag(ToolbarButtons.修改),
+            Delete = perm.Delete && def.Toolbar.HasFlag(ToolbarButtons.刪除),
+            Export = perm.Export && def.Toolbar.HasFlag(ToolbarButtons.輸出),
+        };
         Text = def.Title;
 
         // 工具列按鈕在 Designer.cs
@@ -168,6 +176,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             var part = new DetailPart { Def = g, Grid = CreateDetailGrid(g, def.ConnectionString) };
             HookEditDialog(part.Grid, index => EditDetailRow(part, index));
+            GridCells.HookCustomColumns(part.Grid, (c, row) => RunRowButton(c, row, () => LoadDetail(part)), def.ConnectionString);
+            // 單身欄位的執行後動作：@名稱 先找同一列，再找單頭畫面上的欄位、目前這筆；查出來的值帶進同一列
+            GridCells.HookAfterSelect(part.Grid, def.ConnectionString, name =>
+            {
+                var field = def.Fields.FirstOrDefault(f => !f.IsCalculated && f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (field != null && inputs.ContainsKey(field)) return GetValue(field);
+                if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+                return openParams.TryGetValue(name, out var param) ? param : null;
+            });
             details.Add(part);
         }
         btnDetail.Visible = HasDetail;
@@ -176,6 +193,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             var sqlGrid = CreateDetailGrid(g, def.ConnectionString);         // 唯讀
             sqlGrids.Add((g, sqlGrid));
             HookSqlListOpen(g, sqlGrid);
+            GridCells.HookCustomColumns(sqlGrid, (c, row) => RunRowButton(c, row, LoadSqlLists), def.ConnectionString);
         }
         listDef = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
         if (listDef != null)
@@ -187,6 +205,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetupListSort();
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
             HookEditDialog(listGrid, EditMasterRow);
+            GridCells.HookCustomColumns(listGrid, (c, row) =>
+            {
+                int index = results.Rows.IndexOf(row);
+                if (index < 0) return;                       // 還沒存檔的新增列
+                RunRowButton(c, row, () =>
+                {
+                    RefreshRows(new[] { index });            // 資料可能被 SQL 改過，重讀這一筆
+                    SetMode(mode);
+                });
+            }, def.ConnectionString);
             if (listDef.AllowInsert) SetupListInsert();
             // 空白處雙擊（還沒有資料時）也能開編輯視窗，才有地方按「新增」
             listGrid.DoubleClick += (s, e) =>
@@ -198,6 +226,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             foreach (ToolStripItem item in new ToolStripItem[] { btnInsert, btnModify, btnDelete, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast })
                 item.Visible = false;
         }
+        // Grid 的執行後動作：資料有變動就重算（例如 AMOUNT=SUM(金額)、標籤8=SUM(金額)）
+        foreach (var (g, grid) in AllGrids()) GridCells.HookDataChanged(grid, () => RunGridAfterChange(g, grid));
         // 停靠在下方的 Grid：WinForms 是「後加入的先停靠（最外側）」，所以倒著加，
         // 讓先放的 Grid 在最下面，跟設計畫面一樣
         foreach (var g in def.Grids.AsEnumerable().Reverse())
@@ -218,6 +248,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (!HasMasterTable)
             foreach (ToolStripItem item in new ToolStripItem[] { btnQuery, btnInsert, btnModify, btnDelete, btnDetail, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast, sepEdit, btnOk, btnCancel, sepExit })
                 item.Visible = false;
+        ApplyToolbarSetting();
 
         if (pickMode) SetupPickMode();
         if (conditionMode) SetupConditionMode(matchAny);
@@ -257,6 +288,27 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
         }
         base.OnFormClosing(e);
+    }
+
+    /// <summary>畫面屬性「工具列按鈕」沒勾的按鈕藏起來（只藏不顯示，原本就藏的不會打開）；一個都不剩就整條工具列不顯示</summary>
+    private void ApplyToolbarSetting()
+    {
+        var hide = new List<ToolStripItem>();
+        void Hide(ToolbarButtons flag, params ToolStripItem[] items)
+        {
+            if (!def.Toolbar.HasFlag(flag)) hide.AddRange(items);
+        }
+        Hide(ToolbarButtons.查詢, btnQuery);
+        Hide(ToolbarButtons.新增, btnInsert);
+        Hide(ToolbarButtons.修改, btnModify);
+        Hide(ToolbarButtons.刪除, btnDelete);
+        Hide(ToolbarButtons.單身, btnDetail);
+        Hide(ToolbarButtons.首筆至末筆, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast);
+        Hide(ToolbarButtons.確定取消, sepEdit, btnOk, btnCancel);
+        Hide(ToolbarButtons.離開, sepExit, btnExit);
+        foreach (var item in hide) item.Visible = false;
+        if (!toolStrip.Items.Cast<ToolStripItem>().Any(i => i.Available && i is not ToolStripSeparator) && !pickMode && !conditionMode)
+            toolStrip.Visible = false;
     }
 
     /// <summary>有單頭資料表；false = 只放 SQL 清單的畫面</summary>
@@ -433,9 +485,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             part.Grid.AllowUserToAddRows = detailEditing;
             part.Grid.AllowUserToDeleteRows = detailEditing;
             part.Grid.BackgroundColor = detailEditing ? SystemColors.Window : SystemColors.Control;
-            // 只顯示、自動編號、關聯欄位（自動帶單頭的值）不能輸入
+            // 只顯示、自動編號、關聯欄位（自動帶單頭的值）、有公式的欄位不能輸入
             foreach (DataGridViewColumn col in part.Grid.Columns)
-                if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || IsLinkColumn(part, c.Column)))
+                if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || c.HasFormula || IsLinkColumn(part, c.Column)))
                     col.ReadOnly = true;
         }
         btnFirst.Enabled = btnPrevious.Enabled = browsing && current > 0;
@@ -473,6 +525,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
+        foreach (var (g, grid) in AllGrids()) RunGridAfterChange(g, grid);   // 進入新增、修改時把 Grid 的加總填進資料表欄位
         if (mode == Mode.Detail) details[0].Grid.Focus();
         else if (!browsing) InputHelper.FocusFirst(focusOrder);           // 游標放在第一個可以輸入的欄位（照畫面位置）
     }
@@ -903,6 +956,42 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.列印報表: PrintReport(b); break;
             case ButtonAction.開啟查詢條件畫面: QueryByConditionForm(b); break;
         }
+    }
+
+    /// <summary>
+    /// Grid 上的自訂按鈕欄位：執行SQL、開啟畫面用那一列的值（@欄位 那一列沒有的再取畫面上的欄位、目前這筆、開啟時的傳入參數），
+    /// SQL 執行成功後 reload 重新讀取；其他動作照畫面上的按鈕執行
+    /// </summary>
+    private void RunRowButton(GridColumnDefinition c, DataRow row, Action reload)
+    {
+        var b = c.Button;
+        if (mode != Mode.Browse)
+        {
+            MessageBox.Show("輸入中不能按清單上的按鈕，請先按「確定」或「取消」。", "提醒");
+            return;
+        }
+        if (b != null && !ButtonRunner.CheckAllowed(b, perm)) return;
+        if (b != null && (b.Action == ButtonAction.執行SQL || !string.IsNullOrWhiteSpace(b.PreActionSql)) && !perm.Modify)
+        {
+            MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
+            return;
+        }
+        object Other(string name)
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null) return GetValue(field);
+            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return openParams.TryGetValue(name, out var v) ? v : null;
+        }
+        IReadOnlyDictionary<string, object> result = null;
+        bool? done = ButtonRunner.RunRowButton(b, row, Other, def.SourcePath, this, def.ConnectionString, def.FormKey, values => result = values);
+        if (done == null)
+        {
+            RunButton(b);
+            return;
+        }
+        if (done == true) reload();
+        if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
     }
 
     /// <summary>
@@ -1673,6 +1762,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             // 別的畫面開啟時帶進來的參數（例如廠商編號）：查無資料時也顯示在欄位上，JOIN 欄位跟著帶出，至少看得到單頭是誰
             if (!HasCurrent && listGrid == null && FillParams()) RefreshJoinFields(def.Joins, force: true);
         }
+        FillParamLabels();
         RecalcFormulas();
         LoadDetail();
         LoadSqlLists();
@@ -1724,7 +1814,55 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return any;
     }
 
+    /// <summary>
+    /// 傳入參數裡跟文字標籤同名的（例如 標籤1=@COMPANY）：文字標籤顯示傳進來的值，切換資料也保留
+    /// （文字標籤每次顯示資料都會先恢復原本的文字，所以放在最後）
+    /// </summary>
+    private void FillParamLabels()
+    {
+        foreach (var f in def.Fields.Where(f => f.IsTextLabel))
+            if (openParams.TryGetValue(f.Column, out var value) && value != null && value != DBNull.Value)
+                SetValue(f, value);
+    }
+
     // ================= 單身 =================
+
+    /// <summary>畫面上所有的 Grid：單身、SQL 清單、單頭清單</summary>
+    private IEnumerable<(GridDefinition Def, DataGridView Grid)> AllGrids()
+    {
+        foreach (var part in details) yield return (part.Def, part.Grid);
+        foreach (var x in sqlGrids) yield return x;
+        if (listGrid != null) yield return (listDef, listGrid);
+    }
+
+    private bool runningGridAfterChange;
+
+    /// <summary>
+    /// Grid 的「執行後動作」：一行一組「畫面欄位=公式」，例如 AMOUNT=SUM(金額)。SUM(欄位) 先找這個 Grid，沒有再找其他 Grid；
+    /// 公式裡的其他名稱取畫面上的欄位、目前這筆、開啟時的傳入參數。資料表的欄位只在新增、修改時填（按確定一起存），文字標籤一直顯示
+    /// </summary>
+    private void RunGridAfterChange(GridDefinition g, DataGridView grid)
+    {
+        if (runningGridAfterChange || string.IsNullOrWhiteSpace(g.AfterChange)) return;
+        runningGridAfterChange = true;
+        try
+        {
+            GridCells.RunAfterChange(g.AfterChange, inputs, mode is Mode.Insert or Mode.Modify, name =>
+            {
+                var field = inputs.Keys.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (field != null) return GetValue(field);
+                if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+                return openParams.TryGetValue(name, out var param) ? param : null;
+            }, (function, column) =>
+            {
+                var source = GridCells.HasColumn(grid, column) ? grid
+                           : AllGrids().Select(x => x.Grid).FirstOrDefault(x => GridCells.HasColumn(x, column));
+                if (source == null) throw new FormatException($"Grid 沒有「{column}」");
+                return GridCells.Aggregate(source, function, column);
+            });
+        }
+        finally { runningGridAfterChange = false; }
+    }
 
     private static bool IsLinkColumn(DetailPart part, string detailColumn) =>
         part.Def.Links.Any(l => string.Equals(l.Detail, detailColumn, StringComparison.OrdinalIgnoreCase));
@@ -1744,7 +1882,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         };
         GridCells.ApplyGridLines(grid);
         // 欄位依「輸入方式」建立：文字框、下拉選單、勾選框、日期選擇
-        foreach (var c in g.Columns.Where(c => c.Visible && !c.ScreenOnly))
+        foreach (var c in g.Columns.Where(GridCells.ShownInGrid))
         {
             // 生效欄位（輸入方式沒特別設定時）：不管欄位是文字還是數字，都顯示成唯讀的勾選框
             bool effective = c.CellType == GridCellKind.自動 && !TypeHelper.IsBool(c.DataType)
@@ -1754,6 +1892,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             grid.Columns.Add(col);
         }
         GridCells.HookEffectiveColumn(grid);
+        if (g.AutoFitColumns) GridCells.HookAutoFit(grid);           // 查出資料後欄寬依內容調整
         grid.DataError += (s, e) =>
         {
             if (GridCells.IgnoreDisplayError(grid, e)) return;     // 下拉選單裡沒有的值：顯示空白，不跳訊息
@@ -1816,6 +1955,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (e.Row.Table.Columns.Contains(detail))
                     e.Row[detail] = results.Rows[current][master];
         };
+        GridCells.HookFormulas(table, gridDef.Columns);      // 數量、單價改了，金額跟著重算
         part.Table = table;
         part.Grid.DataSource = part.Table;
     }
@@ -2356,6 +2496,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             if (listGrid.DataSource != results)
             {
+                GridCells.HookFormulas(results, listDef.Columns);     // 直接新增的那一列：公式欄位跟著重算
                 listGrid.DataSource = results;
                 // 排序箭頭（換 DataSource 時 Grid 會清掉，要重新標）
                 foreach (DataGridViewColumn c in listGrid.Columns)
@@ -2406,7 +2547,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (DataGridViewColumn col in listGrid.Columns)
         {
             var c = listDef.Columns.FirstOrDefault(x => x.Column == col.DataPropertyName);
-            if (c == null || c.IsJoin || c.IsIdentity || c.NoEntry) col.ReadOnly = true;
+            if (c == null || c.IsJoin || c.IsIdentity || c.NoEntry || c.HasFormula) col.ReadOnly = true;
         }
         listGrid.CellBeginEdit += (s, e) =>
         {
@@ -2536,7 +2677,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (rows.Count <= 1) rows = Enumerable.Range(0, Math.Min(results.Rows.Count, listGrid.Rows.Count)).ToList();
         using var dlg = new SaveFileDialog { Filter = "CSV（Excel 可開）(*.csv)|*.csv", FileName = $"{def.Title}_{DateTime.Now:yyyyMMdd_HHmm}.csv" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        var columns = listGrid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex).ToList();
+        var columns = listGrid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible && c is not DataGridViewButtonColumn)     // 自訂按鈕欄位不用輸出
+                              .OrderBy(c => c.DisplayIndex).ToList();
         static string Cell(object v) => "\"" + Convert.ToString(v)?.Replace("\"", "\"\"") + "\"";
         var sb = new System.Text.StringBuilder();
         sb.AppendLine(string.Join(",", columns.Select(c => Cell(c.HeaderText))));

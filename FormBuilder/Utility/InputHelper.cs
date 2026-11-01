@@ -56,7 +56,11 @@ public static class InputHelper
                 return CreateDatePicker(f);
             case InputKind.文字標籤:
                 // 文字標籤：顯示「標籤」的文字，SQL 的回傳對應可以把值填進來（SetValue 改 Text）
-                return new Label { Text = f.Label ?? "", AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.Transparent };
+                return new Label
+                {
+                    Text = f.Label ?? "", AutoEllipsis = true, BackColor = Color.Transparent,
+                    TextAlign = f.TextAlignment switch { LabelAlign.置中 => ContentAlignment.MiddleCenter, LabelAlign.靠右 => ContentAlignment.MiddleRight, _ => ContentAlignment.MiddleLeft },
+                };
         }
         if (TypeHelper.IsBool(f.DataType))
             return new CheckBox();
@@ -383,7 +387,7 @@ public static class InputHelper
         DateFormat = c.EditDateFormat,
         NumberRule = c.EditNumberRule,
         DefaultValue = c.EditDefaultValue,
-        IsReadOnly = c.EditReadOnly,
+        IsReadOnly = c.EditReadOnly || c.HasFormula,     // 有公式的欄位由同一列的值算出來（寫回 Grid 那一列時重算）
         CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
         UncheckedValue = c.EditUncheckedValue ?? "0",
         Width = c.EditWidth > 0 ? c.EditWidth : Math.Clamp(c.Width, 120, 400),

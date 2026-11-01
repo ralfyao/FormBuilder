@@ -8,8 +8,13 @@ namespace FormBuilder;
 /// 左邊「欄位」頁籤拖欄位、「工具箱」頁籤拖按鈕或下拉選單到版面上；
 /// 版面上可拖曳移動、拖邊緣調整大小、圈選或 Ctrl 點選後按 Delete 刪除。按「確定」才寫回 GridDefinition
 /// </summary>
-public partial class EditLayoutDialog : Form
+public partial class EditLayoutDialog : Form, IPickerHost
 {
+    // 屬性面板「開窗畫面」的設定視窗：回傳值可以填進這個編輯視窗的欄位；資料夾交給畫面設計（擁有者視窗）
+    IEnumerable<string> IPickerHost.PickerLocalColumns => columns.Select(c => c.Column);
+    string IPickerHost.PickerFolder => null;
+    void IPickerHost.PickerChanged() => propertyGrid.Refresh();
+
     private readonly GridDefinition grid;
     /// <summary>可以放上版面的欄位：Grid 的欄位，加上這裡「JOIN 其他資料表」新帶進來的欄位（接在後面，確定時才加到 Grid）</summary>
     private readonly List<GridColumnDefinition> columns;
@@ -70,6 +75,7 @@ public partial class EditLayoutDialog : Form
                             List<GridJoinDefinition> masterJoins = null, IEnumerable<string> reservedNames = null, IEnumerable<string> reservedAliases = null)
     {
         InitializeComponent();
+        SetupPanelSplitters();
         grid = gridDefinition;
         columns = grid.Columns.ToList();
         joinTarget = masterJoins ?? grid.Joins;
@@ -639,6 +645,39 @@ public partial class EditLayoutDialog : Form
         if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z))) { history.Redo(); return true; }
         if (!typing && keyData == (Keys.Control | Keys.A)) { SetSelection(canvas.Controls.OfType<DesignBox>()); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ================= 左右面板寬度 =================
+
+    /// <summary>
+    /// 左邊（欄位 / 工具箱 / 資料表）、右邊（屬性）面板和版面之間加上看得到的分隔線，可以拖曳調整寬度；
+    /// 工具列「左側面板」「屬性面板」可以整個隱藏，讓版面看到全貌
+    /// </summary>
+    private void SetupPanelSplitters()
+    {
+        Splitter AddSplitter(Control panel, DockStyle dock)
+        {
+            var splitter = new Splitter { Dock = dock, Width = 6, BackColor = SystemColors.ControlDark, MinSize = 150, MinExtra = 200 };
+            Controls.Add(splitter);
+            Controls.SetChildIndex(splitter, Controls.GetChildIndex(panel));    // 排在面板後面停靠，才會緊貼在面板旁邊
+            return splitter;
+        }
+        var leftSplitter = AddSplitter(left, DockStyle.Left);
+        var rightSplitter = AddSplitter(right, DockStyle.Right);
+
+        ToolStripButton Toggle(string text, Control panel, Splitter splitter)
+        {
+            var button = new ToolStripButton(text)
+            {
+                CheckOnClick = true, Checked = true, Alignment = ToolStripItemAlignment.Right,
+                ToolTipText = $"顯示 / 隱藏{text}（分隔線也可以直接拖曳調整寬度）",
+            };
+            button.CheckedChanged += (s, e) => panel.Visible = splitter.Visible = button.Checked;
+            return button;
+        }
+        // 靠右的項目照加入順序由右往左排
+        effectBar.Items.Add(Toggle("屬性面板", right, rightSplitter));
+        effectBar.Items.Add(Toggle("左側面板", left, leftSplitter));
     }
 
     // ================= 放置 / 刪除欄位 =================
@@ -1389,7 +1428,7 @@ public partial class EditLayoutDialog : Form
                                                    : string.IsNullOrWhiteSpace(connectionString) ? copy.TableName : copy.FullTableName(DbDialect.Of(connectionString)));
         using var dlg = new RecordNavigatorDialog(navigator, "預覽：" + (copy.Title ?? copy.TableName), fields, copy.EditFormSize, connectionString,
                                                   copy.EditButtons, FormDefinition.DefaultFolder, copy.EffectiveColumn, copy.EditLists,
-                                                  copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels);
+                                                  copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels, saveLists: false);
         dlg.ShowDialog(this);
     }
 
@@ -1437,7 +1476,7 @@ public partial class EditLayoutDialog : Form
 }
 
 /// <summary>版面設計器屬性面板顯示的內容：只開放跟編輯視窗版面有關的屬性</summary>
-public class EditFieldView
+public class EditFieldView : IPickerField
 {
     private readonly FieldDefinition field;
     public EditFieldView(FieldDefinition f) => field = f;
@@ -1496,11 +1535,13 @@ public class EditFieldView
     [DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get => field.AllowFreeText; set => field.AllowFreeText = value; }
 
-    [DisplayName("開窗畫面"), Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來"),
-     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+    [DisplayName("開窗畫面"), Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。"
+                                       + "按右邊的「…」可以看開窗畫面有哪些欄位，直接選要帶回這個視窗的哪個欄位"),
+     Editor(typeof(PickerFormEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PickerForm { get => field.PickerForm; set => field.PickerForm = value; }
 
-    [DisplayName("開窗傳入參數"), Description("「對方欄位=@本視窗欄位」、「對方欄位=SQL 運算式」（含 @欄位 或括號，由資料庫算出）或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+    [DisplayName("開窗傳入參數"), Description("「對方欄位=@本視窗欄位」、「對方欄位=SQL 運算式」（含 @欄位 或括號，由資料庫算出）或「對方欄位=固定值」，例如：廠商編號=@廠商編號。按右邊的「…」可以從欄位清單選"),
+     Editor(typeof(OpenParamsEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PickerParams { get => field.PickerParams; set => field.PickerParams = value; }
 
     [DisplayName("開窗回傳對應"), Description("「本視窗欄位=對方欄位」，可以帶回多個欄位；空白 = 只帶回這個欄位（對方同名的欄位）；只寫對方的欄位名稱 = 把它帶回這個欄位")]

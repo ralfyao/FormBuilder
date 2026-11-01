@@ -41,6 +41,9 @@ namespace FormBuilder
             this.colSource = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colCellType = new System.Windows.Forms.DataGridViewComboBoxColumn();
             this.colCellOptions = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colFormula = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colDecimals = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colAfterSelect = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ctxJoin = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.miRemoveJoin = new System.Windows.Forms.ToolStripMenuItem();
             this.linkGroup = new System.Windows.Forms.GroupBox();
@@ -50,6 +53,7 @@ namespace FormBuilder
             this.bottom = new System.Windows.Forms.Panel();
             this.btnLayout = new System.Windows.Forms.Button();
             this.btnJoin = new System.Windows.Forms.Button();
+            this.btnCustom = new System.Windows.Forms.Button();
             this.btnUp = new System.Windows.Forms.Button();
             this.btnDown = new System.Windows.Forms.Button();
             this.btnNone = new System.Windows.Forms.Button();
@@ -90,6 +94,9 @@ namespace FormBuilder
             this.colNoEntry,
             this.colCellType,
             this.colCellOptions,
+            this.colFormula,
+            this.colDecimals,
+            this.colAfterSelect,
             this.colSource});
             this.dgvColumns.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dgvColumns.Name = "dgvColumns";
@@ -158,7 +165,8 @@ namespace FormBuilder
             "文字框",
             "下拉選單",
             "勾選框",
-            "日期選擇"});
+            "日期選擇",
+            "按鈕"});
             this.colCellType.Name = "colCellType";
             this.colCellType.ToolTipText = "Grid 儲存格的輸入方式；自動 = bit 用勾選框、日期用日期選擇，其他用文字框";
             this.colCellType.Width = 90;
@@ -170,6 +178,31 @@ namespace FormBuilder
             this.colCellOptions.Name = "colCellOptions";
             this.colCellOptions.ToolTipText = "下拉選單：A=甲類,B=乙類 或 SELECT 值, 顯示 FROM …；勾選框：勾選值/取消值，例如 Y/N；日期選擇：文字欄位的日期格式，例如 yyyyMMdd";
             this.colCellOptions.Width = 200;
+            //
+            // colFormula
+            //
+            this.colFormula.DataPropertyName = "Formula";
+            this.colFormula.HeaderText = "公式";
+            this.colFormula.Name = "colFormula";
+            this.colFormula.ToolTipText = "用同一列的欄位名稱和數字做 + - * /，例如：數量 * 單價。雙擊開啟公式編輯視窗；有公式的欄位不能輸入，用到的欄位改了就重算";
+            this.colFormula.Width = 180;
+            //
+            // colDecimals
+            //
+            this.colDecimals.DataPropertyName = "Decimals";
+            this.colDecimals.HeaderText = "小數";
+            this.colDecimals.Name = "colDecimals";
+            this.colDecimals.ToolTipText = "公式結果的小數位數（四捨五入）；空白 = 自動（最多 4 位）。整數欄位一律取到整數";
+            this.colDecimals.Width = 50;
+            //
+            // colAfterSelect
+            //
+            this.colAfterSelect.DataPropertyName = "AfterSelect";
+            this.colAfterSelect.HeaderText = "執行後動作";
+            this.colAfterSelect.Name = "colAfterSelect";
+            this.colAfterSelect.ReadOnly = true;
+            this.colAfterSelect.ToolTipText = "雙擊設定：這一格的值改了就執行 SQL，查出來的值帶進同一列的其他欄位（例如選了產品編號，帶出品名規格、單位、單價）";
+            this.colAfterSelect.Width = 200;
             //
             // colSource
             //
@@ -232,6 +265,7 @@ namespace FormBuilder
             // bottom
             //
             this.bottom.Controls.Add(this.btnLayout);
+            this.bottom.Controls.Add(this.btnCustom);
             this.bottom.Controls.Add(this.btnJoin);
             this.bottom.Controls.Add(this.btnDown);
             this.bottom.Controls.Add(this.btnUp);
@@ -261,6 +295,14 @@ namespace FormBuilder
             this.btnJoin.Size = new System.Drawing.Size(140, 26);
             this.btnJoin.TabIndex = 5;
             this.btnJoin.Text = "JOIN 其他資料表…";
+            //
+            // btnCustom
+            //
+            this.btnCustom.Dock = System.Windows.Forms.DockStyle.Left;
+            this.btnCustom.Name = "btnCustom";
+            this.btnCustom.Size = new System.Drawing.Size(120, 26);
+            this.btnCustom.TabIndex = 8;
+            this.btnCustom.Text = "新增自訂欄位…";
             //
             // btnUp
             //
@@ -314,7 +356,7 @@ namespace FormBuilder
             // GridColumnsDialog
             //
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(744, 601);
+            this.ClientSize = new System.Drawing.Size(880, 601);
             this.Controls.Add(this.columnGroup);
             this.Controls.Add(this.linkGroup);
             this.Controls.Add(this.bottom);
@@ -354,9 +396,13 @@ namespace FormBuilder
         private System.Windows.Forms.DataGridViewTextBoxColumn colSource;
         private System.Windows.Forms.DataGridViewComboBoxColumn colCellType;
         private System.Windows.Forms.DataGridViewTextBoxColumn colCellOptions;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colFormula;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colDecimals;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colAfterSelect;
         private System.Windows.Forms.ContextMenuStrip ctxJoin;
         private System.Windows.Forms.ToolStripMenuItem miRemoveJoin;
         private System.Windows.Forms.Button btnJoin;
+        private System.Windows.Forms.Button btnCustom;
         private System.Windows.Forms.Button btnUp;
         private System.Windows.Forms.Button btnDown;
         private System.Windows.Forms.Button btnLayout;

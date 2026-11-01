@@ -5,7 +5,9 @@ namespace FormBuilder;
 
 /// <summary>
 /// 計算欄位的公式：欄位名稱和數字做 + - * /，可以用括號，例如 (達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。
-/// 欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0；除以 0 或欄位不是數字時算不出來（回傳 null）
+/// 欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0；除以 0 或欄位不是數字時算不出來（回傳 null）。
+/// 彙總函數（明細清單的執行後動作用）：SUM、AVG、COUNT、MAX、MIN、STD（樣本標準差）、STDP（母體標準差），
+/// 括號裡是明細欄位，例如 SUM(金額) * 1.05
 /// </summary>
 public static class Formula
 {
@@ -13,13 +15,53 @@ public static class Formula
     public static List<string> Names(string formula) =>
         Tokenize(formula).Where(t => t.Kind == TokenKind.Name).Select(t => t.Text).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+    /// <summary>支援的彙總函數</summary>
+    public static readonly string[] Aggregates = { "SUM", "AVG", "COUNT", "MAX", "MIN", "STD", "STDP" };
+
+    /// <summary>公式有用到彙總函數（SUM、AVG…）：要從明細加總，Grid 同一列的公式不算這種</summary>
+    public static bool HasAggregate(string formula)
+    {
+        try { return Tokenize(formula).Any(t => t.Kind == TokenKind.Func); }
+        catch (FormatException) { return false; }
+    }
+
+    /// <summary>
+    /// 彙總一欄明細的值（空白的列不算，COUNT 算有值的列數）。沒有任何值時 SUM、COUNT = 0，其他算不出來（丟 FormatException）
+    /// </summary>
+    public static decimal Aggregate(string function, IEnumerable<object> values)
+    {
+        var numbers = values.Where(v => v is not (null or DBNull) && !(v is string s && s.Trim() == "")).Select(ToNumber).ToList();
+        switch (function.ToUpperInvariant())
+        {
+            case "SUM": return numbers.Sum();
+            case "COUNT": return numbers.Count;
+        }
+        if (numbers.Count == 0) throw new FormatException($"{function} 沒有資料");
+        switch (function.ToUpperInvariant())
+        {
+            case "AVG": return numbers.Average();
+            case "MAX": return numbers.Max();
+            case "MIN": return numbers.Min();
+            case "STD":
+            case "STDP":
+            {
+                bool sample = function.Equals("STD", StringComparison.OrdinalIgnoreCase);
+                if (sample && numbers.Count < 2) throw new FormatException("STD 至少要 2 筆");
+                decimal avg = numbers.Average();
+                double variance = (double)numbers.Sum(n => (n - avg) * (n - avg)) / (sample ? numbers.Count - 1 : numbers.Count);
+                return (decimal)Math.Sqrt(variance);
+            }
+            default: throw new FormatException($"公式不支援 {function}( )");
+        }
+    }
+
     /// <summary>檢查公式：格式不對、用到 knownNames 以外的名稱時回傳錯誤訊息；沒問題回傳 null</summary>
     public static string Check(string formula, IEnumerable<string> knownNames)
     {
         if (string.IsNullOrWhiteSpace(formula)) return null;
         try
         {
-            new Parser(Tokenize(formula), _ => 0m).Parse();
+            new Parser(Tokenize(formula), _ => 0m, (_, _) => 1m).Parse();
             var known = new HashSet<string>(knownNames, StringComparer.OrdinalIgnoreCase);
             var unknown = Names(formula).Where(n => !known.Contains(n)).ToList();
             return unknown.Count == 0 ? null : "公式裡這些欄位不在畫面上：" + string.Join("、", unknown);
@@ -30,13 +72,17 @@ public static class Formula
         }
     }
 
-    /// <summary>計算公式；valueOf 取欄位的值（null、DBNull、空白 = 0）。算不出來（格式不對、除以 0、欄位不是數字）回傳 null</summary>
-    public static decimal? Evaluate(string formula, Func<string, object> valueOf)
+    /// <summary>
+    /// 計算公式；valueOf 取欄位的值（null、DBNull、空白 = 0），aggregateOf(函數, 明細欄位) 算彙總函數（null = 不能用彙總函數）。
+    /// 算不出來（格式不對、除以 0、欄位不是數字）回傳 null
+    /// </summary>
+    public static decimal? Evaluate(string formula, Func<string, object> valueOf, Func<string, string, decimal> aggregateOf = null)
     {
         if (string.IsNullOrWhiteSpace(formula)) return null;
         try
         {
-            return new Parser(Tokenize(formula), name => ToNumber(valueOf(name))).Parse();
+            return new Parser(Tokenize(formula), name => ToNumber(valueOf(name)),
+                              aggregateOf ?? ((f, name) => throw new FormatException($"這裡不能用 {f}({name})"))).Parse();
         }
         catch (Exception ex) when (ex is FormatException or DivideByZeroException or OverflowException or InvalidCastException)
         {
@@ -59,7 +105,8 @@ public static class Formula
         decimals >= 0 ? Math.Round(value, decimals, MidpointRounding.AwayFromZero).ToString("F" + decimals, CultureInfo.CurrentCulture)
                       : Math.Round(value, 4, MidpointRounding.AwayFromZero).ToString("0.####", CultureInfo.CurrentCulture);
 
-    private enum TokenKind { Number, Name, Op, LParen, RParen }
+    /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱</summary>
+    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg }
 
     private record Token(TokenKind Kind, string Text);
 
@@ -97,20 +144,34 @@ public static class Formula
             while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/()（）[]".Contains(s[i])) sb.Append(s[i++]);
             tokens.Add(new Token(TokenKind.Name, sb.ToString()));
         }
+        // 名稱後面接左括號的是彙總函數，括號裡的是明細欄位
+        for (int t = 0; t + 1 < tokens.Count; t++)
+        {
+            if (tokens[t].Kind != TokenKind.Name || tokens[t + 1].Kind != TokenKind.LParen) continue;
+            string function = tokens[t].Text.ToUpperInvariant();
+            if (!Aggregates.Contains(function))
+                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}");
+            if (t + 3 >= tokens.Count || tokens[t + 2].Kind != TokenKind.Name || tokens[t + 3].Kind != TokenKind.RParen)
+                throw new FormatException($"{function} 的寫法是 {function}(明細欄位)，例如 {function}(金額)");
+            tokens[t] = new Token(TokenKind.Func, function);
+            tokens[t + 2] = new Token(TokenKind.Arg, tokens[t + 2].Text);
+        }
         return tokens;
     }
 
-    /// <summary>運算式 = 項 (+|- 項)*；項 = 因子 (*|/ 因子)*；因子 = 數字 | 欄位 | (運算式) | -因子</summary>
+    /// <summary>運算式 = 項 (+|- 項)*；項 = 因子 (*|/ 因子)*；因子 = 數字 | 欄位 | 函數(明細欄位) | (運算式) | -因子</summary>
     private sealed class Parser
     {
         private readonly List<Token> tokens;
         private readonly Func<string, decimal> valueOf;
+        private readonly Func<string, string, decimal> aggregateOf;
         private int pos;
 
-        public Parser(List<Token> tokens, Func<string, decimal> valueOf)
+        public Parser(List<Token> tokens, Func<string, decimal> valueOf, Func<string, string, decimal> aggregateOf)
         {
             this.tokens = tokens;
             this.valueOf = valueOf;
+            this.aggregateOf = aggregateOf;
         }
 
         public decimal Parse()
@@ -142,7 +203,9 @@ public static class Formula
             {
                 pos++;
                 decimal right = Factor();
-                value = op.Text == "*" ? value * right : value / right;     // 除以 0 丟 DivideByZeroException
+                
+                    value = op.Text == "*" ? value * right : value / (right == 0 ? 1 : right);
+                // 除以 0 丟 DivideByZeroException
             }
             return value;
         }
@@ -159,6 +222,9 @@ public static class Formula
                     return number;
                 case TokenKind.Name:
                     return valueOf(t.Text);
+                case TokenKind.Func:
+                    pos += 3;                                    // (、明細欄位、) 在 Tokenize 檢查過了
+                    return aggregateOf(t.Text, tokens[pos - 2].Text);
                 case TokenKind.LParen:
                     decimal value = Expression();
                     if (Peek is not { Kind: TokenKind.RParen }) throw new FormatException("公式的括號沒有成對");

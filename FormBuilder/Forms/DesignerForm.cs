@@ -3,8 +3,16 @@ namespace FormBuilder;
 /// <summary>
 /// 後台設計視窗：連線資料庫 → 選資料表 → 把欄位拖到畫面上 → 存成畫面定義檔（JSON）給使用者使用
 /// </summary>
-public partial class DesignerForm : Form
+public partial class DesignerForm : Form, IPickerHost
 {
+    // 屬性面板「開窗畫面」的設定視窗：回傳值可以填進畫面上的欄位，相對路徑以目前畫面的資料夾為準
+    IEnumerable<string> IPickerHost.PickerLocalColumns => def.Fields.Where(f => !f.IsTextLabel).Select(f => f.Column);
+    string IPickerHost.PickerFolder => ButtonRunner.FolderOf(currentFilePath);
+    // 傳入參數的 @名稱：畫面上的欄位（含文字標籤），再來是目前這筆資料（單頭清單的欄位）
+    IEnumerable<string> IPickerHost.ParamColumns => def.Fields.Select(f => f.Column)
+        .Concat(def.Grids.Where(g => g.IsMasterList).SelectMany(g => g.Columns).Select(c => c.Column));
+    void IPickerHost.PickerChanged() => propertyGrid.Refresh();
+
     private FormDefinition def = new();
     private List<ColumnInfo> defTableColumns = new();      // 畫面所屬資料表的全部欄位（用來提醒漏放的必填欄位）
     private string currentFilePath;
@@ -42,6 +50,15 @@ public partial class DesignerForm : Form
         if (!SysContext.Active) miPublish.ToolTipText = miOpenPublished.ToolTipText = "從 ERP Studio 主選單（系統管理 → 畫面設計）開啟時才能用";
         miPublish.Click += (s, e) => Publish();
         miOpenPublished.Click += (s, e) => OpenPublished();
+        // 「儲存並發布」放在存檔旁邊，存檔後直接發布（同「發布到系統」）
+        var miSavePublish = new ToolStripMenuItem("儲存並發布")
+        {
+            Enabled = SysContext.Active,
+            ShortcutKeys = Keys.Control | Keys.Shift | Keys.P,
+            ToolTipText = SysContext.Active ? "存檔後直接發布到系統資料庫，使用者馬上看得到最新版" : miPublish.ToolTipText,
+        };
+        miSavePublish.Click += (s, e) => Publish();
+        btnFileMenu.DropDownItems.Insert(btnFileMenu.DropDownItems.IndexOf(btnSaveAs) + 1, miSavePublish);
         btnFileMenu.DropDownItems.Add(new ToolStripSeparator());
         btnFileMenu.DropDownItems.Add(miOpenPublished);
         btnFileMenu.DropDownItems.Add(miPublish);
@@ -88,6 +105,7 @@ public partial class DesignerForm : Form
             rightSplit.SplitterDistance = Math.Max(200, rightSplit.Width - 300);
             leftSplit.SplitterDistance = (int)(leftSplit.Height * 0.6);
         };
+        SetupPanelSplitters();
 
         // ---- 事件 ----
         txtTableFilter.TextChanged += (s, e) => FillTableList();
@@ -200,6 +218,41 @@ public partial class DesignerForm : Form
             return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ================= 左右面板寬度 =================
+
+    /// <summary>
+    /// 左邊（資料表 / 工具箱 / 欄位屬性）、右邊（屬性）面板和畫面之間的分隔線看得到、可以拖曳調整寬度；
+    /// 工具列「左側面板」「屬性面板」可以整個隱藏，讓設計畫面看到全貌
+    /// </summary>
+    private void SetupPanelSplitters()
+    {
+        foreach (var split in new[] { mainSplit, rightSplit, leftSplit })
+        {
+            split.SplitterWidth = 6;
+            split.BackColor = SystemColors.ControlDark;           // SplitContainer 的底色就是分隔線的顏色
+            split.Panel1.BackColor = split.Panel2.BackColor = SystemColors.Control;
+            split.Panel1MinSize = split.Panel2MinSize = 80;
+        }
+        mainSplit.Panel1MinSize = 150;                            // 左側面板太窄時資料表清單看不到字
+        rightSplit.Panel2MinSize = 150;
+
+        var btnLeftPanel = new ToolStripButton("左側面板")
+        {
+            CheckOnClick = true, Checked = true, Alignment = ToolStripItemAlignment.Right,
+            ToolTipText = "顯示 / 隱藏左邊的資料表、工具箱、欄位屬性（分隔線也可以直接拖曳調整寬度）",
+        };
+        var btnPropertyPanel = new ToolStripButton("屬性面板")
+        {
+            CheckOnClick = true, Checked = true, Alignment = ToolStripItemAlignment.Right,
+            ToolTipText = "顯示 / 隱藏右邊的屬性面板（分隔線也可以直接拖曳調整寬度）",
+        };
+        btnLeftPanel.CheckedChanged += (s, e) => mainSplit.Panel1Collapsed = !btnLeftPanel.Checked;
+        btnPropertyPanel.CheckedChanged += (s, e) => rightSplit.Panel2Collapsed = !btnPropertyPanel.Checked;
+        // 靠右的項目照加入順序由右往左排
+        toolStrip.Items.Add(btnPropertyPanel);
+        toolStrip.Items.Add(btnLeftPanel);
     }
 
     // ================= 單頭清單的清單 SQL =================
@@ -1384,6 +1437,7 @@ public partial class DesignerForm : Form
     /// <summary>畫面上所有的按鈕（主畫面 + 編輯視窗），欄位的開窗選取也當成「開啟畫面」按鈕</summary>
     internal static List<ButtonDefinition> AllButtons(FormDefinition form) =>
         form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
+            .Concat(form.ColumnButtons())                                                                                  // Grid 上的自訂按鈕欄位
             .Concat(form.Fields.Select(ButtonRunner.PickerButton))
             .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
             .Concat(form.Grids.Select(g => ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams)))                  // 清單的雙擊開啟畫面
@@ -1504,6 +1558,7 @@ public partial class DesignerForm : Form
         try
         {
             def.Save(currentFilePath);
+            propertyGrid.Refresh();                          // 開窗畫面等路徑存檔時改成相對路徑了
             UpdateStatus("已存檔 " + Path.GetFileName(currentFilePath));
         }
         catch (Exception ex)

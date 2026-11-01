@@ -23,6 +23,8 @@ public partial class GridColumnsDialog : Form
     private readonly HashSet<string> lockedAliases = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>單頭清單：單頭已經用掉的欄位名稱（JOIN 帶進來的欄位不能重複）</summary>
     private readonly List<string> usedNames = new();
+    /// <summary>自訂按鈕欄位改過的按鈕動作（按「確定」才寫回欄位）</summary>
+    private readonly Dictionary<GridColumnDefinition, ButtonDefinition> editedButtons = new();
 
     /// <param name="connectionString">「JOIN 其他資料表」、「編輯視窗版面」設計器的「資料表」頁籤要用的連線字串</param>
     /// <param name="forEditList">true = 設定編輯視窗上的明細清單（沒有「編輯視窗版面」按鈕）</param>
@@ -51,7 +53,7 @@ public partial class GridColumnsDialog : Form
         linkTable.Columns.Add("Detail", typeof(string));
         foreach (var (master, detail) in grid.Links) linkTable.Rows.Add(master, detail);
         colMaster.Items.AddRange(masterColumns.Union(grid.Links.Select(l => l.Master)).Distinct().OrderBy(n => n).ToArray());
-        colDetail.Items.AddRange(grid.Columns.Where(c => !c.IsJoin).Select(c => c.Column).Union(grid.Links.Select(l => l.Detail)).Distinct().ToArray());
+        colDetail.Items.AddRange(grid.Columns.Where(c => !c.IsJoin && !c.ScreenOnly).Select(c => c.Column).Union(grid.Links.Select(l => l.Detail)).Distinct().ToArray());
         dgvLinks.DataSource = linkTable;
         linkGroup.Visible = !grid.IsMasterList;            // 單頭清單就是單頭自己，不需要關聯欄位
 
@@ -66,6 +68,12 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("Source", typeof(string));
         columnTable.Columns.Add("CellType", typeof(string));
         columnTable.Columns.Add("CellOptions", typeof(string));
+        columnTable.Columns.Add("Formula", typeof(string));
+        columnTable.Columns.Add("Decimals", typeof(string));
+        columnTable.Columns.Add("AfterSelect", typeof(string));          // 執行後動作的 SQL 摘要（顯示用）
+        columnTable.Columns.Add("AfterSql", typeof(string));
+        columnTable.Columns.Add("AfterParams", typeof(string));
+        columnTable.Columns.Add("AfterReturn", typeof(string));
         foreach (var c in workColumns) AddColumnRow(c);
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
@@ -76,19 +84,63 @@ public partial class GridColumnsDialog : Form
         dgvColumns.CellBeginEdit += (s, e) =>
         {
             if (e.RowIndex < 0 || Convert.ToString(dgvColumns.Rows[e.RowIndex].Cells[colSource.Index].Value) == "") return;
-            if (e.ColumnIndex == colIsKey.Index || e.ColumnIndex == colNoEntry.Index) e.Cancel = true;
+            // 自訂文字框 / 數字框可以設公式、小數位數
+            if (IsCustomText(ColumnAt(e.RowIndex)) && (e.ColumnIndex == colFormula.Index || e.ColumnIndex == colDecimals.Index)) return;
+            if (e.ColumnIndex == colIsKey.Index || e.ColumnIndex == colNoEntry.Index || e.ColumnIndex == colFormula.Index || e.ColumnIndex == colDecimals.Index) e.Cancel = true;
+            // 自訂欄位：類型建立時就決定了；「選項 / 格式」只有按鈕用來改按鈕文字
+            if (ColumnAt(e.RowIndex) is { IsCustom: true } c &&
+                (e.ColumnIndex == colCellType.Index || e.ColumnIndex == colCellOptions.Index && c.CellType != GridCellKind.按鈕))
+                e.Cancel = true;
+        };
+        // 「按鈕」只給自訂欄位用，資料表的欄位選了就改回自動
+        dgvColumns.CellValueChanged += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != colCellType.Index || ColumnAt(e.RowIndex) is not { IsCustom: false }) return;
+            if (Convert.ToString(dgvColumns.Rows[e.RowIndex].Cells[e.ColumnIndex].Value) != nameof(GridCellKind.按鈕)) return;
+            BeginInvoke(() => columnTable.Rows[e.RowIndex]["CellType"] = nameof(GridCellKind.自動));
+            MessageBox.Show("「按鈕」只能用在自訂欄位，請按「新增自訂欄位…」加一個按鈕欄位。", "提醒");
         };
         dgvColumns.CellMouseClick += (s, e) =>
         {
             if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
-            string column = Convert.ToString(dgvColumns.Rows[e.RowIndex].Cells[colColumn.Index].Value);
-            var c = workColumns.FirstOrDefault(x => x.Column == column);
-            if (c == null || !c.IsJoin) return;
+            var c = ColumnAt(e.RowIndex);
+            if (c == null || !c.IsJoin && !c.IsCustom) return;
             dgvColumns.CurrentCell = dgvColumns[e.ColumnIndex, e.RowIndex];
+            if (c.IsCustom)
+            {
+                miEditButton.Visible = c.CellType == GridCellKind.按鈕;
+                miEditValueSql.Visible = IsCustomText(c);
+                ctxCustom.Show(Cursor.Position);
+                return;
+            }
             contextAlias = c.JoinAlias;
             ctxJoin.Show(Cursor.Position);
         };
         miRemoveJoin.Click += (s, e) => RemoveJoin(contextAlias);
+
+        // ---- 自訂欄位：勾選框、按鈕、日期選擇，不是資料表的欄位（不查詢、不存檔）----
+        btnCustom.Click += (s, e) => AddCustom();
+        miEditButton.Click += (s, e) => EditButton(CurrentColumn());
+        miRemoveCustom.Click += (s, e) => RemoveCustom(CurrentColumn());
+        miEditValueSql.Click += (s, e) => EditValueSql(CurrentColumn());
+        ctxCustom.Items.AddRange(new ToolStripItem[] { miEditButton, miEditValueSql, miRemoveCustom });
+        dgvColumns.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex == colFormula.Index)
+            {
+                EditFormula(e.RowIndex);
+                return;
+            }
+            if (e.RowIndex >= 0 && e.ColumnIndex == colAfterSelect.Index)
+            {
+                EditAfterSelect(e.RowIndex);
+                return;
+            }
+            if (e.RowIndex >= 0 && ColumnAt(e.RowIndex) is { IsCustom: true, CellType: GridCellKind.按鈕 } c && e.ColumnIndex != colHeader.Index && e.ColumnIndex != colCellOptions.Index)
+                EditButton(c);
+            else if (e.RowIndex >= 0 && ColumnAt(e.RowIndex) is { } t && IsCustomText(t) && e.ColumnIndex != colHeader.Index && e.ColumnIndex != colDecimals.Index)
+                EditValueSql(t);
+        };
 
         // ---- 調整欄位順序：決定 Grid 的欄位由左到右的順序（編輯視窗「重新排列成一欄」也照這個順序）----
         foreach (DataGridViewColumn col in dgvColumns.Columns) col.SortMode = DataGridViewColumnSortMode.NotSortable;   // 點標題排序會跟移動打架
@@ -144,18 +196,135 @@ public partial class GridColumnsDialog : Form
             columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column)?.Delete();
         }
         columnTable.AcceptChanges();
+        // 版面設計器也可以改「執行後動作」（同一個設定），以版面設計器存的為準
+        foreach (DataRow row in columnTable.Rows)
+        {
+            if (workColumns.FirstOrDefault(x => x.Column == (string)row["Column"]) is not { } c) continue;
+            row["AfterSql"] = (object)c.EditAfterSelectSql ?? DBNull.Value;
+            row["AfterParams"] = (object)c.EditAfterSelectParams ?? DBNull.Value;
+            row["AfterReturn"] = (object)c.EditAfterSelectReturn ?? DBNull.Value;
+            row["AfterSelect"] = (object)AfterSelectSummary(c.EditAfterSelectSql) ?? DBNull.Value;
+        }
+    }
+
+    private readonly ContextMenuStrip ctxCustom = new();
+    private readonly ToolStripMenuItem miEditButton = new("設定按鈕動作…");
+    private readonly ToolStripMenuItem miRemoveCustom = new("移除這個自訂欄位");
+    private readonly ToolStripMenuItem miEditValueSql = new("設定顯示資料的 SQL…");
+    /// <summary>自訂文字框 / 數字框改過的顯示 SQL（按「確定」才寫回欄位）</summary>
+    private readonly Dictionary<GridColumnDefinition, string> editedValueSql = new();
+
+    /// <summary>自訂的文字框 / 數字框：只顯示資料，值由顯示 SQL 或公式帶出來</summary>
+    private static bool IsCustomText(GridColumnDefinition c) => c is { IsCustom: true, CellType: GridCellKind.文字框 };
+
+    /// <summary>自訂文字框 / 數字框：設定顯示資料的 SQL（@欄位 取同一列）</summary>
+    private void EditValueSql(GridColumnDefinition c)
+    {
+        if (!IsCustomText(c)) return;
+        dgvColumns.EndEdit();
+        string sql = editedValueSql.TryGetValue(c, out var edited) ? edited : c.ValueSql;
+        var rowColumns = workColumns.Where(x => x != c && !(x.IsCustom && x.CellType == GridCellKind.按鈕)).Select(x => x.Column);
+        if (!CustomColumnDialog.EditValueSql(this, c.Header ?? c.Column, ref sql, rowColumns)) return;
+        editedValueSql[c] = sql;
+        var row = columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column);
+        if (row != null) row["Source"] = CustomSource(c, sql);
+    }
+
+    /// <summary>自訂欄位在「來源」欄顯示的說明</summary>
+    private static string CustomSource(GridColumnDefinition c, string valueSql) =>
+        IsCustomText(c) && !string.IsNullOrWhiteSpace(valueSql) ? "自訂欄位，SQL：" + AfterSelectSummary(valueSql) : "自訂欄位（不查詢、不存檔）";
+
+    /// <summary>清單第 rowIndex 列對應的欄位</summary>
+    private GridColumnDefinition ColumnAt(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= dgvColumns.Rows.Count) return null;
+        string column = Convert.ToString(dgvColumns.Rows[rowIndex].Cells[colColumn.Index].Value);
+        return workColumns.FirstOrDefault(x => x.Column == column);
+    }
+
+    private GridColumnDefinition CurrentColumn() => dgvColumns.CurrentCell == null ? null : ColumnAt(dgvColumns.CurrentCell.RowIndex);
+
+    /// <summary>新增自訂欄位（勾選框、按鈕、日期選擇），加到清單最後面；按鈕接著設定動作</summary>
+    private void AddCustom()
+    {
+        dgvColumns.EndEdit();
+        using var dlg = new CustomColumnDialog(workColumns.Select(c => c.Column).Concat(usedNames));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var c = dlg.Column;
+        workColumns.Add(c);
+        AddColumnRow(c);
+        dgvColumns.CurrentCell = dgvColumns[colHeader.Index, dgvColumns.Rows.Count - 1];
+        if (c.CellType == GridCellKind.按鈕) EditButton(c);
+    }
+
+    private void EditButton(GridColumnDefinition c)
+    {
+        if (c is not { IsCustom: true, CellType: GridCellKind.按鈕 }) return;
+        dgvColumns.EndEdit();
+        var rowColumns = workColumns.Where(x => x.CellType != GridCellKind.按鈕 || !x.IsCustom).Select(x => x.Column);
+        var edited = CustomColumnDialog.EditButton(this, editedButtons.TryGetValue(c, out var b) ? b : c.Button, c.Header ?? c.Column, rowColumns);
+        if (edited != null) editedButtons[c] = edited;
+    }
+
+    /// <summary>公式編輯視窗：左邊列出同一列的其他欄位（按鈕欄位除外）</summary>
+    private void EditFormula(int rowIndex)
+    {
+        var c = ColumnAt(rowIndex);
+        if (c == null || c.IsJoin || c.IsCustom && !IsCustomText(c)) return;     // JOIN、自訂欄位（文字框 / 數字框除外）不能設公式
+        dgvColumns.EndEdit();
+        var fields = columnTable.Rows.Cast<DataRow>()
+            .Where(r => (string)r["Column"] != c.Column)
+            .Select(r => workColumns.First(x => x.Column == (string)r["Column"]))
+            .Where(x => !(x.IsCustom && x.CellType == GridCellKind.按鈕))
+            .Select(x => (x.Column, x.Header ?? x.Column));
+        using var dlg = new FormulaDialog(Convert.ToString(columnTable.Rows[rowIndex]["Formula"]), fields, "同一列的欄位（雙擊插入）");
+        if (dlg.ShowDialog(this) == DialogResult.OK) columnTable.Rows[rowIndex]["Formula"] = dlg.Formula == "" ? DBNull.Value : dlg.Formula;
+    }
+
+    /// <summary>執行後動作：這一格的值改了就執行 SQL，查出來的值帶進同一列（跟編輯視窗版面的「執行後動作」是同一個設定）</summary>
+    private void EditAfterSelect(int rowIndex)
+    {
+        var c = ColumnAt(rowIndex);
+        if (c == null || c.IsJoin || c.IsCustom || c.NoEntry) return;      // 不能輸入的欄位不會改值
+        dgvColumns.EndEdit();
+        var row = columnTable.Rows[rowIndex];
+        var rowColumns = workColumns.Where(x => !(x.IsCustom && x.CellType == GridCellKind.按鈕)).Select(x => x.Column);
+        using var dlg = new AfterSelectDialog(c.Header ?? c.Column, Convert.ToString(row["AfterSql"]), Convert.ToString(row["AfterParams"]),
+                                              Convert.ToString(row["AfterReturn"]), rowColumns);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        row["AfterSql"] = (object)dlg.Sql ?? DBNull.Value;
+        row["AfterParams"] = (object)dlg.Params ?? DBNull.Value;
+        row["AfterReturn"] = (object)dlg.Return ?? DBNull.Value;
+        row["AfterSelect"] = (object)AfterSelectSummary(dlg.Sql) ?? DBNull.Value;
+    }
+
+    private static string AfterSelectSummary(string sql) =>
+        string.IsNullOrWhiteSpace(sql) ? null : string.Join(" ", sql.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()));
+
+    private void RemoveCustom(GridColumnDefinition c)
+    {
+        if (c is not { IsCustom: true }) return;
+        if (MessageBox.Show($"確定要移除自訂欄位「{c.Header ?? c.Column}」嗎？", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        dgvColumns.EndEdit();
+        workColumns.Remove(c);
+        editedButtons.Remove(c);
+        editedValueSql.Remove(c);
+        columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => (string)r["Column"] == c.Column)?.Delete();
+        columnTable.AcceptChanges();
     }
 
     private void AddColumnRow(GridColumnDefinition c)
     {
-        string type = c.MaxLength > 0 ? $"{c.DataType}({c.MaxLength})" : c.MaxLength == -1 ? $"{c.DataType}(max)" : c.DataType;
-        string source = "";
+        string type = c.IsCustom ? "（自訂）" : c.MaxLength > 0 ? $"{c.DataType}({c.MaxLength})" : c.MaxLength == -1 ? $"{c.DataType}(max)" : c.DataType;
+        string source = c.IsCustom ? CustomSource(c, c.ValueSql) : "";
         if (c.IsJoin)
         {
             var join = workJoins.FirstOrDefault(j => j.Alias == c.JoinAlias);
             source = join == null ? $"單頭 JOIN {c.JoinAlias}：{c.SourceColumn}" : $"{c.JoinAlias}：{join.TableName}.{c.SourceColumn}";   // 單頭清單上的是單頭 JOIN 的欄位
         }
-        columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions);
+        columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions,
+                             c.Formula, c.Decimals >= 0 ? c.Decimals.ToString() : null,
+                             AfterSelectSummary(c.EditAfterSelectSql), c.EditAfterSelectSql, c.EditAfterSelectParams, c.EditAfterSelectReturn);
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -164,7 +333,7 @@ public partial class GridColumnsDialog : Form
         dgvColumns.EndEdit();
         int n = 1;
         while (workJoins.Any(j => j.Alias == $"J{n}")) n++;
-        var localColumns = workColumns.Where(c => !c.IsJoin)
+        var localColumns = workColumns.Where(c => !c.IsJoin && !c.ScreenOnly)
             .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, IsPrimaryKey = c.IsKey }).ToList();
         using var dlg = new JoinDialog(connectionString, $"J{n}", localColumns, workColumns.Select(c => c.Column).Concat(usedNames));
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -249,10 +418,20 @@ public partial class GridColumnsDialog : Form
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(row["Header"])) ? c.Column : (string)row["Header"];
             c.Width = Math.Clamp(row["Width"] is int w ? w : 100, 30, 800);
             // JOIN 帶進來的欄位一律只顯示、不是主鍵（不能寫回關聯資料表）
-            c.IsKey = !c.IsJoin && (bool)row["IsKey"];
-            c.NoEntry = c.IsJoin || (bool)row["NoEntry"];
-            c.CellType = Enum.TryParse<GridCellKind>(Convert.ToString(row["CellType"]), out var kind) ? kind : GridCellKind.自動;
+            // 自訂欄位一律不存檔、類型不變
+            c.IsKey = !c.IsJoin && !c.IsCustom && (bool)row["IsKey"];
+            c.NoEntry = c.IsJoin || c.IsCustom || (bool)row["NoEntry"];
+            if (!c.IsCustom)
+                c.CellType = Enum.TryParse<GridCellKind>(Convert.ToString(row["CellType"]), out var kind) && kind != GridCellKind.按鈕 ? kind : GridCellKind.自動;
+            if (editedButtons.TryGetValue(c, out var button)) c.Button = button;
             c.CellOptions = string.IsNullOrWhiteSpace(Convert.ToString(row["CellOptions"])) ? null : Convert.ToString(row["CellOptions"]).Trim();
+            if (editedValueSql.TryGetValue(c, out var valueSql)) c.ValueSql = valueSql;
+            c.Formula = c.IsJoin || c.IsCustom && !IsCustomText(c) || string.IsNullOrWhiteSpace(Convert.ToString(row["Formula"])) ? null : Convert.ToString(row["Formula"]).Trim();
+            c.EditAfterSelectSql = Convert.ToString(row["AfterSql"]) is { Length: > 0 } sql ? sql : null;
+            c.EditAfterSelectParams = Convert.ToString(row["AfterParams"]) is { Length: > 0 } ps ? ps : null;
+            c.EditAfterSelectReturn = Convert.ToString(row["AfterReturn"]) is { Length: > 0 } ret ? ret : null;
+            c.Decimals = int.TryParse(Convert.ToString(row["Decimals"]), out int decimals) && decimals >= 0 ? Math.Min(decimals, 10) : -1;
+            if (c.IsCustom && c.Button != null) c.Button.Text = GridCells.ButtonText(c);     // 確認訊息、錯誤提醒的標題用按鈕文字
         }
         // 已經設計過編輯視窗版面時，新帶進來的欄位預設不放進編輯視窗（不然會全部疊在左上角），要用的話到版面設計器拖進去
         if (grid.HasEditLayout)

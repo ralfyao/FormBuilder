@@ -341,6 +341,9 @@ public class RoundedInputPreview : Label
     /// <summary>true = 只畫文字、不畫圓角框（文字標籤）</summary>
     public bool Plain { get; set; }
 
+    /// <summary>Plain 時文字的水平對齊（文字標籤的「文字對齊」）</summary>
+    public LabelAlign PlainAlign { get; set; }
+
     public RoundedInputPreview()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -357,8 +360,9 @@ public class RoundedInputPreview : Label
             if (!Fill.IsEmpty) using (var brush = new SolidBrush(Fill)) e.Graphics.FillRectangle(brush, ClientRectangle);
             using var pen = new Pen(Color.Silver) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };   // 設計時看得到範圍
             e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            var align = PlainAlign switch { LabelAlign.置中 => TextFormatFlags.HorizontalCenter, LabelAlign.靠右 => TextFormatFlags.Right, _ => TextFormatFlags.Left };
             TextRenderer.DrawText(e.Graphics, Text, Font, Rectangle.Inflate(ClientRectangle, -2, 0), ForeColor,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                align | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
             return;
         }
         RoundedStyle.DrawBox(e.Graphics, ClientRectangle, Fill.IsEmpty ? SystemColors.Window : Fill, RoundedStyle.BorderColor);

@@ -17,6 +17,12 @@ public class FormulaDialog : Form
 
     /// <param name="fields">可以用的欄位（畫面上的其他欄位）</param>
     public FormulaDialog(string formula, IEnumerable<FieldDefinition> fields)
+        : this(formula, fields.Select(f => (f.Column, f.Label)))
+    {
+    }
+
+    /// <param name="fields">可以用的欄位名稱與標籤（例如 Grid 同一列的其他欄位）</param>
+    public FormulaDialog(string formula, IEnumerable<(string Column, string Label)> fields, string fieldsTitle = "畫面上的欄位（雙擊插入）")
     {
         Text = "公式：欄位名稱和數字做 + - * /，可以用括號";
         Font = new Font("Microsoft JhengHei UI", 9F);
@@ -26,13 +32,13 @@ public class FormulaDialog : Form
         ClientSize = new Size(720, 420);
         var list = fields.ToList();
         knownNames = list.Select(f => f.Column).ToList();
-        foreach (var f in list) lstFields.Items.Add(new FieldItem(f.Column, f.Label));
+        foreach (var (column, label) in list) lstFields.Items.Add(new FieldItem(column, label));
         txtFormula.Text = formula ?? "";
 
         // 左邊：欄位清單（雙擊插入）
         var left = new Panel { Dock = DockStyle.Left, Width = 260, Padding = new Padding(8, 8, 4, 8) };
         left.Controls.Add(lstFields);
-        left.Controls.Add(new Label { Text = "畫面上的欄位（雙擊插入）", Dock = DockStyle.Top, Height = 22 });
+        left.Controls.Add(new Label { Text = fieldsTitle, Dock = DockStyle.Top, Height = 22 });
 
         // 右邊：運算符號按鈕、公式、檢查結果
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 8, 8, 8) };

@@ -283,6 +283,52 @@ public static class ButtonRunner
         return Enumerable.Range(0, rows.Count).Where(i => !passed.Contains(table.Rows[i])).Select(i => rows[i]).ToList();
     }
 
+    /// <summary>
+    /// Grid 自訂按鈕欄位：按下某一列的按鈕。@欄位 先取那一列的值（含自訂勾選框、日期），沒有再交給 fallback（畫面上的欄位等）。
+    /// 依序做 執行前檢查、確認訊息、執行後動作，再做 執行SQL 或 開啟畫面。
+    /// 回傳：true = 有執行 SQL 成功（呼叫端重新讀取資料）；false = 沒執行或失敗；null = 其他動作，交給呼叫端照畫面按鈕執行
+    /// </summary>
+    public static bool? RunRowButton(ButtonDefinition b, DataRow row, Func<string, object> fallback, string sourcePath, IWin32Window owner,
+                                     string connectionString, string formKey = null, Action<IReadOnlyDictionary<string, object>> onResult = null)
+    {
+        if (b == null)
+        {
+            MessageBox.Show("這個按鈕還沒有設定動作（到單身欄位設定，在按鈕欄位上按右鍵設定）。", "提醒");
+            return false;
+        }
+        if (b.Action is not (ButtonAction.執行SQL or ButtonAction.開啟畫面)) return null;
+        object ValueOf(string name) => row.Table.Columns.Contains(name) ? row[name] : fallback?.Invoke(name);
+        if (!string.IsNullOrWhiteSpace(b.PreCheck))
+        {
+            try
+            {
+                if (FailingRows(new[] { row }, b.PreCheck).Count > 0)
+                {
+                    MessageBox.Show(string.IsNullOrWhiteSpace(b.PreCheckMessage) ? $"這一列不符合條件：{b.PreCheck}" : b.PreCheckMessage,
+                                    b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
+            {
+                MessageBox.Show($"按鈕「{b.Text}」的執行前檢查寫法有誤：{ex.Message}", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+        }
+        if (!Confirm(b)) return false;
+        bool changed = false;
+        if (!string.IsNullOrWhiteSpace(b.PreActionSql))
+        {
+            if (!RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, b.PreActionSql, quiet: true)) return false;
+            changed = true;
+        }
+        if (b.Action == ButtonAction.執行SQL)
+            return RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, onResult: onResult) || changed;
+        // 回傳對應（選取視窗）帶回的值交給呼叫端；「存檔後關閉並重新整理」存檔過就算有改資料，讓呼叫端重新讀取
+        OpenForm(b, sourcePath, owner, ValueOf, onReturn: onResult, onSaved: _ => changed = true, connectionString: connectionString);
+        return changed;
+    }
+
     /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數不算）</summary>
     public static IEnumerable<string> ParameterNames(string sql) =>
         Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
@@ -598,11 +644,27 @@ public static class ButtonRunner
         }
     }
 
-    /// <summary>檔名轉成完整路徑：只寫檔名時放在 folder（畫面定義檔的資料夾）；空白回傳 null</summary>
+    /// <summary>
+    /// 檔名轉成完整路徑：只寫檔名或相對路徑時以 folder（畫面定義檔的資料夾）為準；空白回傳 null。
+    /// 完整路徑在這台電腦上找不到時（從別台電腦搬過來的舊畫面），改找 folder 裡同檔名的檔案
+    /// </summary>
     public static string ResolvePath(string file, string folder)
     {
         if (string.IsNullOrWhiteSpace(file)) return null;
-        return Path.IsPathRooted(file) ? file : Path.Combine(folder ?? FormDefinition.DefaultFolder, file);
+        folder ??= FormDefinition.DefaultFolder;
+        if (!Path.IsPathRooted(file)) return Path.GetFullPath(Path.Combine(folder, file));
+        if (File.Exists(file) || File.Exists(file + ".json")) return file;
+        string local = Path.Combine(folder, Path.GetFileName(file));
+        return File.Exists(local) || File.Exists(local + ".json") ? local : file;
+    }
+
+    /// <summary>完整路徑改成相對於 folder 的相對路徑（同一資料夾就只剩檔名）；不同磁碟時保留完整路徑，空白回傳 null</summary>
+    public static string RelativePath(string file, string folder)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return null;
+        if (!Path.IsPathRooted(file) || string.IsNullOrEmpty(folder)) return file;
+        if (!string.Equals(Path.GetPathRoot(Path.GetFullPath(file)), Path.GetPathRoot(Path.GetFullPath(folder)), StringComparison.OrdinalIgnoreCase)) return file;
+        return Path.GetRelativePath(folder, file);
     }
 
     /// <summary>畫面定義檔所在的資料夾（還沒存檔的畫面用預設的 Forms 資料夾）</summary>

@@ -53,6 +53,8 @@ public partial class RecordNavigatorDialog : Form
     private readonly List<EditListView> listViews = new();
     private readonly string connectionString;
     private readonly string sourcePath;
+    /// <summary>按確定時存一起輸入的明細；false = 預覽，只檢查不存</summary>
+    private readonly bool saveLists;
     /// <summary>生效欄位；null = 不使用生效 / 取消生效</summary>
     private readonly string effectiveColumn;
 
@@ -60,8 +62,9 @@ public partial class RecordNavigatorDialog : Form
     public RecordNavigatorDialog(IRecordNavigator navigator, string title, List<FieldDefinition> editFields, Size? bodySize = null,
                                  string connectionString = null, List<ButtonDefinition> buttons = null, string sourcePath = null,
                                  string effectiveColumn = null, List<EditListDefinition> lists = null, Color backColor = default,
-                                 Font font = null, List<FieldDefinition> textLabels = null)
+                                 Font font = null, List<FieldDefinition> textLabels = null, bool saveLists = true)
     {
+        this.saveLists = saveLists;
         InitializeComponent();
         body.BackColor = ColorText.BackOrDefault(backColor);               // 後台設定的編輯視窗底色（沒設定 = 預設灰色）
         if (font != null) body.Font = font;                                // 畫面設定的字型、大小
@@ -113,6 +116,8 @@ public partial class RecordNavigatorDialog : Form
         }
         EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
         foreach (var view in listViews) view.HookOpenForm(sourcePath, this, ValueOf, connectionString);   // 雙擊一列開啟畫面
+        foreach (var view in listViews) view.MasterValueOf = ValueOf;          // 新增、修改時直接輸入明細：預設值、執行後動作取視窗上的值
+        foreach (var view in listViews) view.Changed += RunListAfterChange;    // 明細有變動：清單的執行後動作（例如 AMOUNT=SUM(金額)）
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());
@@ -136,6 +141,9 @@ public partial class RecordNavigatorDialog : Form
     /// <summary>Esc：輸入中 = 取消，瀏覽時 = 關閉視窗；輸入中 Enter 跳到下一個輸入框，最後一個輸入框再按 = 確定</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        // 游標在可以輸入的明細清單裡時不攔截，讓 Enter / Esc 照常在清單裡換列、取消儲存格編輯
+        if (mode != EditMode.Browse && listViews.Any(v => v.Editable && v.Grid.ContainsFocus) && keyData is Keys.Enter or Keys.Escape)
+            return base.ProcessCmdKey(ref msg, keyData);
         if (keyData == Keys.Escape)
         {
             if (mode == EditMode.Browse) Close();
@@ -181,6 +189,21 @@ public partial class RecordNavigatorDialog : Form
     {
         foreach (var view in listViews)
             view.Reload(col => row != null && row.Table.Columns.Contains(col) ? row[col] : null);
+    }
+
+    /// <summary>
+    /// 明細清單的「執行後動作」：一行一組「視窗欄位=公式」，公式可以用 SUM(明細欄位) 等彙總函數和視窗上的欄位。
+    /// 文字標籤一直顯示計算結果；資料表的欄位只在新增、修改時填（按確定一起存），瀏覽時顯示資料庫裡存的值
+    /// </summary>
+    private void RunListAfterChange(EditListView view)
+    {
+        GridCells.RunAfterChange(view.Definition.AfterChange, inputs, mode != EditMode.Browse, ValueOf, (function, column) =>
+        {
+            // 明細欄位：先找這個清單，沒有再找其他清單
+            var source = view.HasColumn(column) ? view : listViews.FirstOrDefault(v => v.HasColumn(column));
+            if (source == null) throw new FormatException($"明細清單沒有「{column}」");
+            return source.Aggregate(function, column);
+        });
     }
 
     private void SetMode(EditMode newMode)
@@ -229,6 +252,8 @@ public partial class RecordNavigatorDialog : Form
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, nav.Permission)       // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action));
+        foreach (var view in listViews) view.SetEditing(!browsing);        // 新增、修改時明細清單也可以輸入，按確定跟單頭一起存
+        foreach (var view in listViews) RunListAfterChange(view);          // 進入新增、修改時把加總填進資料表欄位
         if (!browsing) InputHelper.FocusFirst(focusOrder);                 // 游標放在第一個可以輸入的欄位（照畫面位置）
     }
 
@@ -437,8 +462,34 @@ public partial class RecordNavigatorDialog : Form
             return;
         }
 
-        bool ok = mode == EditMode.Insert ? nav.Insert(values) : nav.Update(values);
+        if (listViews.Any(v => !v.ValidatePending())) return;          // 一起輸入的明細先檢查，單頭才不會存了一半
+
+        // 存明細時關聯欄位取單頭的值：存好後讀回來的這筆（自動編號）優先，沒有就用剛輸入的值
+        bool inserting = mode == EditMode.Insert;
+        object MasterValue(string name)
+        {
+            DataRow row = nav.CurrentRow;
+            if (row != null && row.Table.Columns.Contains(name) && row[name] != DBNull.Value) return row[name];
+            var key = values.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return key != null ? values[key] : ValueOf(name);
+        }
+        bool ok = inserting ? nav.Insert(values) : nav.Update(values);
         if (!ok) return;                                   // 失敗時留在輸入狀態，資料還在，可以修正後再按確定
+        if (saveLists)
+        {
+            try
+            {
+                foreach (var view in listViews.Where(v => v.Editable)) view.SavePending(MasterValue);
+            }
+            catch (Exception ex)
+            {
+                // 單頭已經存好：改成修改這筆，明細的輸入還在，修正後再按確定
+                MessageBox.Show("單頭已存檔，明細儲存失敗（明細全部未存）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                mode = EditMode.Modify;
+                Text = $"修改：{baseTitle}";
+                return;
+            }
+        }
         mode = EditMode.Browse;                            // 先切回瀏覽，ShowRecord 才不會被當成放棄輸入
         ShowRecord();
         SetMode(EditMode.Browse);

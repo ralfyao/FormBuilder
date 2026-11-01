@@ -67,6 +67,12 @@ public partial class MainMenuForm : Form
                 {
                     ToolTipText = "把匯出的資料夾裡的畫面、列印樣板發布到系統，照匯出時的選單架構放回選單",
                 });
+        if (user.IsAdmin)
+            btnAdmin.DropDownItems.Insert(btnAdmin.DropDownItems.IndexOf(miDesigner) + 4,
+                new ToolStripMenuItem("匯入單筆 JSON 檔…", null, (s, e) => ImportFormFiles())
+                {
+                    ToolTipText = "選一個（或按住 Ctrl 選幾個）畫面定義檔（*.json）發布到系統，新的畫面放在「未放進選單的畫面」",
+                });
         // 管理者：選單上按右鍵 → 開啟 / 設計這個畫面
         if (user.IsAdmin)
         {
@@ -84,6 +90,7 @@ public partial class MainMenuForm : Form
             nodeMenu.Items.Add("全部發布…", null, (s, e) => PublishAll());
             var miExport = nodeMenu.Items.Add("匯出 JSON…", null, (s, e) => ExportSelected());
             nodeMenu.Items.Add("匯入 JSON…", null, (s, e) => ImportForms());
+            nodeMenu.Items.Add("匯入單筆 JSON 檔…", null, (s, e) => ImportFormFiles());
             nodeMenu.Opening += (s, e) =>
             {
                 // 在空白處按右鍵：取消選取（新增資料夾會加在最上層）
@@ -501,7 +508,24 @@ public partial class MainMenuForm : Form
             Description = "匯入：選擇匯出的資料夾（裡面的畫面、列印樣板發布到系統，照選單架構檔放回選單）",
             UseDescriptionForTitle = true,
         };
-        if (pick.ShowDialog(this) == DialogResult.OK) ImportFormsFrom(pick.SelectedPath);
+        if (pick.ShowDialog(this) == DialogResult.OK)
+            ImportFormsFrom(Directory.GetFiles(pick.SelectedPath, "*.json").OrderBy(f => f).ToList(), pick.SelectedPath);
+    }
+
+    /// <summary>匯入單筆：選一個（或幾個）畫面定義檔、列印樣板發布到系統；不照選單架構檔放，新的畫面在「未放進選單的畫面」</summary>
+    private void ImportFormFiles()
+    {
+        if (!SysContext.User.IsAdmin) return;
+        using var pick = new OpenFileDialog
+        {
+            Title = "匯入單筆 JSON 檔",
+            Filter = "畫面定義檔 (*.json)|*.json",
+            Multiselect = true,
+        };
+        if (pick.ShowDialog(this) != DialogResult.OK) return;
+        var files = pick.FileNames.Where(f => !Path.GetFileName(f).Equals(MenuExportFile.FileName, StringComparison.OrdinalIgnoreCase)
+                                              && !f.EndsWith(".menu.json", StringComparison.OrdinalIgnoreCase)).ToList();
+        ImportFormsFrom(files, files.Count == 1 ? Path.GetFileName(files[0]) : $"選取的 {files.Count} 個檔案");
     }
 
     /// <summary>
@@ -509,14 +533,16 @@ public partial class MainMenuForm : Form
     /// 有選單架構檔時，照匯出時的資料夾把畫面放回選單、「未放進選單的畫面」：同名資料夾沿用、沒有就新增，
     /// 已經在選單上的畫面不動，原本的選單其他部分都保留
     /// </summary>
-    private void ImportFormsFrom(string folder)
+    /// <param name="files">要匯入的檔案（資料夾匯入 = 資料夾裡全部的 *.json）</param>
+    /// <param name="folder">訊息上顯示的來源（資料夾或檔名）</param>
+    private void ImportFormsFrom(IReadOnlyList<string> files, string folder)
     {
         var cs = SysContext.Connection;
         var forms = new List<(string Key, string Title, FormDefinition Def)>();
         var prints = new List<(string Key, string Content)>();
         var failed = new List<string>();
         MenuExportFile menu = null;
-        foreach (var file in Directory.GetFiles(folder, "*.json").OrderBy(f => f))
+        foreach (var file in files)
         {
             string name = Path.GetFileName(file);
             try
@@ -539,7 +565,7 @@ public partial class MainMenuForm : Form
         }
         if (forms.Count == 0)
         {
-            MessageBox.Show($"{folder} 裡沒有畫面定義檔。" + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, failed) : ""), "匯入 JSON");
+            MessageBox.Show($"{folder} 沒有畫面定義檔。" + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, failed) : ""), "匯入 JSON");
             return;
         }
 
@@ -630,7 +656,7 @@ public partial class MainMenuForm : Form
         SysContext.ReloadPermissions();
         LoadMenu();
         MessageBox.Show($"已發布 {published} 個，沒有變更 {unchanged} 個" + (skipped > 0 ? $"，保留系統裡的 {skipped} 個" : "") + "。"
-                        + (menu != null ? $"{Environment.NewLine}{placed} 個畫面照選單架構放進選單。" : $"{Environment.NewLine}資料夾裡沒有選單架構檔（{MenuExportFile.FileName}），新的畫面在「未放進選單的畫面」。")
+                        + (menu != null ? $"{Environment.NewLine}{placed} 個畫面照選單架構放進選單。" : $"{Environment.NewLine}沒有選單架構檔（{MenuExportFile.FileName}），新的畫面在「未放進選單的畫面」。")
                         + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "有問題的：" + Environment.NewLine + string.Join(Environment.NewLine, failed.Select(x => "　" + x)) : ""),
                         "匯入 JSON", MessageBoxButtons.OK, failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }

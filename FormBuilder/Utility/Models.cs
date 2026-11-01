@@ -30,6 +30,15 @@ public class FormDefinition
     [Category("畫面"), DisplayName("高度")]
     public int Height { get; set; } = 500;
 
+    [Category("畫面"), DisplayName("工具列按鈕"),
+     Editor(typeof(FlagsCheckEditor), typeof(System.Drawing.Design.UITypeEditor)),
+     Description("按右邊的下拉箭頭勾選執行畫面上方工具列要出現哪些按鈕。只要查詢的畫面可以只留 查詢、首筆至末筆、確定取消、離開；"
+               + "不勾新增 / 修改 / 刪除 / 輸出時，雙擊開的編輯視窗、清單右鍵選單也不能做。全部不勾 = 不顯示工具列")]
+    public ToolbarButtons Toolbar { get; set; } = ToolbarButtonsAll;
+
+    /// <summary>工具列全部的按鈕（預設值；舊的畫面定義檔沒有這個設定時也是全部）</summary>
+    public const ToolbarButtons ToolbarButtonsAll = (ToolbarButtons)511;
+
     // 顏色存成文字（#RRGGBB 或顏色名稱），JSON 才好讀；空白 = 預設的灰色
     [Browsable(false)]
     public string BackColorHtml { get; set; }
@@ -166,8 +175,34 @@ public class FormDefinition
 
     public void Save(string path)
     {
+        string full = Path.GetFullPath(path);
+        MakePathsRelative(ButtonRunner.FolderOf(SourcePath), Path.GetDirectoryName(full));
         File.WriteAllText(path, ToJson());
+        SourcePath = full;
     }
+
+    /// <summary>
+    /// 開窗畫面、開啟畫面、列印樣板的路徑改成相對於畫面定義檔資料夾（newFolder）的相對路徑，程式搬到別台電腦、別的資料夾也找得到；
+    /// 原本就是相對路徑的先依 oldFolder（之前存檔的資料夾）還原，另存到別的資料夾時才不會指錯
+    /// </summary>
+    private void MakePathsRelative(string oldFolder, string newFolder)
+    {
+        string Fix(string file) => ButtonRunner.RelativePath(ButtonRunner.ResolvePath(file?.Trim(), oldFolder), newFolder) ?? file;
+        foreach (var b in Buttons.Concat(Grids.SelectMany(g => g.EditButtons)).Concat(ColumnButtons()))
+        {
+            b.TargetForm = Fix(b.TargetForm);
+            b.PrintTemplate = Fix(b.PrintTemplate);
+        }
+        foreach (var f in Fields) f.PickerForm = Fix(f.PickerForm);
+        foreach (var g in Grids) g.OpenForm = Fix(g.OpenForm);
+        foreach (var l in Grids.SelectMany(g => g.EditLists)) l.OpenForm = Fix(l.OpenForm);
+        foreach (var c in Grids.SelectMany(g => g.Columns)) c.EditPickerForm = Fix(c.EditPickerForm);
+    }
+
+    /// <summary>Grid（含編輯視窗的明細清單）上自訂按鈕欄位的按鈕</summary>
+    public IEnumerable<ButtonDefinition> ColumnButtons() =>
+        Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))
+             .Where(c => c.IsCustom && c.Button != null).Select(c => c.Button);
 
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
 
@@ -249,15 +284,17 @@ public class FieldDefinitionConverter : TypeConverter
         var f = value as FieldDefinition;
         bool hideOwner = f is not { OwnerTable.Length: > 0 };
         bool hideVariable = f is not { IsCalculated: true };       // 變數名稱只有工具箱加入的元件（計算欄位、文字標籤）可以改
+        bool hideAlign = f is not { IsTextLabel: true };            // 文字對齊只有文字標籤有
         return new PropertyDescriptorCollection(all.Cast<PropertyDescriptor>()
             .Where(p => !(hideOwner && p.Name == nameof(FieldDefinition.OwnerTable))
-                     && !(hideVariable && p.Name == nameof(FieldDefinition.VariableName))).ToArray());
+                     && !(hideVariable && p.Name == nameof(FieldDefinition.VariableName))
+                     && !(hideAlign && p.Name == nameof(FieldDefinition.TextAlignment))).ToArray());
     }
 }
 
 /// <summary>畫面上的一個欄位：對應資料表的一個欄位</summary>
 [TypeConverter(typeof(FieldDefinitionConverter))]
-public class FieldDefinition
+public class FieldDefinition : IPickerField
 {
     /// <summary>
     /// 欄位所屬的資料表（Schema.資料表；單頭 JOIN 帶進來的欄位是關聯資料表）。
@@ -339,6 +376,10 @@ public class FieldDefinition
 
     [Category("畫面"), DisplayName("標籤")]
     public string Label { get; set; }
+
+    [Category("畫面"), DisplayName("文字對齊"), DefaultValue(LabelAlign.靠左),
+     Description("文字標籤的文字在框裡靠左、置中或靠右；要跟上下欄位的標籤（靠右）對齊時選靠右，再把框的右緣對齊欄位標籤的右緣")]
+    public LabelAlign TextAlignment { get; set; }
 
     [Category("畫面"), DisplayName("X")]
     public int X { get; set; }
@@ -430,12 +471,15 @@ public class FieldDefinition
     public string AfterShowReturn { get; set; }
 
     [Category("開窗選取"), DisplayName("開窗畫面"),
-     Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
-     Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+     Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。只寫檔名時，會找跟目前畫面同一個資料夾的檔案。"
+               + "存檔時完整路徑會自動改成相對於目前畫面資料夾的相對路徑，程式搬到別台電腦也找得到。"
+               + "按右邊的「…」可以看開窗畫面有哪些欄位，直接選要帶回這個畫面的哪個欄位"),
+     Editor(typeof(PickerFormEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PickerForm { get; set; }
 
     [Category("開窗選取"), DisplayName("傳入參數"),
-     Description("開窗時帶給對方畫面的值（同按鈕的「傳入參數」）：「對方欄位=@本畫面欄位」、「對方欄位=SQL 運算式」或「對方欄位=固定值」，例如：廠商編號=@廠商編號")]
+     Description("開窗時帶給對方畫面的值（同按鈕的「傳入參數」）：「對方欄位=@本畫面欄位」、「對方欄位=SQL 運算式」或「對方欄位=固定值」，例如：廠商編號=@廠商編號"),
+     Editor(typeof(OpenParamsEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PickerParams { get; set; }
 
     [Category("開窗選取"), DisplayName("回傳對應"),
@@ -520,7 +564,7 @@ public class GridDefinition
     [Category("雙擊開啟畫面"), DisplayName("傳入參數"),
      Description("雙擊一列時帶給對方畫面的值，用逗號或換行分隔「對方欄位=值」：@清單欄位（雙擊那一列的值，清單上沒有的取視窗上的欄位），"
                + "例如 QUONO=@QUONO；也可以是 SQL 運算式或固定值（同按鈕的「傳入參數」）。對方畫面上有同名欄位時會自動查詢，對方的 SQL 也可以用 @名稱 取得"),
-     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+     Editor(typeof(OpenParamsEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string OpenParams { get; set; }
 
     [Category("編輯視窗"), DisplayName("存回資料表"),
@@ -543,6 +587,14 @@ public class GridDefinition
     [Category("資料"), DisplayName("關聯欄位"), Description("單頭欄位=單身欄位，多組用逗號分隔，例如：單號=單號")]
     public string LinkText { get; set; } = "";
 
+    [Category("執行後動作"), DisplayName("執行後動作"),
+     Description("Grid 的資料有變動（載入、新增、修改、刪除一列）就計算，結果填進畫面上的欄位或文字標籤：一行一組「畫面欄位=公式」，例如：\n"
+               + "AMOUNT=SUM(金額)\n標籤8=AVG(單價)\n"
+               + "公式可以用 SUM、AVG、COUNT、MAX、MIN、STD（樣本標準差）、STDP（母體標準差），括號裡是 Grid 的欄位；也可以用畫面上的欄位和數字做 + - * /，"
+               + "例如 SUM(金額) * (1 + 稅率 / 100)。資料表的欄位只在新增、修改時填（按確定一起存），文字標籤一直會顯示"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterChange { get; set; }
+
     [Category("畫面"), DisplayName("標題")]
     public string Title { get; set; }
 
@@ -561,6 +613,10 @@ public class GridDefinition
 
     [Category("畫面"), DisplayName("高度")]
     public int Height { get; set; } = 200;
+
+    [Category("畫面"), DisplayName("欄寬符合資料"), DefaultValue(true),
+     Description("True = 執行時查出資料後，每一欄的寬度依標題與畫面上看得到的資料自動調整（太長的最寬 " + "400" + " 點，使用者還是可以拖拉）；False = 照設計時的欄寬")]
+    public bool AutoFitColumns { get; set; } = true;
 
     /// <summary>單身資料表的全部欄位（Visible 決定是否顯示在 Grid 上）；JOIN 帶進來的欄位也在這裡（JoinAlias 不是空的）</summary>
     [Browsable(false)]
@@ -775,6 +831,11 @@ public class EditListDefinition
     [Category("資料"), DisplayName("關聯欄位"), Description("編輯視窗欄位=明細欄位，多組用逗號分隔，例如：廠商編號=廠商編號；有設「上層清單」時，左邊是上層清單的欄位。點一下清單可以用視窗設定")]
     public string LinkText { get; set; } = "";
 
+    [Category("資料"), DisplayName("上層清單"), TypeConverter(typeof(PrintListConverter)),
+     Description("選版面上另一個明細清單（資料表名稱）：點上層清單的一列，這個清單就列出那一列的明細，例如上面報價單單頭、下面報價單明細；"
+               + "這時「關聯欄位」寫「上層清單欄位=明細欄位」。空白 = 依編輯視窗目前這筆列出")]
+    public string ParentList { get; set; }
+
     [Category("畫面"), DisplayName("標題")]
     public string Title { get; set; }
 
@@ -816,17 +877,20 @@ public class EditListDefinition
     [Category("雙擊開啟畫面"), DisplayName("傳入參數"),
      Description("雙擊一列時帶給對方畫面的值，用逗號或換行分隔「對方欄位=值」：@清單欄位（雙擊那一列的值，清單上沒有的取視窗上的欄位），"
                + "例如 QUONO=@QUONO；也可以是 SQL 運算式或固定值（同按鈕的「傳入參數」）。對方畫面上有同名欄位時會自動查詢，對方的 SQL 也可以用 @名稱 取得"),
-     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+     Editor(typeof(OpenParamsEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string OpenParams { get; set; }
+
+    [Category("執行後動作"), DisplayName("執行後動作"),
+     Description("明細有變動（載入、新增、修改、刪除一列）就計算，結果填進視窗上的欄位或文字標籤：一行一組「視窗欄位=公式」，例如：\n"
+               + "AMOUNT=SUM(金額)\n標籤8=AVG(單價)\n"
+               + "公式可以用 SUM、AVG、COUNT、MAX、MIN、STD（樣本標準差）、STDP（母體標準差），括號裡是明細欄位；也可以用視窗上的欄位和數字做 + - * /，"
+               + "例如 SUM(金額) * (1 + 稅率 / 100)。資料表的欄位只在新增、修改時填（按確定一起存），文字標籤一直會顯示"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string AfterChange { get; set; }
 
     public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
 
     [Browsable(false), JsonIgnore]
-    [Category("資料"), DisplayName("上層清單"), TypeConverter(typeof(PrintListConverter)),
-     Description("選版面上另一個明細清單（資料表名稱）：點上層清單的一列，這個清單就列出那一列的明細，例如上面報價單單頭、下面報價單明細；"
-               + "這時「關聯欄位」寫「上層清單欄位=明細欄位」。空白 = 依編輯視窗目前這筆列出")]
-    public string ParentList { get; set; }
-
     public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
 
     /// <summary>複製一份（版面設計器先改複本，按「確定」才寫回）</summary>
@@ -849,6 +913,14 @@ public enum InputKind
     選項按鈕,
     /// <summary>文字標籤（Label）：工具箱加入的，只顯示文字，不對應資料表；SQL 的「回傳對應」可以用變數名稱把值填進來</summary>
     文字標籤,
+}
+
+/// <summary>文字標籤的文字對齊</summary>
+public enum LabelAlign
+{
+    靠左,
+    置中,
+    靠右,
 }
 
 /// <summary>按鈕需要的權限（對應「使用者、角色與權限」的五個勾選欄），可以複選</summary>
@@ -877,6 +949,22 @@ public enum ButtonAction
     列印報表,
     /// <summary>開啟另一個設計好的畫面當查詢條件畫面：在那裡輸入條件按「查詢」，清空本畫面的清單後放入查詢結果</summary>
     開啟查詢條件畫面,
+}
+
+/// <summary>執行畫面工具列要出現的按鈕（畫面屬性「工具列按鈕」，可複選）</summary>
+[Flags]
+public enum ToolbarButtons
+{
+    無 = 0,
+    查詢 = 1,
+    新增 = 2,
+    修改 = 4,
+    刪除 = 8,
+    單身 = 16,
+    首筆至末筆 = 32,
+    確定取消 = 64,
+    輸出 = 128,
+    離開 = 256,
 }
 
 /// <summary>查詢條件畫面上多個條件的組合方式</summary>
@@ -957,7 +1045,7 @@ public class ButtonDefinition
 
     [Category("開啟畫面"), DisplayName("畫面定義檔"),
      Description("動作 = 開啟畫面 時開啟的畫面；動作 = 開啟查詢條件畫面 時當查詢條件畫面（欄位名稱跟本畫面的資料表欄位一樣的才能當條件）。"
-               + "只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+               + "只寫檔名時，會找跟目前畫面同一個資料夾的檔案；存檔時完整路徑會自動改成相對路徑"),
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string TargetForm { get; set; }
 
@@ -971,7 +1059,7 @@ public class ButtonDefinition
                + "SQL 運算式（含 @欄位 或括號，開啟時由資料庫算出），例如：產品編號=LEFT(@產品編號, 13) + (SELECT FORMAT(ISNULL(MAX(CONVERT(INT, RIGHT(產品編號, 2))), 0) + 1, '00') FROM 產品 WHERE 產品編號 LIKE LEFT(@產品編號, 13) + '%')；\n"
                + "固定值，例如：狀態=新建（含括號的固定文字用單引號括起來）。\n"
                + "對方畫面上有同名的欄位時，會當成查詢條件自動查詢；對方的「執行SQL」也可以用 @名稱 取得"),
-     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+     Editor(typeof(OpenParamsEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string OpenParams { get; set; }
 
     [Category("開啟畫面"), DisplayName("回傳對應"),
@@ -1134,6 +1222,32 @@ public class GridColumnDefinition
 
     /// <summary>單頭清單的「清單 SQL」帶出來、資料表沒有的欄位：只有清單查詢時讀，只顯示、不存檔</summary>
     public bool FromListSql { get; set; }
+
+    /// <summary>
+    /// 自訂欄位：在單身欄位設定按「新增自訂欄位」加的（勾選框、按鈕、日期選擇、文字框 / 數字框），不是資料表的欄位（ScreenOnly、NoEntry 也是 true）。
+    /// 不查詢、不存檔，值只留在畫面上這一列；按鈕的 SQL、執行前檢查用 @欄位 取得那一列的值
+    /// </summary>
+    public bool IsCustom { get; set; }
+
+    /// <summary>
+    /// 公式：用同一列的其他欄位名稱和數字做 + - * /，例如 數量 * 單價。有公式的欄位不能輸入，
+    /// 同一列用到的欄位改了就重算；資料表本身的欄位設公式時，算出來的值會存進資料庫
+    /// </summary>
+    public string Formula { get; set; }
+    /// <summary>公式結果的小數位數（四捨五入）；-1 = 自動（最多 4 位，去掉尾端的 0）。整數欄位一律取到整數</summary>
+    public int Decimals { get; set; } = -1;
+
+    [JsonIgnore]
+    public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
+
+    /// <summary>
+    /// 自訂文字框 / 數字框顯示的值：SELECT 查出來的第一筆第一個欄位，@欄位 取同一列的值，例如
+    /// SELECT 單價 FROM D報價明細 WHERE QUONO=@QUONO AND 產品編號=@產品編號。每次載入資料、同一列用到的欄位改了就重查；有公式時用公式
+    /// </summary>
+    public string ValueSql { get; set; }
+
+    /// <summary>自訂按鈕欄位按下去要做的事（同畫面上的按鈕；Grid 上支援 執行SQL、開啟畫面，其他動作照畫面按鈕執行）</summary>
+    public ButtonDefinition Button { get; set; }
 
     // ---- 雙擊 Grid 開啟的編輯視窗版面 ----
     /// <summary>編輯視窗是否顯示這個欄位；null = 跟 Grid 的「顯示」一樣</summary>

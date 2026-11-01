@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Data;
 using System.Globalization;
 
 namespace FormBuilder;
@@ -15,6 +16,9 @@ public static class GridCells
         : TypeHelper.IsDate(c.DataType) ? GridCellKind.日期選擇
         : GridCellKind.文字框;
 
+    /// <summary>執行時 Grid 上要出現的欄位：勾了顯示的資料表欄位與自訂欄位（其他畫面欄位只放在編輯視窗）</summary>
+    public static bool ShownInGrid(GridColumnDefinition c) => c.Visible && (!c.ScreenOnly || c.IsCustom);
+
     /// <param name="connectionString">下拉選單的選項 SQL 用</param>
     public static DataGridViewColumn CreateColumn(GridColumnDefinition c, string connectionString)
     {
@@ -23,15 +27,235 @@ public static class GridCells
             GridCellKind.下拉選單 => CreateCombo(c, connectionString),
             GridCellKind.勾選框 => CreateCheckBox(c),
             GridCellKind.日期選擇 => new CalendarColumn(c),
+            GridCellKind.按鈕 => new DataGridViewButtonColumn { Text = ButtonText(c), UseColumnTextForButtonValue = true, FlatStyle = FlatStyle.System },
             _ => CreateTextBox(c),
         };
-        col.DataPropertyName = c.Column;
+        if (Resolve(c) != GridCellKind.按鈕) col.DataPropertyName = c.Column;     // 按鈕只顯示按鈕文字，不對應資料
         col.HeaderText = c.Header;
         col.Width = c.Width;
         col.Tag = c;
+        if (c.IsCustom) col.ReadOnly = true;                    // 自訂欄位由 HookCustomColumns 處理點擊，不進入格子編輯
+        if (c.HasFormula)
+        {
+            col.ReadOnly = true;                                // 有公式的欄位由同一列的值算出來（HookFormulas）
+            col.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 245);
+        }
         if (TypeHelper.IsNumber(c.DataType) && col is DataGridViewTextBoxColumn)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
         return col;
+    }
+
+    /// <summary>
+    /// 有公式的欄位：同一列用到的欄位改了（Grid 輸入、編輯視窗寫回）就重算那一列，結果寫進 DataTable（資料表欄位會跟著存檔）。
+    /// 讀進來的資料不重算，顯示資料庫裡存的值。每個新的 DataTable 呼叫一次
+    /// </summary>
+    public static void HookFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns)
+    {
+        var formulas = columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column)).ToList();
+        if (formulas.Count == 0) return;
+        var used = formulas.SelectMany(c => SafeNames(c.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool recalculating = false;
+        table.ColumnChanged += (s, e) =>
+        {
+            if (recalculating || !used.Contains(e.Column.ColumnName)) return;
+            recalculating = true;
+            try
+            {
+                RecalcRow(e.Row, formulas);
+            }
+            finally
+            {
+                recalculating = false;
+            }
+        };
+    }
+
+    private static List<string> SafeNames(string formula)
+    {
+        try { return Formula.Names(formula); }
+        catch (FormatException) { return new List<string>(); }
+    }
+
+    /// <summary>重算一列的公式欄位；用到其他公式欄位時先算它（循環參照 = 算不出來，清空）</summary>
+    private static void RecalcRow(DataRow row, List<GridColumnDefinition> formulas)
+    {
+        var cache = new Dictionary<GridColumnDefinition, decimal?>();
+        decimal? Compute(GridColumnDefinition c, HashSet<GridColumnDefinition> visiting)
+        {
+            if (cache.TryGetValue(c, out var done)) return done;
+            if (!visiting.Add(c)) throw new FormatException("公式循環參照");
+            decimal? result = Formula.Evaluate(c.Formula, name =>
+            {
+                if (!row.Table.Columns.Contains(name)) throw new FormatException($"公式裡的欄位「{name}」不在這一列");
+                var source = formulas.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                return source != null ? Compute(source, visiting) ?? throw new FormatException("算不出來") : row[name];
+            });
+            cache[c] = result;
+            return result;
+        }
+        foreach (var c in formulas)
+        {
+            decimal? value = Compute(c, new HashSet<GridColumnDefinition>());
+            var column = row.Table.Columns[c.Column];
+            bool integer = column.DataType == typeof(int) || column.DataType == typeof(long) || column.DataType == typeof(short) || column.DataType == typeof(byte)
+                           || c.DataType is "int" or "bigint" or "smallint" or "tinyint";
+            int decimals = integer ? 0 : c.Decimals;
+            try
+            {
+                row[c.Column] = value == null ? DBNull.Value
+                    : column.DataType == typeof(string) ? Formula.Format(value.Value, decimals)
+                    : Convert.ChangeType(decimals >= 0 ? Math.Round(value.Value, decimals, MidpointRounding.AwayFromZero) : value.Value, column.DataType, CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+            {
+                row[c.Column] = DBNull.Value;               // 結果放不進這個欄位（例如超出範圍）
+            }
+        }
+    }
+
+    /// <summary>欄寬自動符合資料時，一欄最寬幾點（備註之類的長文字不要把其他欄擠出畫面）</summary>
+    public const int MaxAutoFitWidth = 400;
+
+    /// <summary>
+    /// 欄寬符合資料：每次換一批資料（查詢、重新載入）就依標題與看得到的資料調整欄寬，最寬 MaxAutoFitWidth；
+    /// 只量畫面上看得到的列，資料多也不會慢。Grid 還沒顯示時，等第一次顯示再調整
+    /// </summary>
+    public static void HookAutoFit(DataGridView grid)
+    {
+        bool pending = false;
+        void Fit()
+        {
+            if (!grid.IsHandleCreated || !grid.Visible) { pending = true; return; }
+            pending = false;
+            grid.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.DisplayedCells);
+            foreach (DataGridViewColumn c in grid.Columns)
+                if (c.Width > MaxAutoFitWidth) c.Width = MaxAutoFitWidth;
+        }
+        grid.DataBindingComplete += (s, e) =>
+        {
+            if (e.ListChangedType != ListChangedType.Reset) return;
+            if (grid.IsHandleCreated) grid.BeginInvoke(Fit);        // 等列都建好、排好版再量
+            else pending = true;
+        };
+        grid.VisibleChanged += (s, e) => { if (pending && grid.Visible && grid.IsHandleCreated) grid.BeginInvoke(Fit); };
+        grid.HandleCreated += (s, e) => { if (pending) grid.BeginInvoke(Fit); };
+    }
+
+    /// <summary>Grid 的資料有變動（換一批資料、改一格、新增或刪除一列）就呼叫 changed</summary>
+    public static void HookDataChanged(DataGridView grid, Action changed)
+    {
+        grid.DataSourceChanged += (s, e) =>
+        {
+            if (grid.DataSource is DataTable table)
+            {
+                table.ColumnChanged += (s2, e2) => changed();
+                table.RowChanged += (s2, e2) => { if (e2.Action is DataRowAction.Add or DataRowAction.Delete or DataRowAction.Rollback) changed(); };
+                table.RowDeleted += (s2, e2) => changed();
+            }
+            changed();
+        };
+    }
+
+    /// <summary>Grid 目前的資料有這個欄位（彙總函數找欄位用）</summary>
+    public static bool HasColumn(DataGridView grid, string column) => grid.DataSource is DataTable t && t.Columns.Contains(column);
+
+    /// <summary>彙總 Grid 的一欄（刪掉的列不算；沒有資料 = 沒有任何值）</summary>
+    public static decimal Aggregate(DataGridView grid, string function, string column)
+    {
+        var rows = grid.DataSource is DataTable t && t.Columns.Contains(column)
+            ? t.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Deleted).Select(r => r[column])
+            : Enumerable.Empty<object>();
+        return Formula.Aggregate(function, rows);
+    }
+
+    /// <summary>
+    /// Grid 的「執行後動作」：一行一組「畫面欄位=公式」，公式可以用 SUM(欄位) 等彙總函數（aggregateOf）和畫面上的欄位（valueOf）。
+    /// 文字標籤、只當查詢條件的欄位一直顯示計算結果；資料表的欄位只在 fillData（新增、修改）時填，瀏覽時顯示資料庫裡存的值
+    /// </summary>
+    public static void RunAfterChange(string text, IDictionary<FieldDefinition, Control> inputs, bool fillData,
+                                      Func<string, object> valueOf, Func<string, string, decimal> aggregateOf)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        foreach (var line in text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            string target = line[..eq].Trim().TrimStart('@');
+            string formula = line[(eq + 1)..].Trim();
+            var f = inputs.Keys.FirstOrDefault(x => x.Column.Equals(target, StringComparison.OrdinalIgnoreCase));
+            if (f == null || formula == "") continue;
+            bool display = f.IsTextLabel || f.QueryOnly;
+            if (!display && !fillData) continue;
+            decimal? value = Formula.Evaluate(formula, valueOf, aggregateOf);
+            bool integer = f.DataType is "int" or "bigint" or "smallint" or "tinyint";
+            InputHelper.SetValue(inputs[f], value == null ? (display ? "" : null)
+                                          : Formula.Format(value.Value, integer ? 0 : f.Decimals));
+        }
+    }
+
+    /// <summary>
+    /// 單身欄位的「執行後動作」（GridColumnDefinition.EditAfterSelectSql，跟編輯視窗同一個設定）：使用者改了這一格（下拉選單選了、輸入完離開）
+    /// 就執行 SQL，@名稱 先取同一列的欄位，沒有再用 fallback（單頭）；SQL 查出資料時第一筆依回傳對應帶進同一列的欄位（空白 = 同名的欄位）
+    /// </summary>
+    public static void HookAfterSelect(DataGridView grid, string connectionString, Func<string, object> fallback)
+    {
+        bool running = false;
+        // 下拉選單、勾選框一選就送出，不用等離開格子
+        grid.CurrentCellDirtyStateChanged += (s, e) =>
+        {
+            if (grid.IsCurrentCellDirty && grid.CurrentCell?.OwningColumn is DataGridViewComboBoxColumn or DataGridViewCheckBoxColumn
+                && grid.CurrentCell.OwningColumn.Tag is GridColumnDefinition { EditAfterSelectSql: { Length: > 0 } })
+                grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        grid.CellValueChanged += (s, e) =>
+        {
+            if (running || e.RowIndex < 0 || e.ColumnIndex < 0 || grid.ReadOnly) return;
+            if (grid.Columns[e.ColumnIndex].Tag is not GridColumnDefinition c || string.IsNullOrWhiteSpace(c.EditAfterSelectSql)) return;
+            if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
+            var table = view.Row.Table;
+            object ValueOf(string name) => table.Columns.Contains(name) ? view[name] : fallback(name);
+            if (ValueOf(c.Column) is null or DBNull || ValueOf(c.Column) is string text && text.Trim() == "") return;   // 清空時不查
+            running = true;
+            try
+            {
+                ButtonRunner.ExecuteSql(c.EditAfterSelectSql, c.EditAfterSelectParams, connectionString, new Func<string, object>[] { ValueOf }, out var result);
+                if (result == null) return;
+                var notFound = new List<string>();
+                foreach (var (name, value) in ButtonRunner.MapResult(result, c.EditAfterSelectReturn))
+                {
+                    if (!table.Columns.Contains(name) || name.Equals(c.Column, StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(c.EditAfterSelectReturn))
+                    {
+                        if (!string.IsNullOrWhiteSpace(c.EditAfterSelectReturn)) notFound.Add(name);
+                        continue;                               // 回傳對應空白時，單身沒有的欄位略過（自己這一格也不覆蓋）
+                    }
+                    try
+                    {
+                        var column = table.Columns[name];
+                        view[name] = value is null or DBNull ? DBNull.Value
+                                   : column.DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
+                                   : Convert.ChangeType(value, column.DataType, CultureInfo.CurrentCulture);
+                    }
+                    catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+                    {
+                        notFound.Add($"{name}（型別不符）");
+                    }
+                }
+                if (notFound.Count > 0) MessageBox.Show("執行後動作查出來的值帶不進這些單身欄位：" + string.Join("、", notFound), "提醒");
+                grid.InvalidateRow(e.RowIndex);
+            }
+            catch (FormatException ex)
+            {
+                MessageBox.Show(ex.Message, "提醒");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"單身欄位「{c.Header ?? c.Column}」的執行後動作失敗：{ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                running = false;
+            }
+        };
     }
 
     /// <summary>生效欄位顯示用的勾選框欄位名稱（HookEffectiveColumn 靠它找到要轉換的欄位）</summary>
@@ -61,6 +285,173 @@ public static class GridCells
             e.Value = GridDefinition.IsEffectiveValue(e.Value);
             e.FormattingApplied = true;
         };
+    }
+
+    /// <summary>按鈕欄位上的文字：「選項 / 格式」填的文字，空白用欄位標題</summary>
+    public static string ButtonText(GridColumnDefinition c) =>
+        string.IsNullOrWhiteSpace(c.CellOptions) ? c.Header ?? c.Column : c.CellOptions.Trim();
+
+    /// <summary>
+    /// 自訂欄位的操作（Grid 唯讀時也能用）：點勾選框切換打勾、點日期格子跳出月曆、Delete 清除，按鈕交給 onButton（那一列的資料）。
+    /// 值寫在 Grid 資料來源（DataTable）多加的同名欄位裡，按鈕的 SQL、執行前檢查才取得到；資料表沒有這個欄位，存檔時不寫。
+    /// 文字框 / 數字框只顯示資料：值由公式或顯示 SQL（connectionString 的資料庫）帶出來（見 HookCustomValues）
+    /// </summary>
+    public static void HookCustomColumns(DataGridView grid, Action<GridColumnDefinition, DataRow> onButton, string connectionString = null)
+    {
+        static GridColumnDefinition CustomOf(DataGridViewColumn col) => col.Tag is GridColumnDefinition { IsCustom: true } c ? c : null;
+        var custom = grid.Columns.Cast<DataGridViewColumn>().Select(CustomOf).Where(c => c != null).ToList();
+        if (custom.Count == 0) return;
+        // 換資料來源（重新查詢）時，資料表補上自訂欄位；Grid 會跟著重新對應欄位
+        grid.DataSourceChanged += (s, e) =>
+        {
+            var table = grid.DataSource as DataTable ?? (grid.DataSource as DataView)?.Table;
+            if (table == null) return;
+            foreach (var c in custom.Where(c => Resolve(c) != GridCellKind.按鈕 && !table.Columns.Contains(c.Column)))
+                table.Columns.Add(new DataColumn(c.Column, Resolve(c) switch
+                {
+                    GridCellKind.勾選框 => typeof(bool),
+                    GridCellKind.日期選擇 => typeof(DateTime),
+                    _ => TypeHelper.IsNumber(c.DataType) ? typeof(decimal) : typeof(string),
+                }) { DefaultValue = Resolve(c) == GridCellKind.勾選框 ? false : DBNull.Value });
+            HookCustomValues(grid, table, custom.Where(c => Resolve(c) == GridCellKind.文字框 && (c.HasFormula || !string.IsNullOrWhiteSpace(c.ValueSql))).ToList(),
+                             connectionString);
+        };
+        DataRow RowAt(int index) => index >= 0 && index < grid.Rows.Count && !grid.Rows[index].IsNewRow
+                                     && grid.Rows[index].DataBoundItem is DataRowView v ? v.Row : null;
+        grid.CellClick += (s, e) =>
+        {
+            if (e.ColumnIndex < 0 || CustomOf(grid.Columns[e.ColumnIndex]) is not { } c || RowAt(e.RowIndex) is not { } row) return;
+            if (!row.Table.Columns.Contains(c.Column)) return;
+            if (Resolve(c) == GridCellKind.勾選框)
+                SetCustomValue(row, c.Column, !(row[c.Column] is true));
+            else if (Resolve(c) == GridCellKind.日期選擇)
+                PickDate(grid, grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false), row[c.Column] as DateTime?,
+                         date => SetCustomValue(row, c.Column, date));
+        };
+        grid.CellContentClick += (s, e) =>
+        {
+            if (e.ColumnIndex < 0 || CustomOf(grid.Columns[e.ColumnIndex]) is not { } c || Resolve(c) != GridCellKind.按鈕) return;
+            if (RowAt(e.RowIndex) is { } row) onButton?.Invoke(c, row);
+        };
+        grid.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.Delete || grid.CurrentCell == null || CustomOf(grid.CurrentCell.OwningColumn) is not { } c) return;
+            if (Resolve(c) == GridCellKind.按鈕 || RowAt(grid.CurrentCell.RowIndex) is not { } row || !row.Table.Columns.Contains(c.Column)) return;
+            SetCustomValue(row, c.Column, Resolve(c) == GridCellKind.勾選框 ? false : DBNull.Value);
+            e.Handled = true;                                  // 不要變成刪除這一列
+        };
+    }
+
+    /// <summary>已經算過自訂文字框 / 數字框的資料表（重新設定同一個資料來源時不重複掛事件）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataTable, object> customValueTables = new();
+
+    /// <summary>
+    /// 自訂文字框 / 數字框的值：有公式用同一列的欄位計算，否則執行顯示 SQL（@欄位 取同一列），取第一筆第一個欄位。
+    /// 現在的每一列先算一次，之後同一列用到的欄位改了（或新增列）就重算那一列；SQL 錯誤只提醒一次，之後不再查
+    /// </summary>
+    private static void HookCustomValues(DataGridView grid, DataTable table, List<GridColumnDefinition> columns, string connectionString)
+    {
+        if (columns.Count == 0 || customValueTables.TryGetValue(table, out _)) return;
+        customValueTables.Add(table, null);
+        var failed = new HashSet<GridColumnDefinition>();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in columns)
+            if (c.HasFormula) used.UnionWith(SafeNames(c.Formula));
+            else foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(c.ValueSql, @"(?<!@)@([\p{L}\p{N}_]+)"))
+                used.Add(m.Groups[1].Value);
+        used.ExceptWith(columns.Select(c => c.Column));
+        bool busy = false;
+        void Fill(IEnumerable<DataRow> rows)
+        {
+            var list = rows.Where(r => r.RowState != DataRowState.Deleted && r.RowState != DataRowState.Detached).ToList();
+            if (list.Count == 0) return;
+            busy = true;
+            DbDialect d = null;
+            System.Data.Common.DbConnection conn = null;
+            try
+            {
+                foreach (var c in columns)
+                {
+                    if (failed.Contains(c)) continue;
+                    try
+                    {
+                        if (c.HasFormula)
+                        {
+                            foreach (var row in list)
+                                SetCustomValue(row, c.Column, ToColumnValue(row.Table.Columns[c.Column], c, Formula.Evaluate(c.Formula, name =>
+                                    row.Table.Columns.Contains(name) ? row[name] : throw new FormatException($"公式裡的欄位「{name}」不在這一列"))));
+                            continue;
+                        }
+                        if (string.IsNullOrWhiteSpace(connectionString)) throw new InvalidOperationException("這個畫面沒有資料庫連線");
+                        d ??= DbDialect.Of(connectionString);
+                        conn ??= d.Open(connectionString);
+                        var (sql, parameters) = d.PrepareUserSql(c.ValueSql);
+                        foreach (var row in list)
+                        {
+                            using var cmd = d.CreateCommand(conn, sql);
+                            foreach (var (name, parameter) in parameters)
+                                d.AddParam(cmd, parameter, row.Table.Columns.Contains(name) ? row[name] : DBNull.Value);
+                            object value = cmd.ExecuteScalar();
+                            SetCustomValue(row, c.Column, value == null || value == DBNull.Value ? DBNull.Value
+                                : row.Table.Columns[c.Column].DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
+                                : Convert.ChangeType(value, row.Table.Columns[c.Column].DataType, CultureInfo.InvariantCulture));
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        failed.Add(c);
+                        MessageBox.Show(grid.FindForm(), $"自訂欄位「{c.Header ?? c.Column}」的{(c.HasFormula ? "公式" : " SQL ")}執行失敗，這個欄位先不顯示資料：\n{ex.Message}",
+                                        "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                }
+            }
+            finally
+            {
+                conn?.Dispose();
+                busy = false;
+            }
+        }
+        Fill(table.Rows.Cast<DataRow>());
+        table.ColumnChanged += (s, e) =>
+        {
+            if (!busy && used.Contains(e.Column.ColumnName)) Fill(new[] { e.Row });
+        };
+        table.RowChanged += (s, e) =>
+        {
+            if (!busy && e.Action == DataRowAction.Add) Fill(new[] { e.Row });
+        };
+    }
+
+    /// <summary>公式結果轉成欄位的型別（小數位數照設定）；放不進去 = 空白</summary>
+    private static object ToColumnValue(DataColumn column, GridColumnDefinition c, decimal? value)
+    {
+        if (value == null) return DBNull.Value;
+        if (column.DataType == typeof(string)) return Formula.Format(value.Value, c.Decimals);
+        return c.Decimals >= 0 ? Math.Round(value.Value, c.Decimals, MidpointRounding.AwayFromZero) : value.Value;
+    }
+
+    /// <summary>改自訂欄位的值：原本沒改過的列改完還是「沒改過」，存檔時才不會把這一列當成修改過</summary>
+    private static void SetCustomValue(DataRow row, string column, object value)
+    {
+        bool unchanged = row.RowState == DataRowState.Unchanged && !row.HasVersion(DataRowVersion.Proposed);
+        row[column] = value;
+        if (unchanged) row.AcceptChanges();
+    }
+
+    /// <summary>在格子下方跳出月曆，點選日期就帶回</summary>
+    private static void PickDate(DataGridView grid, Rectangle cell, DateTime? value, Action<DateTime> onPick)
+    {
+        var calendar = new MonthCalendar { MaxSelectionCount = 1 };
+        if (value is { } d) calendar.SetDate(d);
+        var popup = new ToolStripDropDown { Padding = Padding.Empty };
+        popup.Items.Add(new ToolStripControlHost(calendar) { Margin = Padding.Empty, Padding = Padding.Empty });
+        calendar.DateSelected += (s, e) =>
+        {
+            popup.Close();
+            onPick(e.Start.Date);
+        };
+        popup.Closed += (s, e) => popup.Dispose();
+        popup.Show(grid, new Point(cell.Left, cell.Bottom));
     }
 
     private static DataGridViewTextBoxColumn CreateTextBox(GridColumnDefinition c)
@@ -219,6 +610,8 @@ public enum GridCellKind
     下拉選單,
     勾選框,
     日期選擇,
+    /// <summary>按鈕：只有自訂欄位能用，按下去執行欄位設定的按鈕動作</summary>
+    按鈕,
 }
 
 // ================= 日期選擇欄位（DataGridView 沒有內建，照 MSDN 的 CalendarColumn 做法） =================
