@@ -281,6 +281,7 @@ public partial class RecordNavigatorDialog : Form
     private void RunButton(ButtonDefinition b)
     {
         if (!ButtonRunner.CheckAllowed(b, nav.Permission)) return;
+        if (!PassesPreCheck(b)) return;
         if (!ButtonRunner.Confirm(b)) return;
         switch (b.Action)
         {
@@ -330,6 +331,27 @@ public partial class RecordNavigatorDialog : Form
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// 按鈕的「執行前檢查」：有設定來源清單時檢查清單選取的每一列，沒有就檢查目前這筆（資料庫讀出來的值）；
+    /// 不符合、沒有資料、條件寫錯時提醒並回傳 false
+    /// </summary>
+    private bool PassesPreCheck(ButtonDefinition b)
+    {
+        if (string.IsNullOrWhiteSpace(b.PreCheck)) return true;
+        string name = b.SourceList?.Trim();
+        if (string.IsNullOrEmpty(name))
+            return ButtonRunner.PassesPreCheck(b, nav.CurrentRow is { } row ? new[] { row } : Array.Empty<DataRow>(),
+                                               null, "沒有資料，不能執行。");
+        var view = listViews.FirstOrDefault(v => v.Definition.TableName.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (view == null)
+        {
+            MessageBox.Show($"這個視窗上找不到來源清單「{name}」，請到編輯視窗版面檢查按鈕「{b.Text}」的設定。", "提醒");
+            return false;
+        }
+        return ButtonRunner.PassesPreCheck(b, view.SelectedRows(), r => Convert.ToString(r[0]),
+                                           $"請先在「{view.Definition.Title ?? view.Definition.TableName}」清單選取一列。");
     }
 
     /// <summary>「帶回到 Grid」：選取視窗選的資料新增到那個明細清單（新增、修改中才能輸入）</summary>

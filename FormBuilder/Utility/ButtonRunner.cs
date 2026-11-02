@@ -274,6 +274,37 @@ public static class ButtonRunner
     /// 「執行前檢查」：rows 裡不符合 condition（DataTable 篩選寫法）的資料列，依原本順序；
     /// 條件寫錯時丟 EvaluateException / SyntaxErrorException
     /// </summary>
+    /// <summary>
+    /// 按鈕的「執行前檢查」：rows 每一筆都要符合條件才回傳 true；沒有資料（顯示 emptyMessage）、不符合、條件寫錯時提醒並回傳 false。
+    /// labelOf = 不符合的資料要怎麼列出來（例如單號）；null = 不列（只檢查目前這筆時）
+    /// </summary>
+    public static bool PassesPreCheck(ButtonDefinition b, IReadOnlyList<DataRow> rows, Func<DataRow, string> labelOf, string emptyMessage)
+    {
+        if (string.IsNullOrWhiteSpace(b.PreCheck)) return true;
+        if (rows.Count == 0)
+        {
+            MessageBox.Show(emptyMessage, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+        List<DataRow> failing;
+        try
+        {
+            failing = FailingRows(rows, b.PreCheck);
+        }
+        catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
+        {
+            MessageBox.Show($"按鈕「{b.Text}」的執行前檢查寫法有誤：{ex.Message}", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        if (failing.Count == 0) return true;
+        string message = string.IsNullOrWhiteSpace(b.PreCheckMessage) ? $"選取的資料不符合條件：{b.PreCheck}" : b.PreCheckMessage;
+        if (labelOf != null)
+            message += Environment.NewLine + Environment.NewLine + "不符合的資料：" + string.Join("、", failing.Take(10).Select(labelOf))
+                     + (failing.Count > 10 ? $" 等 {failing.Count} 筆" : "");
+        MessageBox.Show(message, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return false;
+    }
+
     public static List<DataRow> FailingRows(IReadOnlyList<DataRow> rows, string condition)
     {
         if (rows.Count == 0) return new List<DataRow>();

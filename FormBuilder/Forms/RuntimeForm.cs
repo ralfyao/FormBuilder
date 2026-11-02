@@ -952,7 +952,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.單身 => btnDetail.Enabled,
         ButtonAction.離開 => btnExit.Enabled,
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
-        ButtonAction.執行SQL => mode is Mode.Insert or Mode.Modify && perm.Modify,    // 執行SQL 只在新增、修改中可以按（例如取號、更名）
+        // 執行SQL 只在新增、修改中可以按（例如取號、更名）；只放 SQL 清單的畫面沒有新增、修改，瀏覽時就能按（對清單上選的資料執行）
+        ButtonAction.執行SQL => (HasMasterTable ? mode is Mode.Insert or Mode.Modify : mode == Mode.Browse) && perm.Modify,
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
         ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && (HasMasterTable || sqlGrids.Count > 0),
         _ => mode == Mode.Browse,
@@ -1044,26 +1045,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         if (string.IsNullOrWhiteSpace(b.PreCheck)) return true;
         var (rows, labelOf) = SelectedDataRows();
-        if (rows.Count == 0)
-        {
-            MessageBox.Show("請先在清單選取要處理的資料。", b.Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return false;
-        }
-        List<DataRow> failing;
-        try
-        {
-            failing = ButtonRunner.FailingRows(rows, b.PreCheck);
-        }
-        catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
-        {
-            MessageBox.Show($"按鈕「{b.Text}」的執行前檢查寫法有誤：{ex.Message}", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return false;
-        }
-        if (failing.Count == 0) return true;
-        string message = string.IsNullOrWhiteSpace(b.PreCheckMessage) ? $"選取的資料不符合條件：{b.PreCheck}" : b.PreCheckMessage;
-        string names = string.Join("、", failing.Take(10).Select(labelOf)) + (failing.Count > 10 ? $" 等 {failing.Count} 筆" : "");
-        MessageBox.Show(message + Environment.NewLine + Environment.NewLine + "不符合的資料：" + names, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return false;
+        return ButtonRunner.PassesPreCheck(b, rows, labelOf, "請先在清單選取要處理的資料。");
     }
 
     /// <summary>
@@ -1136,6 +1118,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RefreshRows(indexes);
             SetMode(mode);
         }
+        else if (ok && !HasMasterTable) LoadSqlLists();           // 只放 SQL 清單的畫面：資料可能被 SQL 改過，重查清單
         // SQL 查出來的值（「SQL 回傳對應」）等重讀完再填進畫面上的欄位，才不會被重讀蓋掉
         if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
         return ok;
