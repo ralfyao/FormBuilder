@@ -989,6 +989,18 @@ public class PrintListConverter : StringConverter
     public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context) => new(Available.Prepend("").ToArray());
 }
 
+/// <summary>
+/// 按鈕「帶回到 Grid」的選項：畫面設計 = 單身 Grid、編輯視窗版面 = 明細清單（資料表名稱），
+/// Columns = 各 Grid 的欄位（「帶回 Grid 欄位對應」下拉用）；由設計視窗在選取時設定
+/// </summary>
+public class ReturnGridConverter : StringConverter
+{
+    public static Dictionary<string, List<string>> Columns { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public override bool GetStandardValuesSupported(ITypeDescriptorContext context) => true;
+    public override bool GetStandardValuesExclusive(ITypeDescriptorContext context) => false;
+    public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context) => new(Columns.Keys.Prepend("").ToArray());
+}
+
 /// <summary>畫面上的按鈕（類似 Visual Studio 從工具箱拖進來的 Button）</summary>
 public class ButtonDefinition
 {
@@ -1071,6 +1083,17 @@ public class ButtonDefinition
                + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔"),
      Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string ReturnMap { get; set; }
+
+    [Category("開啟畫面"), DisplayName("帶回到 Grid"), TypeConverter(typeof(ReturnGridConverter)),
+     Description("有選時，開啟的畫面變成可以多選的「選取視窗」：在清單上選好一筆或多筆（Ctrl、Shift 多選）按「選取帶回」，"
+               + "每一筆新增成這個 Grid（主畫面的單身、編輯視窗的明細清單）的一列，欄位照「帶回 Grid 欄位對應」填入。"
+               + "本畫面要在這個 Grid 可以輸入時才能按（主畫面：新增、修改、單身；編輯視窗：新增、修改），帶回後再按「確定」存檔")]
+    public string ReturnGrid { get; set; }
+
+    [Category("開啟畫面"), DisplayName("帶回 Grid 欄位對應"), Editor(typeof(ReturnGridMapEditor), typeof(System.Drawing.Design.UITypeEditor)),
+     Description("「Grid 欄位=對方欄位」，用逗號分隔，例如：品項編號=產品編號, 品名=品名規格, 報價單號=QUONO。"
+               + "空白 = 對方同名的欄位帶進 Grid 同名的欄位。按「…」可以從兩邊的欄位下拉選")]
+    public string ReturnGridMap { get; set; }
 
     [Category("開啟畫面"), DisplayName("存檔後關閉並重新整理"),
      Description("True = 開啟的畫面在新增、修改、刪除（有單身時是單身存檔）成功後自動關閉，本畫面重新查詢並停在剛存檔的那筆。"

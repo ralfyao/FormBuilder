@@ -53,6 +53,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private readonly Dictionary<string, object> openParams;
     /// <summary>選取視窗模式下使用者選的那筆</summary>
     public DataRow PickedRow { get; private set; }
+    /// <summary>選取視窗可以多選（別的畫面的按鈕設了「帶回到 Grid」）：清單上選的每一筆都帶回</summary>
+    public bool MultiPick { get; init; }
+    /// <summary>選取視窗模式下使用者選的所有資料（沒有多選時只有 PickedRow 一筆）</summary>
+    public IReadOnlyList<DataRow> PickedRows { get; private set; } = Array.Empty<DataRow>();
     /// <summary>查詢條件畫面模式（別的畫面的「開啟查詢條件畫面」按鈕）：輸入條件按「查詢」就關閉，把條件帶回去，不在這裡查</summary>
     private readonly bool conditionMode;
     /// <summary>查詢條件畫面上的「全部符合 / 任一符合」</summary>
@@ -328,7 +332,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             AutoSize = false,
             Size = new Size(80, 28),
             Font = new Font(toolStrip.Font, FontStyle.Bold),
-            ToolTipText = "把目前選的這筆帶回原來的畫面（在清單上雙擊也可以）",
+            ToolTipText = "把目前選的資料帶回原來的畫面（在清單上雙擊也可以；帶回到 Grid 時可以用 Ctrl、Shift 多選）",
         };
         btnPick.Click += (s, e) => Pick();
         // 只放 SQL 清單的畫面：在清單上雙擊一列 = 選這筆帶回
@@ -398,14 +402,21 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (!HasMasterTable)
         {
             // 只放 SQL 清單的畫面：帶回清單上選的那列（有多個清單時先看正在操作的那個）
-            var row = sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus)
-                              .Select(g => (g.CurrentRow?.DataBoundItem as DataRowView)?.Row).FirstOrDefault(r => r != null);
+            var grid = sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus)
+                               .FirstOrDefault(g => g.CurrentRow?.DataBoundItem is DataRowView);
+            var row = (grid?.CurrentRow?.DataBoundItem as DataRowView)?.Row;
             if (row == null)
             {
                 MessageBox.Show("請先在清單上選一筆資料。", "選取");
                 return;
             }
             PickedRow = row;
+            // 多選：選取的每一列（照清單上的順序）
+            var selected = MultiPick
+                ? grid.SelectedCells.Cast<DataGridViewCell>().Select(c => c.OwningRow).Distinct().OrderBy(r => r.Index)
+                      .Select(r => (r.DataBoundItem as DataRowView)?.Row).Where(r => r != null).ToList()
+                : new List<DataRow>();
+            PickedRows = selected.Count > 0 ? selected : new[] { row };
             DialogResult = DialogResult.OK;
             return;
         }
@@ -415,6 +426,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
         PickedRow = results.Rows[current];
+        var indexes = MultiPick ? SelectedRowIndexes() : new List<int>();
+        PickedRows = indexes.Count > 0 ? indexes.Select(i => results.Rows[i]).ToList() : new[] { PickedRow };
         DialogResult = DialogResult.OK;
     }
 
@@ -549,10 +562,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
             _ => HasKey || !HasMasterTable ? "" : "這個畫面沒有設定主鍵，只能查詢與新增",   // 只放 SQL 清單的畫面不提示
         };
         lblPosition.Text = HasCurrent ? $"第 {current + 1} / {results.Rows.Count} 筆" : "";
-        // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位
+        // 選取視窗按鈕（有回傳對應）要在輸入中才能按，帶回的值填進正在輸入的欄位；帶回到 Grid 的要在單身可以輸入時
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
-                && (ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
+                && (ButtonRunner.IsGridPicker(b) ? mode == Mode.Detail || InlineDetail
+                    : ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         foreach (var (g, grid) in AllGrids()) RunGridAfterChange(g, grid);   // 進入新增、修改時把 Grid 的加總填進資料表欄位
         if (mode == Mode.Detail) details[0].Grid.Focus();
@@ -1240,7 +1254,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (!HasMasterTable && SelectedDataRows().Rows.FirstOrDefault() is { } row && row.Table.Columns.Contains(name)) return row[name];
             return field != null ? GetValue(field) : null;
         }, values => ButtonRunner.FillFields(values, inputs), RefreshResults,     // 「存檔後關閉並重新整理」：開啟的畫面存檔後重新查詢
-           def.ConnectionString);                                                 // 傳入參數的 SQL 運算式用這個畫面的資料庫計算
+           def.ConnectionString,                                                  // 傳入參數的 SQL 運算式用這個畫面的資料庫計算
+           rows => AddReturnedRows(b, rows));
+
+    /// <summary>「帶回到 Grid」：選取視窗選的資料新增到那個單身（單身要在可以輸入的狀態）</summary>
+    private void AddReturnedRows(ButtonDefinition b, IReadOnlyList<IReadOnlyDictionary<string, object>> rows)
+    {
+        var part = details.FirstOrDefault(p => p.Def.TableName.Equals(b.ReturnGrid.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (part == null)
+            MessageBox.Show($"這個畫面沒有單身「{b.ReturnGrid}」，請到畫面設計檢查按鈕「{b.Text}」的「帶回到 Grid」。", "提醒");
+        else if (part.Grid.ReadOnly)
+            MessageBox.Show("請先按「新增」、「修改」或「單身」，單身可以輸入時再帶回。", "提醒");
+        else
+            ButtonRunner.AddGridRows(part.Grid, rows);
+    }
 
     /// <summary>
     /// 單頭要查的欄位：畫面欄位，加上單身關聯、單頭清單會用到但沒放在畫面上的單頭欄位。

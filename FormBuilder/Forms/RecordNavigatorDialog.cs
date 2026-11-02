@@ -325,10 +325,25 @@ public partial class RecordNavigatorDialog : Form
                 // 傳入參數的 @欄位：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
                 var openValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
                 if (openValueOf == null) break;
-                ButtonRunner.OpenForm(b, sourcePath, this, openValueOf, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString);
+                ButtonRunner.OpenForm(b, sourcePath, this, openValueOf, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString,
+                                      onReturnRows: rows => AddReturnedRows(b, rows));
                 break;
             }
         }
+    }
+
+    /// <summary>「帶回到 Grid」：選取視窗選的資料新增到那個明細清單（新增、修改中才能輸入）</summary>
+    private void AddReturnedRows(ButtonDefinition b, IReadOnlyList<IReadOnlyDictionary<string, object>> rows)
+    {
+        var view = listViews.FirstOrDefault(v => v.Definition.TableName.Equals(b.ReturnGrid.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (view == null)
+            MessageBox.Show($"這個視窗上沒有明細清單「{b.ReturnGrid}」，請到編輯視窗版面檢查按鈕「{b.Text}」的「帶回到 Grid」。", "提醒");
+        else if (!view.Editable)
+            MessageBox.Show($"明細清單「{view.Definition.Title ?? view.Definition.TableName}」不能直接輸入（SQL 清單、下層清單或沒有設關聯欄位），不能帶回。", "提醒");
+        else if (mode == EditMode.Browse)
+            MessageBox.Show("請先按「新增」或「修改」，明細可以輸入時再帶回。", "提醒");
+        else
+            ButtonRunner.AddGridRows(view.Grid, rows);
     }
 
     // ================= 生效 / 取消生效 / 列印 =================

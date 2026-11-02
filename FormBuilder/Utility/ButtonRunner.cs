@@ -452,7 +452,56 @@ public static class ButtonRunner
     }
 
     /// <summary>有設定「回傳對應」的開啟畫面按鈕 = 選取視窗：要在輸入中（新增、修改）才能按</summary>
-    public static bool IsPicker(ButtonDefinition b) => b.Action == ButtonAction.開啟畫面 && ParsePairs(b.ReturnMap).Any();
+    public static bool IsPicker(ButtonDefinition b) => b.Action == ButtonAction.開啟畫面 && (ParsePairs(b.ReturnMap).Any() || IsGridPicker(b));
+
+    /// <summary>有設定「帶回到 Grid」的開啟畫面按鈕：選取視窗可以多選，選的每一筆新增成那個 Grid 的一列</summary>
+    public static bool IsGridPicker(ButtonDefinition b) => b.Action == ButtonAction.開啟畫面 && !string.IsNullOrWhiteSpace(b.ReturnGrid);
+
+    /// <summary>
+    /// 選取視窗帶回的每一筆新增成 grid 的一列（新增列的預設值、關聯欄位照一般新增列帶），值依欄位型別轉換；
+    /// grid 沒有的欄位、型別轉不過去的值略過並提醒。回傳新增幾列
+    /// </summary>
+    public static int AddGridRows(DataGridView grid, IReadOnlyList<IReadOnlyDictionary<string, object>> rows)
+    {
+        if (grid.DataSource is not DataTable table)
+        {
+            MessageBox.Show("這個 Grid 現在還不能新增資料。", "提醒");
+            return 0;
+        }
+        grid.EndEdit();
+        if (grid.BindingContext?[table] is CurrencyManager cm) cm.EndCurrentEdit();
+        var missing = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var bad = new List<string>();
+        foreach (var values in rows)
+        {
+            var row = table.NewRow();                      // TableNewRow：預設值、關聯欄位
+            foreach (var (column, value) in values)
+            {
+                if (!table.Columns.Contains(column)) { missing.Add(column); continue; }
+                var col = table.Columns[column];
+                if (col.ReadOnly || col.AutoIncrement) continue;
+                try
+                {
+                    row[col] = value == null || value == DBNull.Value ? DBNull.Value
+                             : col.DataType.IsInstanceOfType(value) ? value
+                             : Convert.ChangeType(value, Nullable.GetUnderlyingType(col.DataType) ?? col.DataType);
+                }
+                catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+                {
+                    bad.Add($"{column} = {value}");
+                }
+            }
+            table.Rows.Add(row);
+        }
+        if (missing.Count > 0 || bad.Count > 0)
+            MessageBox.Show((missing.Count > 0 ? "Grid 上沒有這些欄位，沒有帶入：" + string.Join("、", missing) + Environment.NewLine : "")
+                          + (bad.Count > 0 ? "這些值的型別跟 Grid 欄位對不上，沒有帶入：" + string.Join("、", bad.Distinct().Take(10)) : ""), "提醒");
+        // 捲到剛帶進來的列
+        int last = grid.Rows.Cast<DataGridViewRow>().LastOrDefault(r => !r.IsNewRow)?.Index ?? -1;
+        try { if (last >= 0) grid.FirstDisplayedScrollingRowIndex = Math.Max(0, last - Math.Max(0, grid.DisplayedRowCount(false) - 1)); }
+        catch (InvalidOperationException) { }                // Grid 還沒顯示、高度是 0
+        return rows.Count;
+    }
 
     /// <summary>
     /// 把選取視窗帶回的值（或 SQL 查出來的值）填進本視窗的欄位；reportMissing = 本視窗沒有的欄位列出來提醒
@@ -587,11 +636,13 @@ public static class ButtonRunner
     /// <summary>
     /// 開啟另一個畫面；只寫檔名時，找 sourcePath（目前畫面定義檔）同一個資料夾的檔案。
     /// 「傳入參數」的 @欄位名稱 由 valueOf 取值，SQL 運算式用 connectionString 的資料庫計算（見 ParamValue）；有「回傳對應」時開成選取視窗（等使用者選完才回來），選的資料交給 onReturn。
-    /// 「存檔後關閉並重新整理」時開成獨立視窗，關閉後有存檔過就把最後存檔那筆的主鍵（刪除時是空的）交給 onSaved
+    /// 「存檔後關閉並重新整理」時開成獨立視窗，關閉後有存檔過就把最後存檔那筆的主鍵（刪除時是空的）交給 onSaved。
+    /// 有「帶回到 Grid」時開成可以多選的選取視窗，選的每一筆（key = Grid 欄位名稱）交給 onReturnRows
     /// </summary>
     public static void OpenForm(ButtonDefinition b, string sourcePath, IWin32Window owner,
                                 Func<string, object> valueOf = null, Action<IReadOnlyDictionary<string, object>> onReturn = null,
-                                Action<IReadOnlyDictionary<string, object>> onSaved = null, string connectionString = null)
+                                Action<IReadOnlyDictionary<string, object>> onSaved = null, string connectionString = null,
+                                Action<IReadOnlyList<IReadOnlyDictionary<string, object>>> onReturnRows = null)
     {
         if (string.IsNullOrWhiteSpace(b.TargetForm))
         {
@@ -610,6 +661,23 @@ public static class ButtonRunner
             var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, source) in ParsePairs(b.OpenParams))
                 parameters[name] = ParamValue(name, source, valueOf, connectionString);     // @欄位、SQL 運算式或固定值
+            if (IsGridPicker(b))
+            {
+                // 帶回到 Grid：選取視窗可以多選，每一筆依「帶回 Grid 欄位對應」轉成一列（空白 = 全部欄位，同名的帶進 Grid）
+                using var multi = new RuntimeForm(target, parameters, pickMode: true) { MultiPick = true };
+                if (multi.ShowDialog(owner) != DialogResult.OK || multi.PickedRows.Count == 0) return;
+                var map = ParsePairs(b.ReturnGridMap).Select(p => (Mine: p.Left, Theirs: p.Right.TrimStart('@'))).ToList();
+                var absent = map.Where(p => !multi.PickedRows[0].Table.Columns.Contains(p.Theirs)).Select(p => p.Theirs).Distinct().ToList();
+                if (absent.Count > 0)
+                    MessageBox.Show("開啟的畫面查不到這些「帶回 Grid 欄位對應」的欄位：" + string.Join("、", absent), "提醒");
+                var picked = multi.PickedRows.Select(r => (IReadOnlyDictionary<string, object>)(map.Count > 0
+                        ? map.Where(p => r.Table.Columns.Contains(p.Theirs)).GroupBy(p => p.Mine, StringComparer.OrdinalIgnoreCase)
+                             .ToDictionary(g => g.Key, g => r[g.First().Theirs], StringComparer.OrdinalIgnoreCase)
+                        : r.Table.Columns.Cast<DataColumn>().ToDictionary(c => c.ColumnName, c => r[c], StringComparer.OrdinalIgnoreCase)))
+                    .ToList();
+                onReturnRows?.Invoke(picked);
+                return;
+            }
             var returns = ParsePairs(b.ReturnMap).ToList();
             if (returns.Count == 0 && b.RefreshAfterSave)
             {

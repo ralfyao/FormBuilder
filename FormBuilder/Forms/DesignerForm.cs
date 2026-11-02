@@ -1162,6 +1162,11 @@ public partial class DesignerForm : Form, IPickerHost
         foreach (var f in selection.Select(b => b.Model).OfType<FieldDefinition>())
             f.OwnerTable = def.TableOf(f);
 
+        // 按鈕「帶回到 Grid」的選項：單身 Grid
+        ReturnGridConverter.Columns = def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList && !string.IsNullOrWhiteSpace(g.TableName))
+            .GroupBy(g => g.TableName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Columns.Where(c => !c.IsJoin && !c.IsCustom && !c.IsIdentity).Select(c => c.Column).ToList(),
+                          StringComparer.OrdinalIgnoreCase);
         // 屬性面板：沒選欄位顯示畫面本身；選一個顯示它；選多個時只列共同屬性，改了會套用到全部
         if (selection.Count == 0) propertyGrid.SelectedObject = def;
         else if (selection.Count == 1) propertyGrid.SelectedObject = selection[0].Model;

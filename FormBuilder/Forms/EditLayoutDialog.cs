@@ -1218,6 +1218,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
         if (selection.Count > 0) ActiveControl = null;
         // 屬性面板：選一個顯示它，選多個只列共同屬性（改了套用到全部）
         PrintListConverter.Available = listBoxes.Select(l => l.ListDef.TableName).Distinct().ToList();    // 按鈕「列印來源清單」的選項
+        // 按鈕「帶回到 Grid」的選項：可以輸入的明細清單（資料表清單）
+        ReturnGridConverter.Columns = listBoxes.Select(l => l.ListDef).Where(l => !l.IsSqlList && !string.IsNullOrWhiteSpace(l.TableName))
+            .GroupBy(l => l.TableName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Columns.Where(c => !c.IsJoin && !c.IsCustom && !c.IsIdentity).Select(c => c.Column).ToList(),
+                          StringComparer.OrdinalIgnoreCase);
         // 文字標籤用畫面設計的屬性（標籤、變數名稱、字型、底色）
         propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox { Field.IsTextLabel: false } fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
     }
