@@ -329,10 +329,44 @@ public static class ButtonRunner
         return changed;
     }
 
-    /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數不算）</summary>
-    public static IEnumerable<string> ParameterNames(string sql) =>
-        Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
-             .Distinct(StringComparer.OrdinalIgnoreCase);
+    /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數、SQL 裡自己 DECLARE 的變數不算）</summary>
+    public static IEnumerable<string> ParameterNames(string sql)
+    {
+        var declared = DeclaredVariables(sql);
+        return Regex.Matches(sql, @"(?<!@)@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value)
+                    .Where(n => !declared.Contains(n))
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// SQL 裡 DECLARE 宣告的變數名稱（不含 @），例如 DECLARE @NB nvarchar(20)、DECLARE @a int = 1, @b date、DECLARE @t TABLE (…)。
+    /// 一個 DECLARE 宣告到分號為止，只算括號外、逗號後面接的 @名稱（DECLARE @a int = ISNULL(@x, 0) 的 @x 還是參數）
+    /// </summary>
+    private static HashSet<string> DeclaredVariables(string sql)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in Regex.Matches(sql, @"\bDECLARE\b([^;]*)", RegexOptions.IgnoreCase))
+        {
+            string body = m.Groups[1].Value;
+            int depth = 0;
+            bool start = true;                              // DECLARE 之後、或括號外的逗號之後：下一個 @名稱是宣告的變數
+            for (int i = 0; i < body.Length; i++)
+            {
+                char c = body[i];
+                if (c == '(') depth++;
+                else if (c == ')') depth = Math.Max(0, depth - 1);
+                else if (c == ',' && depth == 0) start = true;
+                else if (c == '@' && start)
+                {
+                    var name = Regex.Match(body[(i + 1)..], @"^[\p{L}\p{N}_]+");
+                    if (name.Success) names.Add(name.Value);
+                    start = false;
+                }
+                else if (!char.IsWhiteSpace(c)) start = false;
+            }
+        }
+        return names;
+    }
 
     /// <summary>
     /// 解析「名稱=值」的清單（逗號、分號或換行分隔）；左右都去掉空白，沒有等號的略過。

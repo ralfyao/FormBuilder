@@ -266,6 +266,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 // 有傳入參數時，打開後用同名的欄位當條件自動查詢
                 else if (openParams.Keys.Any(k => def.Fields.Any(f => f.Column.Equals(k, StringComparison.OrdinalIgnoreCase))))
                     QueryByParams();
+                // 畫面上沒有同名的單頭欄位，但單頭清單有同名的欄位：用清單欄位當條件查詢
+                else if (HasMasterTable && ListParams().Count > 0)
+                    RunQuery(ListParamCondition);
                 // 只放單頭清單、沒有可以輸入查詢條件的單頭欄位：打開就列出資料
                 else if (HasMasterTable && listDef != null && def.Fields.All(f => f.IsCalculated))
                     RunQuery();
@@ -422,6 +425,32 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var f in def.Fields)
             if (openParams.TryGetValue(f.Column, out var value)) SetValue(f, value);
         RunQuery();
+    }
+
+    /// <summary>傳入參數裡跟單頭清單欄位同名的（自訂欄位、畫面欄位不算；清單 SQL 帶出的欄位要有清單 SQL 才算）</summary>
+    private List<(GridColumnDefinition Column, object Value)> ListParams() =>
+        listDef == null ? new()
+        : listDef.Columns.Where(c => !c.ScreenOnly && (!c.FromListSql || !string.IsNullOrWhiteSpace(listDef.ListSql)) && openParams.ContainsKey(c.Column))
+                         .Select(c => (c, openParams[c.Column])).ToList();
+
+    /// <summary>單頭清單欄位 = 傳入參數的值（參數是空值時 IS NULL），多個用 AND</summary>
+    private string ListParamCondition(DbCommand cmd)
+    {
+        var conditions = new List<string>();
+        int i = 0;
+        foreach (var (c, value) in ListParams())
+        {
+            string expr = c.IsJoin ? GridSql.Joined(Dialect, c.JoinAlias, c.SourceColumn) : GridSql.Base(Dialect, c.Column);
+            if (value == null || value == DBNull.Value)
+            {
+                conditions.Add(expr + " IS NULL");
+                continue;
+            }
+            conditions.Add($"{expr} = {Dialect.Param($"lp{i}")}");
+            Dialect.AddParam(cmd, $"lp{i}", value);
+            i++;
+        }
+        return string.Join(" AND ", conditions);
     }
 
     /// <summary>
