@@ -1307,7 +1307,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (row == null || partialRows == null || !partialRows.Remove(row) || row.RowState is DataRowState.Detached or DataRowState.Deleted) return row;
         try
         {
-            DataRow fresh = LoadRowByKey(def.MasterKeys.ToDictionary(k => k.Column, k => row[k.Column]));
+            DataRow fresh = LoadRowByKey(def.MasterKeys.ToDictionary(k => k.Column, k => row[k.Column]), row);
             if (fresh == null) return row;
             bool unchanged = row.RowState == DataRowState.Unchanged;
             foreach (DataColumn col in fresh.Table.Columns)
@@ -1720,13 +1720,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private Dictionary<string, object> KeyOf(int row) =>
         def.MasterKeys.ToDictionary(k => k.Column, k => results.Rows[row][k.Column]);
 
-    private DataRow LoadRowByKey(Dictionary<string, object> key)
+    /// <summary>
+    /// 用主鍵讀一筆；JOIN 的是一對多（例如只用單號 JOIN 分期付款）時同一個主鍵會讀出好幾筆，
+    /// 有給 like（原本畫面上那筆）就挑欄位值跟它一樣最多的，才不會每次重讀都跳回第一筆
+    /// </summary>
+    private DataRow LoadRowByKey(Dictionary<string, object> key, DataRow like = null)
     {
         using var conn = Dialect.Open(def.ConnectionString);
         using var cmd = Dialect.CreateCommand(conn);
         cmd.CommandText = $"SELECT {SelectColumns()} FROM {MasterFrom()} WHERE " + AddKeyCondition(cmd, key, GridSql.BaseAlias);
         var table = Dialect.Fill(cmd);
-        return table.Rows.Count > 0 ? table.Rows[0] : null;
+        if (table.Rows.Count <= 1 || like == null || like.RowState is DataRowState.Detached or DataRowState.Deleted)
+            return table.Rows.Count > 0 ? table.Rows[0] : null;
+        var columns = table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).Where(like.Table.Columns.Contains).ToList();
+        return table.Rows.Cast<DataRow>().OrderByDescending(r => columns.Count(c => Equals(r[c], like[c]))).First();
     }
 
     /// <summary>用主鍵重讀目前這筆，更新到查詢結果裡；資料已不存在時回傳 false</summary>
@@ -1735,7 +1742,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (!HasCurrent || !HasKey) return HasCurrent;
         try
         {
-            DataRow fresh = LoadRowByKey(CurrentKey());
+            DataRow fresh = LoadRowByKey(CurrentKey(), results.Rows[current]);
             if (fresh == null) return false;
             foreach (DataColumn col in fresh.Table.Columns) results.Rows[current][col.ColumnName] = fresh[col.ColumnName];
             partialRows?.Remove(results.Rows[current]);
@@ -2810,7 +2817,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             foreach (int row in rows)
             {
-                DataRow fresh = LoadRowByKey(KeyOf(row));
+                DataRow fresh = LoadRowByKey(KeyOf(row), results.Rows[row]);
                 if (fresh == null) continue;
                 foreach (DataColumn col in fresh.Table.Columns)
                     if (results.Columns.Contains(col.ColumnName)) results.Rows[row][col.ColumnName] = fresh[col.ColumnName];
