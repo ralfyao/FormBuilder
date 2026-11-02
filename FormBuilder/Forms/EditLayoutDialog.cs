@@ -479,6 +479,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
                 Y = l.Y,
                 Width = l.Width,
                 Height = l.Height,
+                AutoFitColumns = l.AutoFitColumns,
                 Columns = l.Columns,
                 Joins = l.Joins,
                 OpenForm = l.OpenForm,

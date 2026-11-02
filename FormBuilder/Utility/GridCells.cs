@@ -301,10 +301,32 @@ public static class GridCells
         static GridColumnDefinition CustomOf(DataGridViewColumn col) => col.Tag is GridColumnDefinition { IsCustom: true } c ? c : null;
         var custom = grid.Columns.Cast<DataGridViewColumn>().Select(CustomOf).Where(c => c != null).ToList();
         if (custom.Count == 0) return;
+        // 按鈕有「執行前檢查」：不符合的列畫成灰色、按了沒反應。符合的列每個按鈕算一次記起來，資料有變動再重算
+        var checks = custom.Where(c => Resolve(c) == GridCellKind.按鈕 && !string.IsNullOrWhiteSpace(c.Button?.PreCheck)).ToHashSet();
+        var passed = new Dictionary<GridColumnDefinition, HashSet<DataRow>>();
+        DataTable checkedTable = null;
+        void ClearChecks(object s, EventArgs e) => passed.Clear();
         // 換資料來源（重新查詢）時，資料表補上自訂欄位；Grid 會跟著重新對應欄位
         grid.DataSourceChanged += (s, e) =>
         {
             var table = grid.DataSource as DataTable ?? (grid.DataSource as DataView)?.Table;
+            passed.Clear();
+            if (checks.Count > 0 && table != checkedTable)
+            {
+                if (checkedTable != null)
+                {
+                    checkedTable.RowChanged -= ClearChecks;
+                    checkedTable.RowDeleted -= ClearChecks;
+                    checkedTable.TableCleared -= ClearChecks;
+                }
+                checkedTable = table;
+                if (table != null)
+                {
+                    table.RowChanged += ClearChecks;           // 改值（含自訂勾選框）、新增列都會觸發
+                    table.RowDeleted += ClearChecks;
+                    table.TableCleared += ClearChecks;
+                }
+            }
             if (table == null) return;
             foreach (var c in custom.Where(c => Resolve(c) != GridCellKind.按鈕 && !table.Columns.Contains(c.Column)))
                 table.Columns.Add(new DataColumn(c.Column, Resolve(c) switch
@@ -328,10 +350,40 @@ public static class GridCells
                 PickDate(grid, grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false), row[c.Column] as DateTime?,
                          date => SetCustomValue(row, c.Column, date));
         };
+        // 這一列的按鈕是不是灰的：不符合執行前檢查；檢查寫錯就照樣可以按（按下去會提醒寫法有誤）
+        bool Disabled(GridColumnDefinition c, DataRow row)
+        {
+            if (!checks.Contains(c)) return false;
+            if (!passed.TryGetValue(c, out var set))
+            {
+                try
+                {
+                    set = row.Table.Select(c.Button.PreCheck).ToHashSet();
+                }
+                catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
+                {
+                    set = null;
+                }
+                passed[c] = set;
+            }
+            return set != null && !set.Contains(row);
+        }
+        grid.CellPainting += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || CustomOf(grid.Columns[e.ColumnIndex]) is not { } c || !checks.Contains(c)) return;
+            if (RowAt(e.RowIndex) is not { } row || !Disabled(c, row)) return;
+            e.PaintBackground(e.ClipBounds, (e.State & DataGridViewElementStates.Selected) != 0);
+            var rect = e.CellBounds;
+            rect.Inflate(-2, -2);
+            ButtonRenderer.DrawButton(e.Graphics, rect, System.Windows.Forms.VisualStyles.PushButtonState.Disabled);
+            TextRenderer.DrawText(e.Graphics, ButtonText(c), e.CellStyle.Font, rect, SystemColors.GrayText,
+                                  TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            e.Handled = true;
+        };
         grid.CellContentClick += (s, e) =>
         {
             if (e.ColumnIndex < 0 || CustomOf(grid.Columns[e.ColumnIndex]) is not { } c || Resolve(c) != GridCellKind.按鈕) return;
-            if (RowAt(e.RowIndex) is { } row) onButton?.Invoke(c, row);
+            if (RowAt(e.RowIndex) is { } row && !Disabled(c, row)) onButton?.Invoke(c, row);
         };
         grid.KeyDown += (s, e) =>
         {

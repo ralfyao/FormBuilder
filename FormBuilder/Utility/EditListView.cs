@@ -61,6 +61,7 @@ public class EditListView
         };
         // 輸入中：欄位的執行後動作（@名稱 先取同一列，再取編輯視窗上的欄位）
         GridCells.HookAfterSelect(Grid, connectionString, name => MasterValueOf?.Invoke(name));
+        if (list.AutoFitColumns) GridCells.HookAutoFit(Grid);      // 列出明細後欄寬依內容調整
         Host = RoundedGridHost.Wrap(Grid);
         // 載入後不要自動選第一列：使用者自己點選的才算「選取」（列印選取的資料時用）
         Grid.DataBindingComplete += (s, e) => Grid.ClearSelection();

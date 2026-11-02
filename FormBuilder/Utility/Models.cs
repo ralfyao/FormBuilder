@@ -851,6 +851,10 @@ public class EditListDefinition
     [Category("畫面"), DisplayName("高度")]
     public int Height { get; set; } = 150;
 
+    [Category("畫面"), DisplayName("欄寬符合資料"), DefaultValue(true),
+     Description("True = 執行時列出明細後，每一欄的寬度依標題與畫面上看得到的資料自動調整（太長的最寬 " + "400" + " 點，使用者還是可以拖拉）；False = 照設計時的欄寬")]
+    public bool AutoFitColumns { get; set; } = true;
+
     /// <summary>明細資料表的全部欄位（Visible 決定是否顯示在清單上）；JOIN 帶進來的欄位也在這裡</summary>
     [Browsable(false)]
     public List<GridColumnDefinition> Columns { get; set; } = new();
@@ -1003,7 +1007,7 @@ public class ButtonDefinition
     public string Confirm { get; set; }
 
     [Category("按鈕"), DisplayName("執行前檢查"),
-     Description("有填時，按下按鈕要先在清單選取資料（沒有清單的畫面檢查目前這筆），每一筆都符合這個條件才執行，否則顯示「檢查不符訊息」。"
+     Description("有填時，按下按鈕要先在清單選取資料（沒有清單的畫面檢查目前這筆），每一筆都符合這個條件才執行，否則顯示「檢查不符訊息」；Grid 上的自訂按鈕檢查那一列，不符合的列按鈕直接變灰、不能按。"
                + "寫法：欄位名稱有空白或符號時用 [ ]，文字用單引號；可用 = <> > < >= <= AND OR NOT、LIKE（* 或 % 只能放在頭尾）、IN ('A','B')、"
                + "ISNULL(欄位, 值)、LEN(欄位)。例如：核准 = 'Y' AND 數量 > 0"),
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]

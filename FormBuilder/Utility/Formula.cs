@@ -203,9 +203,7 @@ public static class Formula
             {
                 pos++;
                 decimal right = Factor();
-                
-                    value = op.Text == "*" ? value * right : value / (right == 0 ? 1 : right);
-                // 除以 0 丟 DivideByZeroException
+                value = op.Text == "*" ? value * right : value / (right == 0 ? 1 : right);// 除以 0 丟 DivideByZeroException -> 改為:如分母0則分母改為1
             }
             return value;
         }

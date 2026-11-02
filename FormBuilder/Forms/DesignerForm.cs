@@ -36,6 +36,29 @@ public partial class DesignerForm : Form, IPickerHost
     public DesignerForm()
     {
         InitializeComponent();
+        /*
+         * HookListSqlEditor() 在做什麼
+            屬性面板上「清單 SQL」的「…」按鈕是 ListSqlEditor（一個 UITypeEditor）。
+            它是 PropertyGrid 建立的，拿不到「是哪一個畫面設計視窗在用它」，所以只能透過兩個 static 屬性（ListSqlDialog.cs:114）取得資料：
+
+            ListSqlEditor.Generate：自動產生 SQL，用的是這個視窗的 def。
+            ListSqlEditor.ReadColumns：執行 SQL 取欄位，用的是這個視窗的 connectionString。
+
+            HookListSqlEditor() 就是把這兩個 static 指到目前這個 DesignerForm 的方法上。
+
+            為什麼兩行都需要
+
+            第 62 行（建構時呼叫一次）：視窗一建立就先設好，不必等到視窗被啟用，「…」才有東西可用。
+            第 63 行（Activated +=）：static 只有一份，全程式共用。如果同時開了兩個畫面設計
+                    （例如「客戶訂單」和「客戶報價單」），後開的會蓋掉先開的。這時切回先開的視窗按「…」，
+                    產生的 SQL 和讀欄位用的連線，都會是另一個畫面的。
+
+                    所以每次切到某個畫面設計視窗（Activated 事件），就重新把 static 指回這個視窗，「…」
+                    用的永遠是目前作用中的畫面。這也是方法說明裡「有好幾個畫面設計開著時用目前作用中的」的意思。
+
+            簡單說：第 39 行是初始設定，第 40 行是多視窗切換時把共用的 static 改回自己。只開一個畫面設計時，
+                    有沒有第 40 行都一樣；同時開兩個以上，它才有作用。
+         */
         HookListSqlEditor();
         Activated += (s, e) => HookListSqlEditor();
 
@@ -744,7 +767,38 @@ public partial class DesignerForm : Form, IPickerHost
         var last = def.Fields.OrderBy(f => f.Y).Last();
         return new Point(20, last.Y + 30);
     }
-
+    /// <summary>
+    /// 在設計模式加上Field Box
+    /// FieldBox 是設計畫面上的一個欄位，也就是你在畫面設計或編輯視窗版面上看到、可以拖來拖去的「標籤 + 輸入框」那一組（FieldBox.cs）。
+    ///
+    ///     組成
+    /// 
+    ///     左邊是一個 Label，顯示欄位標籤，例如「客戶編號」。
+    /// 右邊是一個 RoundedInputPreview，畫成跟執行時一樣的圓角輸入框，裡面是灰字提示，例如「單號［唯讀］」。
+    /// Field 屬性指向它對應的 FieldDefinition，也就是存在 JSON 裡的那個欄位設定。
+    /// 
+    /// 在設計畫面上能做的事
+    /// 
+    /// 拖曳可以移動位置，Field.X、Field.Y 會跟著改。
+    /// 拖右邊緣可以調整輸入框寬度。
+    /// 拖左邊緣可以調整標籤寬度，輸入框的位置不動。
+    /// 點選之後，右邊屬性面板顯示的就是它的 FieldDefinition。
+    /// 
+    /// 它只在設計時用
+    /// 執行時（RuntimeForm、ERPClient）不會用到 FieldBox，而是依照 FieldDefinition 建出真正的 TextBox、ComboBox 等控制項。所以 FieldBox 是「長得像」的預覽，本身不能輸入資料。
+    /// 
+    /// 同一家族的其他元件
+    /// 它們都繼承 DesignBox（一個 Panel）。選取、拖曳移動、拖邊緣調整大小這些共用的行為寫在 DesignBox，實際移動則由設計視窗處理，這樣才能多選一起移。
+    /// 
+    /// 類別 設計畫面上的什麼
+    /// FieldBox 欄位（標籤 + 輸入框），文字標籤也是用它
+    /// ButtonBox   按鈕
+    /// GridBox 單身 Grid
+    /// EditListBox 編輯視窗上的明細清單
+    /// PrintItemBox 列印樣板上的文字、欄位、圖片、線條、方框
+    /// </summary>
+    /// <param name="field"></param>
+    /// <returns></returns>
     private FieldBox AddBox(FieldDefinition field) => (FieldBox)AttachBox(new FieldBox(field));
 
     private GridBox AddGridBox(GridDefinition grid)
