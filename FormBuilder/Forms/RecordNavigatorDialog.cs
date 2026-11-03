@@ -273,7 +273,7 @@ public partial class RecordNavigatorDialog : Form
         ButtonAction.取消 => btnCancel.Enabled,
         ButtonAction.離開 => btnClose.Enabled,
         ButtonAction.執行SQL => mode is EditMode.Insert or EditMode.Modify && nav.Permission.Modify,   // 執行SQL 只在新增、修改中可以按
-        ButtonAction.開啟畫面 => mode == EditMode.Browse,
+        ButtonAction.開啟畫面 => true,                                     // 沒有回傳的開啟畫面只是查看，瀏覽、新增、修改都能按（傳入參數取視窗上正在輸入的值）
         ButtonAction.列印報表 => mode == EditMode.Browse && nav.CurrentRow != null && nav.CanPrint,
         _ => false,
     };
