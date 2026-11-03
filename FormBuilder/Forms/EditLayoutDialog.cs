@@ -1393,7 +1393,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
     /// <summary>
     /// 預覽：用目前的版面（還沒按確定、存檔也可以）開一個編輯視窗，資料是這個 Grid 資料表的前 50 筆，可以切換上一筆、下一筆；
-    /// 可以按新增、修改試著輸入（按確定不會存檔），不能刪除，也不能執行 SQL 按鈕（不會改到資料）。JOIN 帶進來的欄位預覽時是空白
+    /// 可以按新增、修改試著輸入（按確定不會存檔），不能刪除，也不能執行 SQL 按鈕（不會改到資料）。JOIN 帶進來的欄位預覽時是空白（補空的欄位）
     /// </summary>
     private void Preview()
     {
@@ -1417,6 +1417,10 @@ public partial class EditLayoutDialog : Form, IPickerHost
                     using var conn = d.Open(connectionString);
                     using var cmd = d.CreateCommand(conn, $"SELECT {d.Top(50)}* FROM {copy.FullTableName(d)}{d.Limit(50)}");
                     data = d.Fill(cmd);
+                    // JOIN 帶進來的欄位預覽時沒查：補空的欄位，執行前檢查、@欄位用到時當空值，不會找不到欄位
+                    foreach (var c in copy.Columns.Where(c => !data.Columns.Contains(c.Column)))
+                        data.Columns.Add(c.Column, TypeHelper.IsNumber(c.DataType) ? typeof(decimal) : TypeHelper.IsDate(c.DataType) ? typeof(DateTime)
+                                                 : TypeHelper.IsBool(c.DataType) ? typeof(bool) : typeof(string));   // 型別對上，執行前檢查的比較才不會出錯
                 }
             }
             catch (Exception ex)
