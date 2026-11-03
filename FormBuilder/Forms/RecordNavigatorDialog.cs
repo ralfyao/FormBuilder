@@ -184,6 +184,24 @@ public partial class RecordNavigatorDialog : Form
         return row != null && row.Table.Columns.Contains(name) ? row[name] : null;
     }
 
+    /// <summary>
+    /// 開啟的畫面（「存檔後關閉並重新整理」）存檔後：瀏覽時重讀目前這筆和明細清單；
+    /// 新增、修改中不重讀這筆（才不會蓋掉正在輸入的內容），只重查唯讀的 SQL 清單
+    /// </summary>
+    private void RefreshAfterOpenedFormSaved()
+    {
+        if (mode == EditMode.Browse)
+        {
+            nav.Refresh();
+            ShowRecord();
+            SetMode(EditMode.Browse);
+            return;
+        }
+        DataRow row = nav.CurrentRow;
+        foreach (var view in listViews.Where(v => !v.Editable))
+            view.Reload(col => ValueOf(col) ?? (row != null && row.Table.Columns.Contains(col) ? row[col] : null));
+    }
+
     /// <summary>依目前這筆的欄位值重新載入明細清單；row = null（沒有資料、新增中）時清單是空的</summary>
     private void ReloadLists(DataRow row)
     {
@@ -345,7 +363,8 @@ public partial class RecordNavigatorDialog : Form
                 // 傳入參數的 @欄位：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
                 var openValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
                 if (openValueOf == null) break;
-                ButtonRunner.OpenForm(b, sourcePath, this, name => ButtonRunner.TryGetResult(preResult, name, out var fromSql) ? fromSql : openValueOf(name), values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString,
+                ButtonRunner.OpenForm(b, sourcePath, this, name => ButtonRunner.TryGetResult(preResult, name, out var fromSql) ? fromSql : openValueOf(name), values => ButtonRunner.FillFields(values, inputs),
+                                      onSaved: _ => RefreshAfterOpenedFormSaved(), connectionString: connectionString,
                                       onReturnRows: rows => AddReturnedRows(b, rows));
                 break;
             }

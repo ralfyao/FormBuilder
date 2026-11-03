@@ -2163,7 +2163,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     /// <summary>
     /// 別的畫面（「存檔後關閉並重新整理」）存檔後：用上一次的條件重新查詢，停在 key 那筆；
-    /// 還沒查詢過就只查 key 那筆。只放 SQL 清單的畫面重查 SQL 清單
+    /// 還沒查詢過就只查 key 那筆。key 不是這個畫面的資料（開的是別的資料表的畫面）就停在原本那筆。只放 SQL 清單的畫面重查 SQL 清單
     /// </summary>
     private void RefreshResults(IReadOnlyDictionary<string, object> key)
     {
@@ -2172,6 +2172,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             LoadSqlLists();
             return;
         }
+        var before = HasCurrent && HasKey ? CurrentKey() : null;     // 原本停的那筆
+        bool ownKey = key != null && key.Count > 0 && HasKey && key.Keys.All(k => def.MasterKeys.Any(m => m.Column.Equals(k, StringComparison.OrdinalIgnoreCase)));
+        if (!ownKey) key = before;
         if (lastQuery is { } last)
         {
             using var cmd = Dialect.CreateCommand(sql: last.Sql);
