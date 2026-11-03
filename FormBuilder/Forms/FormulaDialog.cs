@@ -4,7 +4,7 @@ using System.Drawing.Design;
 namespace FormBuilder;
 
 /// <summary>
-/// 編輯計算欄位的公式：左邊點選（雙擊）欄位插入名稱，按運算符號按鈕插入 + - * / ( )，下方即時檢查公式
+/// 編輯計算欄位的公式：左邊點選（雙擊）欄位插入名稱，按運算符號按鈕插入 + - * / ( ) &amp; 和 "文字"，下方即時檢查公式
 /// </summary>
 public class FormulaDialog : Form
 {
@@ -24,7 +24,7 @@ public class FormulaDialog : Form
     /// <param name="fields">可以用的欄位名稱與標籤（例如 Grid 同一列的其他欄位）</param>
     public FormulaDialog(string formula, IEnumerable<(string Column, string Label)> fields, string fieldsTitle = "畫面上的欄位（雙擊插入）")
     {
-        Text = "公式：欄位名稱和數字做 + - * /，可以用括號";
+        Text = "公式：欄位名稱和數字做 + - * /，可以用括號；& 接文字";
         Font = new Font("Microsoft JhengHei UI", 9F);
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = MaximizeBox = false;
@@ -43,18 +43,26 @@ public class FormulaDialog : Form
         // 右邊：運算符號按鈕、公式、檢查結果
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 8, 8, 8) };
         var ops = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36 };
-        foreach (string op in new[] { "+", "-", "*", "/", "(", ")" })
+        foreach (string op in new[] { "+", "-", "*", "/", "(", ")", "&" })
         {
             var b = new Button { Text = op, Width = 40, Height = 28 };
             b.Click += (s, e) => Insert($" {op} ");
             ops.Controls.Add(b);
         }
+        var btnText = new Button { Text = "\"文字\"", Width = 60, Height = 28 };
+        btnText.Click += (s, e) =>
+        {
+            Insert("\"\"");
+            txtFormula.SelectionStart--;                   // 游標放在引號中間，直接打字
+        };
+        ops.Controls.Add(btnText);
         right.Controls.Add(txtFormula);
         right.Controls.Add(ops);
         right.Controls.Add(new Label
         {
-            Text = "例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0",
-            Dock = DockStyle.Top, Height = 40,
+            Text = "例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0。\n"
+                 + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）",
+            Dock = DockStyle.Top, Height = 58,
         });
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };
@@ -87,7 +95,7 @@ public class FormulaDialog : Form
     }
 
     /// <summary>欄位名稱有空白或運算符號時加上 [ ]</summary>
-    private static string NameText(string name) => name.Any(c => char.IsWhiteSpace(c) || "+-*/()（）[]".Contains(c)) ? $"[{name}]" : name;
+    private static string NameText(string name) => name.Any(c => char.IsWhiteSpace(c) || "+-*/&()（）[]\"'".Contains(c)) ? $"[{name}]" : name;
 
     private void Insert(string text)
     {

@@ -113,10 +113,26 @@ public static class GridCells
             cache[c] = result;
             return result;
         }
-        foreach (var c in formulas)
+        // 數字公式先算，文字公式（& 串接）再用算好的值接起來
+        foreach (var c in formulas.OrderBy(c => Formula.IsText(c.Formula)))
         {
-            decimal? value = Compute(c, new HashSet<GridColumnDefinition>());
             var column = row.Table.Columns[c.Column];
+            if (Formula.IsText(c.Formula))
+            {
+                string text = Formula.EvaluateText(c.Formula, name =>
+                    row.Table.Columns.Contains(name) ? row[name] : throw new FormatException($"公式裡的欄位「{name}」不在這一列"), c.Decimals);
+                try
+                {
+                    row[c.Column] = text == null ? DBNull.Value
+                        : column.DataType == typeof(string) ? text : Convert.ChangeType(text, column.DataType, CultureInfo.CurrentCulture);
+                }
+                catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+                {
+                    row[c.Column] = DBNull.Value;           // 文字放不進數字、日期欄位
+                }
+                continue;
+            }
+            decimal? value = Compute(c, new HashSet<GridColumnDefinition>());
             bool integer = column.DataType == typeof(int) || column.DataType == typeof(long) || column.DataType == typeof(short) || column.DataType == typeof(byte)
                            || c.DataType is "int" or "bigint" or "smallint" or "tinyint";
             int decimals = integer ? 0 : c.Decimals;
@@ -206,8 +222,14 @@ public static class GridCells
             if (f == null || formula == "") continue;
             bool display = f.IsTextLabel || f.QueryOnly;
             if (!display && !fillData) continue;
-            decimal? value = Formula.Evaluate(formula, valueOf, aggregateOf);
             bool integer = f.DataType is "int" or "bigint" or "smallint" or "tinyint";
+            if (Formula.IsText(formula))
+            {
+                string joined = Formula.EvaluateText(formula, valueOf, integer ? 0 : f.Decimals, aggregateOf);
+                InputHelper.SetValue(inputs[f], joined ?? (display ? "" : null));
+                continue;
+            }
+            decimal? value = Formula.Evaluate(formula, valueOf, aggregateOf);
             InputHelper.SetValue(inputs[f], value == null ? (display ? "" : null)
                                           : Formula.Format(value.Value, integer ? 0 : f.Decimals));
         }
@@ -353,7 +375,7 @@ public static class GridCells
                 {
                     GridCellKind.勾選框 => typeof(bool),
                     GridCellKind.日期選擇 => typeof(DateTime),
-                    _ => TypeHelper.IsNumber(c.DataType) ? typeof(decimal) : typeof(string),
+                    _ => TypeHelper.IsNumber(c.DataType) && !(c.HasFormula && Formula.IsText(c.Formula)) ? typeof(decimal) : typeof(string),   // 文字公式（& 串接）的結果是文字
                 }) { DefaultValue = Resolve(c) == GridCellKind.勾選框 ? false : DBNull.Value });
             HookCustomValues(grid, table, custom.Where(c => Resolve(c) == GridCellKind.文字框 && (c.HasFormula || !string.IsNullOrWhiteSpace(c.ValueSql))).ToList(),
                              connectionString);
@@ -450,8 +472,12 @@ public static class GridCells
                         if (c.HasFormula)
                         {
                             foreach (var row in list)
-                                SetCustomValue(row, c.Column, ToColumnValue(row.Table.Columns[c.Column], c, Formula.Evaluate(c.Formula, name =>
-                                    row.Table.Columns.Contains(name) ? row[name] : throw new FormatException($"公式裡的欄位「{name}」不在這一列"))));
+                            {
+                                object ValueOf(string name) => row.Table.Columns.Contains(name) ? row[name] : throw new FormatException($"公式裡的欄位「{name}」不在這一列");
+                                SetCustomValue(row, c.Column, Formula.IsText(c.Formula)
+                                    ? (object)Formula.EvaluateText(c.Formula, ValueOf, c.Decimals) ?? DBNull.Value
+                                    : ToColumnValue(row.Table.Columns[c.Column], c, Formula.Evaluate(c.Formula, ValueOf)));
+                            }
                             continue;
                         }
                         if (string.IsNullOrWhiteSpace(connectionString)) throw new InvalidOperationException("這個畫面沒有資料庫連線");

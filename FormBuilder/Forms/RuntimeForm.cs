@@ -1378,10 +1378,19 @@ public partial class RuntimeForm : Form, IRecordNavigator
             bool editing = mode is Mode.Insert or Mode.Modify;
             bool showing = editing || (mode == Mode.Browse && HasCurrent && listGrid == null);
             var cache = new Dictionary<FieldDefinition, decimal?>();
-            foreach (var f in def.Fields.Where(f => f.HasFormula && (f.IsCalculated || editing)))
+            // 數字公式先算，文字公式（& 串接）再用算好的值接起來
+            foreach (var f in def.Fields.Where(f => f.HasFormula && (f.IsCalculated || editing)).OrderBy(f => Formula.IsText(f.Formula)))
             {
+                int decimals = f.DataType is "int" or "bigint" or "smallint" or "tinyint" ? 0 : f.Decimals;
+                if (Formula.IsText(f.Formula))
+                {
+                    SetValue(f, showing ? Formula.EvaluateText(f.Formula, name =>
+                        def.Fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } source
+                            ? GetValue(source) : throw new FormatException($"公式裡的欄位「{name}」不在畫面上"), decimals) : null);
+                    continue;
+                }
                 decimal? value = showing ? Compute(f, cache, new HashSet<FieldDefinition>()) : null;
-                SetValue(f, value == null ? null : Formula.Format(value.Value, f.DataType is "int" or "bigint" or "smallint" or "tinyint" ? 0 : f.Decimals));
+                SetValue(f, value == null ? null : Formula.Format(value.Value, decimals));
             }
         }
         finally
