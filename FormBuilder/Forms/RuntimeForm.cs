@@ -2001,6 +2001,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (e.Row.Table.Columns.Contains(detail))
                     e.Row[detail] = results.Rows[current][master];
         };
+        GridCells.FillEmptyFormulas(table, gridDef.Columns); // 公式欄位沒存值：讀進來就算出來顯示
         GridCells.HookFormulas(table, gridDef.Columns);      // 數量、單價改了，金額跟著重算
         part.Table = table;
         part.Grid.DataSource = part.Table;

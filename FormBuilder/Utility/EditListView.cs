@@ -386,6 +386,7 @@ public class EditListView
                 cmd.CommandText = $"{select} WHERE {string.Join(" AND ", conditions)}";
             }
             table = d.Fill(cmd);
+            GridCells.FillEmptyFormulas(table, list.Columns);   // 公式欄位沒存值（例如只顯示在畫面的金額）：讀進來就算出來顯示
             if (Editable) PrepareEditTable(table);
             Grid.DataSource = table;
         }

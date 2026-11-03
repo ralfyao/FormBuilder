@@ -47,7 +47,7 @@ public static class GridCells
 
     /// <summary>
     /// 有公式的欄位：同一列用到的欄位改了（Grid 輸入、編輯視窗寫回）就重算那一列，結果寫進 DataTable（資料表欄位會跟著存檔）。
-    /// 讀進來的資料不重算，顯示資料庫裡存的值。每個新的 DataTable 呼叫一次
+    /// 讀進來的資料不重算，顯示資料庫裡存的值（空的由 FillEmptyFormulas 補算）。每個新的 DataTable 呼叫一次
     /// </summary>
     public static void HookFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns)
     {
@@ -68,6 +68,26 @@ public static class GridCells
                 recalculating = false;
             }
         };
+    }
+
+    /// <summary>
+    /// 讀進來時公式欄位是空的（資料庫沒存、只顯示在畫面的欄位）：照公式算出來顯示。
+    /// 有值的不動（顯示資料庫裡存的值）；算出來的只是顯示，不算異動，不會因此存檔
+    /// </summary>
+    public static void FillEmptyFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns)
+    {
+        var formulas = columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column)).ToList();
+        if (formulas.Count == 0) return;
+        foreach (var c in formulas) table.Columns[c.Column].ReadOnly = false;
+        foreach (DataRow row in table.Rows)
+        {
+            if (row.RowState != DataRowState.Unchanged || formulas.All(c => row[c.Column] != DBNull.Value)) continue;
+            var stored = formulas.ToDictionary(c => c, c => row[c.Column]);
+            RecalcRow(row, formulas);
+            foreach (var (c, value) in stored)
+                if (value != DBNull.Value) row[c.Column] = value;   // 資料庫有存值的欄位維持原值
+            row.AcceptChanges();
+        }
     }
 
     private static List<string> SafeNames(string formula)
