@@ -643,9 +643,10 @@ public partial class DesignerForm : Form, IPickerHost
         }
         int n = 1;
         while (def.Joins.Any(j => j.Alias == $"J{n}")) n++;
-        using var dlg = new JoinDialog(connectionString, $"J{n}", MasterTableColumns(), UsedFieldNames());
+        using var dlg = new JoinDialog(connectionString, $"J{n}", JoinLinkColumns(null), UsedFieldNames());
         dlg.ForMaster(data.Schema, data.Table, data.Column.Name);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        dlg.Join.LinkText = ToJoinLinkText(dlg.Join);
         def.Joins.Add(dlg.Join);
         AddJoinFieldBoxes(dlg.Join, dlg.NewColumns, location);
         UpdateStatus($"已 JOIN {dlg.Join.TableName}（{dlg.Join.LinkText}），帶進來的欄位只顯示、不會存檔。要改關聯條件：選欄位後按「編輯 → 單頭 JOIN 關聯條件」");
@@ -666,10 +667,10 @@ public partial class DesignerForm : Form, IPickerHost
             MessageBox.Show("請先連線資料庫。", "提醒");
             return;
         }
-        using var dlg = new JoinDialog(connectionString, join.Alias, MasterTableColumns(), UsedFieldNames());
-        dlg.ForMaster(join.TableSchema, join.TableName, null, join.LinkText, def.Fields.Where(f => f.JoinAlias == join.Alias).Select(f => f.SourceColumn));
+        using var dlg = new JoinDialog(connectionString, join.Alias, JoinLinkColumns(join.Alias), UsedFieldNames());
+        dlg.ForMaster(join.TableSchema, join.TableName, null, FromJoinLinkText(join.LinkText), def.Fields.Where(f => f.JoinAlias == join.Alias).Select(f => f.SourceColumn));
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        join.LinkText = dlg.Join.LinkText;
+        join.LinkText = ToJoinLinkText(dlg.Join);
         AddJoinFieldBoxes(join, dlg.NewColumns, NextFreePoint());
         UpdateStatus($"JOIN {join.Alias}（{join.TableName}）的關聯條件：{join.LinkText}");
     }
@@ -728,6 +729,30 @@ public partial class DesignerForm : Form, IPickerHost
         JoinAlias = f.JoinAlias,
         SourceColumn = f.SourceColumn,
     };
+
+    /// <summary>
+    /// 單頭 JOIN 關聯條件左邊的選項：單頭資料表的欄位，加上別的 JOIN 帶進來的單頭欄位（例如用 J1 帶出的客戶名稱再 JOIN 客戶資料）；
+    /// 正在修改的 JOIN 自己帶進來的欄位不列（不能自己接自己）
+    /// </summary>
+    private List<ColumnInfo> JoinLinkColumns(string editingAlias) =>
+        MasterTableColumns()
+            .Concat(def.Fields.Where(f => f.IsJoin && !f.IsCalculated && f.JoinAlias != editingAlias)
+                              .Select(f => new ColumnInfo { Name = f.Column, DataType = f.DataType, MaxLength = f.MaxLength }))
+            .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
+
+    /// <summary>關聯條件左邊是 JOIN 帶進來的欄位時，存成「別名.原始欄位」（查詢時接在那個 JOIN 後面）</summary>
+    private string ToJoinLinkText(GridJoinDefinition join) =>
+        string.Join(", ", join.Links.Select(l =>
+            def.Fields.FirstOrDefault(f => f.IsJoin && f.Column.Equals(l.Master, StringComparison.OrdinalIgnoreCase)) is { } jf
+                ? $"{jf.JoinAlias}.{jf.SourceColumn}={l.Detail}" : $"{l.Master}={l.Detail}"));
+
+    /// <summary>修改既有 JOIN 時，「別名.原始欄位」換回單頭欄位名稱，關聯條件的下拉選單才對得上</summary>
+    private string FromJoinLinkText(string linkText) =>
+        string.Join(", ", GridDefinition.ParseLinks(linkText).Select(l =>
+            l.Master.IndexOf('.') is > 0 and var dot
+            && def.Fields.FirstOrDefault(f => f.IsJoin && f.JoinAlias == l.Master[..dot]
+                                              && string.Equals(f.SourceColumn, l.Master[(dot + 1)..], StringComparison.OrdinalIgnoreCase)) is { } jf
+                ? $"{jf.Column}={l.Detail}" : $"{l.Master}={l.Detail}"));
 
     /// <summary>單頭資料表的全部欄位（JOIN 關聯條件左邊的選項）</summary>
     private List<ColumnInfo> MasterTableColumns() =>
