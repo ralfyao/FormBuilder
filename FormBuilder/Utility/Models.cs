@@ -1038,7 +1038,8 @@ public class ButtonDefinition
     [Category("按鈕"), DisplayName("執行後動作"),
      Description("按下按鈕（通過執行前檢查、確認）後先執行這段 SQL，成功了才接著做「動作」（例如開啟畫面）。"
                + "同一個交易執行，@欄位名稱 帶入選取的資料（清單選多筆時每筆各執行一次），失敗就全部還原、不做後續動作；需要編修權限。"
-               + "例如：UPDATE A材料 SET 狀態 = '處理中' WHERE 產品編號 = @產品編號"),
+               + "例如：UPDATE A材料 SET 狀態 = '處理中' WHERE 產品編號 = @產品編號。"
+               + "SQL 最後 SELECT 出來的第一筆可以給「開啟畫面」的傳入參數用，例如 SQL 結尾 SELECT @新單號 AS 出貨單號，傳入參數寫 單號=@出貨單號，就會開出剛寫入的那張單"),
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PreActionSql { get; set; }
 

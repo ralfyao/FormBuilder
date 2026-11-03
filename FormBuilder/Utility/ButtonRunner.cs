@@ -348,16 +348,30 @@ public static class ButtonRunner
         }
         if (!Confirm(b)) return false;
         bool changed = false;
+        IReadOnlyDictionary<string, object> preResult = null;
         if (!string.IsNullOrWhiteSpace(b.PreActionSql))
         {
-            if (!RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, b.PreActionSql, quiet: true)) return false;
+            if (!RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, b.PreActionSql, quiet: true, onResult: values => preResult = values)) return false;
             changed = true;
         }
         if (b.Action == ButtonAction.執行SQL)
             return RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, onResult: onResult) || changed;
-        // 回傳對應（選取視窗）帶回的值交給呼叫端；「存檔後關閉並重新整理」存檔過就算有改資料，讓呼叫端重新讀取
-        OpenForm(b, sourcePath, owner, ValueOf, onReturn: onResult, onSaved: _ => changed = true, connectionString: connectionString);
+        // 開啟畫面的傳入參數先找「執行後動作」SQL 查出來的值；回傳對應（選取視窗）帶回的值交給呼叫端；
+        // 「存檔後關閉並重新整理」存檔過就算有改資料，讓呼叫端重新讀取
+        OpenForm(b, sourcePath, owner, name => TryGetResult(preResult, name, out var v) ? v : ValueOf(name),
+                 onReturn: onResult, onSaved: _ => changed = true, connectionString: connectionString);
         return changed;
+    }
+
+    /// <summary>「執行後動作」SQL 查出來的第一筆有沒有這個欄位（不分大小寫）；開啟畫面的傳入參數優先用它</summary>
+    public static bool TryGetResult(IReadOnlyDictionary<string, object> result, string name, out object value)
+    {
+        value = null;
+        if (result == null) return false;
+        var key = result.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key == null) return false;
+        value = result[key] == DBNull.Value ? null : result[key];
+        return true;
     }
 
     /// <summary>SQL 裡的 @參數名稱（不含 @；@@ROWCOUNT 這類系統函數、SQL 裡自己 DECLARE 的變數不算）</summary>

@@ -283,6 +283,25 @@ public partial class RecordNavigatorDialog : Form
         if (!ButtonRunner.CheckAllowed(b, nav.Permission)) return;
         if (!PassesPreCheck(b)) return;
         if (!ButtonRunner.Confirm(b)) return;
+        // 「執行後動作」：先執行 SQL，成功了才做後續的動作；查出來的第一筆給開啟畫面當傳入參數（例如剛轉出的出貨單號）
+        IReadOnlyDictionary<string, object> preResult = null;
+        if (!string.IsNullOrWhiteSpace(b.PreActionSql))
+        {
+            if (nav.Permission is { Modify: false })
+            {
+                MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
+                return;
+            }
+            var preValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
+            if (preValueOf == null) return;
+            if (!ButtonRunner.RunSql(b, connectionString, new[] { preValueOf }, formKey: null, userSql: b.PreActionSql, quiet: true, onResult: values => preResult = values)) return;
+            if (nav.CurrentRow != null && mode == EditMode.Browse)   // 資料可能被 SQL 改過，重讀（新增、修改中不重讀，才不會蓋掉正在輸入的內容）
+            {
+                nav.Refresh();
+                ShowRecord();
+                SetMode(EditMode.Browse);
+            }
+        }
         switch (b.Action)
         {
             case ButtonAction.新增: BeginInsert(); break;
@@ -326,7 +345,7 @@ public partial class RecordNavigatorDialog : Form
                 // 傳入參數的 @欄位：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
                 var openValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
                 if (openValueOf == null) break;
-                ButtonRunner.OpenForm(b, sourcePath, this, openValueOf, values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString,
+                ButtonRunner.OpenForm(b, sourcePath, this, name => ButtonRunner.TryGetResult(preResult, name, out var fromSql) ? fromSql : openValueOf(name), values => ButtonRunner.FillFields(values, inputs), connectionString: connectionString,
                                       onReturnRows: rows => AddReturnedRows(b, rows));
                 break;
             }

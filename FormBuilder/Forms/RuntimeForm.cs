@@ -968,6 +968,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (!startingQuery && !PassesPreCheck(b)) return;
         if (!startingQuery && !ButtonRunner.Confirm(b)) return;
         // 「執行後動作」：先對選取的資料執行 SQL，成功了才做後續的動作（例如開啟畫面）
+        IReadOnlyDictionary<string, object> preResult = null;
         if (!startingQuery && !string.IsNullOrWhiteSpace(b.PreActionSql))
         {
             if (!perm.Modify)
@@ -975,7 +976,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
                 return;
             }
-            if (!RunSqlOnSelection(b, b.PreActionSql, quiet: true)) return;
+            if (!RunSqlOnSelection(b, b.PreActionSql, quiet: true, values => preResult = values)) return;
         }
         switch (b.Action)
         {
@@ -996,7 +997,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.單身: BeginDetail(); break;
             case ButtonAction.離開: Close(); break;
             case ButtonAction.執行SQL: RunCustomSql(b); break;
-            case ButtonAction.開啟畫面: OpenOtherForm(b); break;
+            case ButtonAction.開啟畫面: OpenOtherForm(b, preResult); break;
             case ButtonAction.列印報表: PrintReport(b); break;
             case ButtonAction.開啟查詢條件畫面: QueryByConditionForm(b); break;
         }
@@ -1084,9 +1085,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>
     /// 對選取的資料執行 SQL（同一個交易，失敗全部還原）：清單選了多筆時每一筆各執行一次，沒選就用目前這筆；
     /// 只放 SQL 清單的畫面用 SQL 清單上選取的列。@欄位名稱 先找那一筆的欄位，沒有就找畫面上的輸入欄位、開啟時的傳入參數。
-    /// quiet = 成功時不顯示「執行完成」（按鈕的「執行後動作」）；回傳是否成功
+    /// quiet = 成功時不顯示「執行完成」（按鈕的「執行後動作」）；onResult = SQL 查出來的第一筆另外交給呼叫端（開啟畫面的傳入參數用）；回傳是否成功
     /// </summary>
-    private bool RunSqlOnSelection(ButtonDefinition b, string sql, bool quiet)
+    private bool RunSqlOnSelection(ButtonDefinition b, string sql, bool quiet, Action<IReadOnlyDictionary<string, object>> onResult = null)
     {
         object Other(string name)
         {
@@ -1120,7 +1121,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         else if (ok && !HasMasterTable) LoadSqlLists();           // 只放 SQL 清單的畫面：資料可能被 SQL 改過，重查清單
         // SQL 查出來的值（「SQL 回傳對應」）等重讀完再填進畫面上的欄位，才不會被重讀蓋掉
-        if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
+        if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn) && onResult == null);
+        if (result != null) onResult?.Invoke(result);
         return ok;
     }
 
@@ -1226,10 +1228,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
     }
 
-    /// <summary>開啟畫面：傳入參數的 @欄位 先找畫面上的輸入欄位，再找目前這筆；選取視窗帶回的值填進欄位（欄位的開窗選取也用這個）</summary>
-    private void OpenOtherForm(ButtonDefinition b) =>
+    /// <summary>
+    /// 開啟畫面：傳入參數的 @欄位 先找「執行後動作」SQL 查出來的值（例如剛轉出的出貨單號），再找畫面上的輸入欄位、目前這筆；
+    /// 選取視窗帶回的值填進欄位（欄位的開窗選取也用這個）
+    /// </summary>
+    private void OpenOtherForm(ButtonDefinition b, IReadOnlyDictionary<string, object> preResult = null) =>
         ButtonRunner.OpenForm(b, def.SourcePath, this, name =>
         {
+            if (ButtonRunner.TryGetResult(preResult, name, out var fromSql)) return fromSql;
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (field != null && mode != Mode.Browse) return GetValue(field);
             if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
