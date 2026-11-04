@@ -20,7 +20,9 @@ public partial class LoginForm : Form
         this.adminOnly = adminOnly;
         this.productName = productName;
         this.allowSetup = allowSetup;
-        lnkSetup.Visible = lblServer.Visible = allowSetup;
+        lnkSetup.Visible = lblServer.Visible = lnkConnection.Visible = allowSetup;
+        lnkConnection.SetBounds(lnkSetup.Left, lnkSetup.Bottom - 2, 100, 18);
+        Controls.Add(lnkConnection);
         Text = $"登入　{productName} {Updater.CurrentVersion}";
         if (preview != null)
         {
@@ -40,8 +42,58 @@ public partial class LoginForm : Form
             using var setup = new SysSetupForm(config);
             if (setup.ShowDialog(this) == DialogResult.OK) ShowServer();
         };
+        lnkConnection.LinkClicked += async (s, e) => await ChangeConnection();
         Shown += (s, e) => (txtUser.Text == "" ? txtUser : txtPwd).Focus();
         ShowServer();
+    }
+
+    /// <summary>「修改連線…」：直接開連線設定視窗改系統資料庫連線（只有 ERP Studio）</summary>
+    private readonly LinkLabel lnkConnection = new() { Text = "修改連線…", TabStop = true };
+
+    /// <summary>
+    /// 修改這台電腦的系統資料庫連線：先通過管理者驗證（跟「系統設定」一樣），在連線設定視窗改好、測試連得上才存；
+    /// 新的系統資料庫還沒有帳號時，接著開「系統設定」建立第一個管理者
+    /// </summary>
+    private async Task ChangeConnection()
+    {
+        if (!VerifyAdminForSetup()) return;
+        using var dlg = new ConnectionDialog(config.GetConnection(), DbKind.SqlServer);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (dlg.DatabaseType != DbKind.SqlServer)
+        {
+            MessageBox.Show("系統資料庫目前只支援 SQL Server（各畫面的業務資料庫可以是 Oracle、MySQL）。", Text);
+            return;
+        }
+        int users;
+        try
+        {
+            SysDb.EnsureSchema(dlg.ConnectionString);
+            users = SysDb.UserCount(dlg.ConnectionString);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("這個資料庫不能當系統資料庫（請確認帳號有建立資料表的權限）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        config.SetConnection(dlg.ConnectionString);
+        try
+        {
+            config.Save();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("連線設定存檔失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        ShowServer();
+        if (users == 0)
+        {
+            MessageBox.Show("這個系統資料庫還沒有帳號，接著請建立第一個管理者。", Text);
+            using var setup = new SysSetupForm(config);
+            setup.ShowDialog(this);
+            ShowServer();
+        }
+        await RefreshBranding();                           // 換了系統資料庫，企業識別跟著重讀
     }
 
     private readonly bool adminOnly;
