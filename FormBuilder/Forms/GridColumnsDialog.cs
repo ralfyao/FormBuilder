@@ -25,6 +25,10 @@ public partial class GridColumnsDialog : Form
     private readonly List<string> usedNames = new();
     /// <summary>自訂按鈕欄位改過的按鈕動作（按「確定」才寫回欄位）</summary>
     private readonly Dictionary<GridColumnDefinition, ButtonDefinition> editedButtons = new();
+    /// <summary>單頭（或編輯視窗）的欄位：開窗選取的傳入參數可以用</summary>
+    private readonly List<string> masterColumnNames;
+    /// <summary>「選項 / 格式」欄在開窗選取時顯示的開頭（只是顯示，不存）</summary>
+    private const string PickerPrefix = "開窗：";
 
     /// <param name="connectionString">「JOIN 其他資料表」、「編輯視窗版面」設計器的「資料表」頁籤要用的連線字串</param>
     /// <param name="forEditList">true = 設定編輯視窗上的明細清單（沒有「編輯視窗版面」按鈕）</param>
@@ -38,6 +42,7 @@ public partial class GridColumnsDialog : Form
         grid = gridDefinition;
         this.connectionString = connectionString;
         workColumns = grid.Columns.ToList();
+        masterColumnNames = masterColumns.ToList();
         if (grid.IsMasterList && masterList is { } m)
         {
             masterJoins = m.Form.Joins;
@@ -74,6 +79,9 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("AfterSql", typeof(string));
         columnTable.Columns.Add("AfterParams", typeof(string));
         columnTable.Columns.Add("AfterReturn", typeof(string));
+        columnTable.Columns.Add("PickForm", typeof(string));             // 開窗選取（同編輯視窗的開窗設定）
+        columnTable.Columns.Add("PickParams", typeof(string));
+        columnTable.Columns.Add("PickReturn", typeof(string));
         foreach (var c in workColumns) AddColumnRow(c);
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
@@ -83,6 +91,11 @@ public partial class GridColumnsDialog : Form
         btnJoin.Click += (s, e) => AddJoin();
         dgvColumns.CellBeginEdit += (s, e) =>
         {
+            if (e.RowIndex >= 0 && e.ColumnIndex == colCellOptions.Index && IsPickerRow(e.RowIndex))
+            {
+                e.Cancel = true;
+                return;
+            }
             if (e.RowIndex < 0 || Convert.ToString(dgvColumns.Rows[e.RowIndex].Cells[colSource.Index].Value) == "") return;
             // 自訂文字框 / 數字框可以設公式、小數位數
             if (IsCustomText(ColumnAt(e.RowIndex)) && (e.ColumnIndex == colFormula.Index || e.ColumnIndex == colDecimals.Index)) return;
@@ -96,6 +109,19 @@ public partial class GridColumnsDialog : Form
         dgvColumns.CellValueChanged += (s, e) =>
         {
             if (e.RowIndex < 0 || e.ColumnIndex != colCellType.Index || ColumnAt(e.RowIndex) is not { IsCustom: false }) return;
+            // 改成開窗選取：還沒設定開窗畫面就接著開設定；改成別的：「選項 / 格式」清掉開窗的說明
+            int rowIndex = e.RowIndex;
+            if (IsPickerRow(rowIndex))
+            {
+                BeginInvoke(() =>
+                {
+                    ShowPickerSummary(columnTable.Rows[rowIndex]);
+                    if (Convert.ToString(columnTable.Rows[rowIndex]["PickForm"]) == "") EditPicker(rowIndex);
+                });
+                return;
+            }
+            if (Convert.ToString(columnTable.Rows[rowIndex]["CellOptions"]).StartsWith(PickerPrefix))
+                BeginInvoke(() => columnTable.Rows[rowIndex]["CellOptions"] = DBNull.Value);
             if (Convert.ToString(dgvColumns.Rows[e.RowIndex].Cells[e.ColumnIndex].Value) != nameof(GridCellKind.按鈕)) return;
             BeginInvoke(() => columnTable.Rows[e.RowIndex]["CellType"] = nameof(GridCellKind.自動));
             MessageBox.Show("「按鈕」只能用在自訂欄位，請按「新增自訂欄位…」加一個按鈕欄位。", "提醒");
@@ -124,8 +150,18 @@ public partial class GridColumnsDialog : Form
         miRemoveCustom.Click += (s, e) => RemoveCustom(CurrentColumn());
         miEditValueSql.Click += (s, e) => EditValueSql(CurrentColumn());
         ctxCustom.Items.AddRange(new ToolStripItem[] { miEditButton, miEditValueSql, miRemoveCustom });
+        dgvColumns.CurrentCellDirtyStateChanged += (s, e) =>
+        {
+            if (dgvColumns.IsCurrentCellDirty && dgvColumns.CurrentCell?.ColumnIndex == colCellType.Index)
+                dgvColumns.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
         dgvColumns.CellDoubleClick += (s, e) =>
         {
+            if (e.RowIndex >= 0 && e.ColumnIndex == colCellOptions.Index && IsPickerRow(e.RowIndex))
+            {
+                EditPicker(e.RowIndex);
+                return;
+            }
             if (e.RowIndex >= 0 && e.ColumnIndex == colFormula.Index)
             {
                 EditFormula(e.RowIndex);
@@ -204,7 +240,43 @@ public partial class GridColumnsDialog : Form
             row["AfterParams"] = (object)c.EditAfterSelectParams ?? DBNull.Value;
             row["AfterReturn"] = (object)c.EditAfterSelectReturn ?? DBNull.Value;
             row["AfterSelect"] = (object)AfterSelectSummary(c.EditAfterSelectSql) ?? DBNull.Value;
+            row["PickForm"] = (object)c.EditPickerForm ?? DBNull.Value;
+            row["PickParams"] = (object)c.EditPickerParams ?? DBNull.Value;
+            row["PickReturn"] = (object)c.EditPickerReturn ?? DBNull.Value;
+            if (IsPickerKind(row)) ShowPickerSummary(row);
         }
+    }
+
+    private static bool IsPickerKind(DataRow row) => Convert.ToString(row["CellType"]) == nameof(GridCellKind.開窗選取);
+
+    /// <summary>清單第 rowIndex 列的輸入方式是開窗選取</summary>
+    private bool IsPickerRow(int rowIndex) =>
+        rowIndex >= 0 && rowIndex < dgvColumns.Rows.Count && Convert.ToString(dgvColumns.Rows[rowIndex].Cells[colCellType.Index].Value) == nameof(GridCellKind.開窗選取);
+
+    /// <summary>開窗選取的欄位：「選項 / 格式」顯示開哪個畫面（雙擊設定）</summary>
+    private static void ShowPickerSummary(DataRow row)
+    {
+        string form = Convert.ToString(row["PickForm"]);
+        row["CellOptions"] = form == "" ? PickerPrefix + "（雙擊設定）" : PickerPrefix + Path.GetFileName(form)
+                             + (Convert.ToString(row["PickReturn"]) is { Length: > 0 } ret ? "，帶回 " + ret : "");
+    }
+
+    /// <summary>開窗選取設定：開窗畫面、傳入參數、回傳對應（跟編輯視窗版面的開窗設定是同一個）</summary>
+    private void EditPicker(int rowIndex)
+    {
+        var c = ColumnAt(rowIndex);
+        if (c == null) return;
+        dgvColumns.EndEdit();
+        var row = columnTable.Rows[rowIndex];
+        var rowColumns = workColumns.Where(x => !(x.IsCustom && x.CellType == GridCellKind.按鈕)).Select(x => x.Column);
+        using var dlg = new GridPickerDialog(c.Column, c.Header ?? c.Column, Convert.ToString(row["PickForm"]), Convert.ToString(row["PickParams"]),
+                                             Convert.ToString(row["PickReturn"]), rowColumns, masterColumnNames);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        static object Db(string v) => string.IsNullOrWhiteSpace(v) ? DBNull.Value : v.Trim();
+        row["PickForm"] = Db(dlg.Settings.PickerForm);
+        row["PickParams"] = Db(dlg.Settings.PickerParams);
+        row["PickReturn"] = Db(dlg.Settings.PickerReturn);
+        ShowPickerSummary(row);
     }
 
     private readonly ContextMenuStrip ctxCustom = new();
@@ -324,7 +396,10 @@ public partial class GridColumnsDialog : Form
         }
         columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions,
                              c.Formula, c.Decimals >= 0 ? c.Decimals.ToString() : null,
-                             AfterSelectSummary(c.EditAfterSelectSql), c.EditAfterSelectSql, c.EditAfterSelectParams, c.EditAfterSelectReturn);
+                             AfterSelectSummary(c.EditAfterSelectSql), c.EditAfterSelectSql, c.EditAfterSelectParams, c.EditAfterSelectReturn,
+                             c.EditPickerForm, c.EditPickerParams, c.EditPickerReturn);
+        var added = columnTable.Rows[columnTable.Rows.Count - 1];
+        if (IsPickerKind(added)) ShowPickerSummary(added);
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -424,7 +499,11 @@ public partial class GridColumnsDialog : Form
             if (!c.IsCustom)
                 c.CellType = Enum.TryParse<GridCellKind>(Convert.ToString(row["CellType"]), out var kind) && kind != GridCellKind.按鈕 ? kind : GridCellKind.自動;
             if (editedButtons.TryGetValue(c, out var button)) c.Button = button;
-            c.CellOptions = string.IsNullOrWhiteSpace(Convert.ToString(row["CellOptions"])) ? null : Convert.ToString(row["CellOptions"]).Trim();
+            c.CellOptions = string.IsNullOrWhiteSpace(Convert.ToString(row["CellOptions"])) || c.CellType == GridCellKind.開窗選取
+                            || Convert.ToString(row["CellOptions"]).StartsWith(PickerPrefix) ? null : Convert.ToString(row["CellOptions"]).Trim();
+            c.EditPickerForm = Convert.ToString(row["PickForm"]) is { Length: > 0 } pf ? pf : null;
+            c.EditPickerParams = Convert.ToString(row["PickParams"]) is { Length: > 0 } pp ? pp : null;
+            c.EditPickerReturn = Convert.ToString(row["PickReturn"]) is { Length: > 0 } pr ? pr : null;
             if (editedValueSql.TryGetValue(c, out var valueSql)) c.ValueSql = valueSql;
             c.Formula = c.IsJoin || c.IsCustom && !IsCustomText(c) || string.IsNullOrWhiteSpace(Convert.ToString(row["Formula"])) ? null : Convert.ToString(row["Formula"]).Trim();
             c.EditAfterSelectSql = Convert.ToString(row["AfterSql"]) is { Length: > 0 } sql ? sql : null;

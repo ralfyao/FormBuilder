@@ -166,7 +166,8 @@ namespace FormBuilder
             "下拉選單",
             "勾選框",
             "日期選擇",
-            "按鈕"});
+            "按鈕",
+            "開窗選取"});
             this.colCellType.Name = "colCellType";
             this.colCellType.ToolTipText = "Grid 儲存格的輸入方式；自動 = bit 用勾選框、日期用日期選擇，其他用文字框";
             this.colCellType.Width = 90;

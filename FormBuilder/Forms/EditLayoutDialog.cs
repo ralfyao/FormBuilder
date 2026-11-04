@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Data;
 
 namespace FormBuilder;
@@ -480,6 +480,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
                 Width = l.Width,
                 Height = l.Height,
                 AutoFitColumns = l.AutoFitColumns,
+                FillColumns = l.FillColumns,
                 Columns = l.Columns,
                 Joins = l.Joins,
                 OpenForm = l.OpenForm,

@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Data.Common;
 
 namespace FormBuilder;
@@ -61,7 +61,8 @@ public class EditListView
         };
         // 輸入中：欄位的執行後動作（@名稱 先取同一列，再取編輯視窗上的欄位）
         GridCells.HookAfterSelect(Grid, connectionString, name => MasterValueOf?.Invoke(name));
-        if (list.AutoFitColumns) GridCells.HookAutoFit(Grid);      // 列出明細後欄寬依內容調整
+        if (list.FillColumns) GridCells.ApplyFill(Grid);            // 欄寬依比例填滿整個清單
+        else if (list.AutoFitColumns) GridCells.HookAutoFit(Grid); // 列出明細後欄寬依內容調整
         Host = RoundedGridHost.Wrap(Grid);
         // 載入後不要自動選第一列：使用者自己點選的才算「選取」（列印選取的資料時用）
         Grid.DataBindingComplete += (s, e) => Grid.ClearSelection();
@@ -112,6 +113,8 @@ public class EditListView
             if (done == null) MessageBox.Show("明細清單上的按鈕只能用「執行SQL」或「開啟畫面」。", "提醒");
             else if (done == true) Reload(lastValueOf);
         }, connectionString);
+        // 輸入方式 = 開窗選取：輸入明細時「…」或 F4 開選取視窗，選的值帶回同一列
+        GridCells.HookPickers(Grid, fallback, sourcePath, owner, connectionString);
         var button = ButtonRunner.ListOpenButton(list.Title ?? list.TableName, list.OpenForm, list.OpenParams);
         if (button == null) return;
         Grid.CellDoubleClick += (s, e) =>

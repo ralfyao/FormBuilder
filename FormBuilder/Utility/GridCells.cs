@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Data;
 using System.Globalization;
 
@@ -298,6 +298,150 @@ public static class GridCells
                 running = false;
             }
         };
+    }
+
+    // ================= 開窗選取 =================
+
+    /// <summary>格子右邊「…」按鈕的寬度</summary>
+    private const int PickerButtonWidth = 18;
+
+    /// <summary>Grid 欄位的開窗設定轉成選取視窗按鈕（同編輯視窗欄位的開窗選取）；沒設定開窗畫面回傳 null</summary>
+    public static ButtonDefinition PickerButton(GridColumnDefinition c) => ButtonRunner.PickerButton(new FieldDefinition
+    {
+        Column = c.Column,
+        Label = c.Header ?? c.Column,
+        PickerForm = c.EditPickerForm,
+        PickerParams = c.EditPickerParams,
+        PickerReturn = c.EditPickerReturn,
+    });
+
+    /// <summary>
+    /// 輸入方式 = 開窗選取的欄位：格子右邊畫「…」按鈕，點它或按 F4 就開選取視窗（格子可以輸入時才開），
+    /// 選一筆後依回傳對應把值帶回同一列（空白 = 只帶回這個欄位）。
+    /// 傳入參數的 @名稱 先取同一列的欄位，沒有再用 fallback（單頭、編輯視窗上的欄位）
+    /// </summary>
+    public static void HookPickers(DataGridView grid, Func<string, object> fallback, string sourcePath, IWin32Window owner, string connectionString)
+    {
+        static bool IsPicker(DataGridViewColumn col) => col?.Tag is GridColumnDefinition c && Resolve(c) == GridCellKind.開窗選取;
+        if (!grid.Columns.Cast<DataGridViewColumn>().Any(IsPicker)) return;
+        bool busy = false;
+
+        bool CanPick(int rowIndex, int columnIndex) =>
+            rowIndex >= 0 && columnIndex >= 0 && IsPicker(grid.Columns[columnIndex]) && !grid.ReadOnly && !grid[columnIndex, rowIndex].ReadOnly;
+
+        void Open(int rowIndex, int columnIndex)
+        {
+            if (busy || !CanPick(rowIndex, columnIndex)) return;
+            var c = (GridColumnDefinition)grid.Columns[columnIndex].Tag;
+            var b = PickerButton(c);
+            if (b == null)
+            {
+                MessageBox.Show($"「{c.Header ?? c.Column}」還沒有設定開窗畫面（到單身欄位設定，雙擊這個欄位的「選項 / 格式」設定）。", "提醒");
+                return;
+            }
+            busy = true;
+            try
+            {
+                grid.CurrentCell = grid[columnIndex, rowIndex];
+                if (grid.Rows[rowIndex].IsNewRow)
+                {
+                    // 還沒輸入的新增列：先讓它變成真的一列，帶回來的值才放得進去
+                    grid.BeginEdit(false);
+                    grid.NotifyCurrentCellDirty(true);
+                    grid.EndEdit();
+                }
+                else if (grid.IsCurrentCellInEditMode) grid.EndEdit();
+                if (grid.Rows[rowIndex].DataBoundItem is not DataRowView view) return;
+                var table = view.Row.Table;
+                object ValueOf(string name) => table.Columns.Contains(name) ? view[name] : fallback?.Invoke(name);
+                ButtonRunner.OpenForm(b, sourcePath, owner, ValueOf, values =>
+                {
+                    var notFound = new List<string>();
+                    foreach (var (name, value) in values)
+                    {
+                        if (!table.Columns.Contains(name) || table.Columns[name].ReadOnly && !table.Columns[name].AllowDBNull && value is null or DBNull)
+                        {
+                            notFound.Add(name);
+                            continue;
+                        }
+                        try
+                        {
+                            var column = table.Columns[name];
+                            column.ReadOnly = false;
+                            view[name] = value is null or DBNull ? DBNull.Value
+                                       : column.DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
+                                       : Convert.ChangeType(value, column.DataType, CultureInfo.CurrentCulture);
+                        }
+                        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+                        {
+                            notFound.Add($"{name}（型別不符）");
+                        }
+                    }
+                    view.EndEdit();
+                    if (notFound.Count > 0) MessageBox.Show("開窗帶回來的值放不進這些欄位：" + string.Join("、", notFound), "提醒");
+                    if (rowIndex < grid.Rows.Count) grid.InvalidateRow(rowIndex);
+                }, connectionString: connectionString);
+            }
+            finally
+            {
+                busy = false;
+            }
+        }
+
+        // 格子右邊畫「…」按鈕（可以輸入時才畫）
+        grid.CellPainting += (s, e) =>
+        {
+            if (!CanPick(e.RowIndex, e.ColumnIndex) || e.Graphics == null) return;
+            e.Paint(e.ClipBounds, DataGridViewPaintParts.All);
+            var r = ButtonRect(e.CellBounds);
+            ButtonRenderer.DrawButton(e.Graphics, r, System.Windows.Forms.VisualStyles.PushButtonState.Normal);
+            TextRenderer.DrawText(e.Graphics, "…", grid.Font, r, SystemColors.ControlText,
+                                  TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            e.Handled = true;
+        };
+        grid.CellMouseClick += (s, e) =>
+        {
+            if (e.Button != MouseButtons.Left || !CanPick(e.RowIndex, e.ColumnIndex)) return;
+            var cell = grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false);
+            if (e.X >= cell.Width - PickerButtonWidth - 2) grid.BeginInvoke(() => Open(e.RowIndex, e.ColumnIndex));
+        };
+        // F4：格子上（還沒進入編輯）或正在輸入的文字框裡都可以
+        grid.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.F4 || grid.CurrentCell == null) return;
+            e.Handled = true;
+            Open(grid.CurrentCell.RowIndex, grid.CurrentCell.ColumnIndex);
+        };
+        grid.EditingControlShowing += (s, e) =>
+        {
+            if (e.Control is not TextBox box || box.Tag as string == "picker-hooked") return;
+            box.Tag = "picker-hooked";
+            box.KeyDown += (s2, e2) =>
+            {
+                if (e2.KeyCode != Keys.F4 || grid.CurrentCell == null) return;
+                e2.Handled = true;
+                int row = grid.CurrentCell.RowIndex, column = grid.CurrentCell.ColumnIndex;
+                grid.BeginInvoke(() => Open(row, column));
+            };
+        };
+    }
+
+    private static Rectangle ButtonRect(Rectangle cell) =>
+        new(cell.Right - PickerButtonWidth - 2, cell.Top + 2, PickerButtonWidth, Math.Max(cell.Height - 5, 8));
+
+    /// <summary>
+    /// 欄寬填滿：每一欄依設計時的欄寬比例伸縮，剛好填滿整個 Grid（AutoSizeColumnsMode = Fill），Grid 大小改變時跟著調整
+    /// </summary>
+    public static void ApplyFill(DataGridView grid)
+    {
+        var columns = grid.Columns.Cast<DataGridViewColumn>().ToList();
+        float total = Math.Max(1, columns.Sum(c => c.Width));
+        foreach (var c in columns)
+        {
+            c.FillWeight = Math.Max(1f, c.Width * 1000f / total);     // FillWeight 合計不能超過 65535，換算成比例
+            c.MinimumWidth = Math.Min(c.Width, 30);
+        }
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
     }
 
     /// <summary>生效欄位顯示用的勾選框欄位名稱（HookEffectiveColumn 靠它找到要轉換的欄位）</summary>
@@ -710,6 +854,8 @@ public enum GridCellKind
     日期選擇,
     /// <summary>按鈕：只有自訂欄位能用，按下去執行欄位設定的按鈕動作</summary>
     按鈕,
+    /// <summary>開窗選取：點格子右邊的「…」、雙擊或按 F4 開選取視窗，選一筆帶回同一列（設定同編輯視窗的開窗畫面 / 傳入參數 / 回傳對應）</summary>
+    開窗選取,
 }
 
 // ================= 日期選擇欄位（DataGridView 沒有內建，照 MSDN 的 CalendarColumn 做法） =================

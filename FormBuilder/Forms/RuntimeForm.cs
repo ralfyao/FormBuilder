@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Data.Common;
 
 namespace FormBuilder;
@@ -182,13 +182,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             HookEditDialog(part.Grid, index => EditDetailRow(part, index));
             GridCells.HookCustomColumns(part.Grid, (c, row) => RunRowButton(c, row, () => LoadDetail(part)), def.ConnectionString);
             // 單身欄位的執行後動作：@名稱 先找同一列，再找單頭畫面上的欄位、目前這筆；查出來的值帶進同一列
-            GridCells.HookAfterSelect(part.Grid, def.ConnectionString, name =>
-            {
-                var field = def.Fields.FirstOrDefault(f => !f.IsCalculated && f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
-                if (field != null && inputs.ContainsKey(field)) return GetValue(field);
-                if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
-                return openParams.TryGetValue(name, out var param) ? param : null;
-            });
+            GridCells.HookAfterSelect(part.Grid, def.ConnectionString, MasterValueOf);
+            // 輸入方式 = 開窗選取：「…」或 F4 開選取視窗，選的值帶回同一列
+            GridCells.HookPickers(part.Grid, MasterValueOf, def.SourcePath, this, def.ConnectionString);
             details.Add(part);
         }
         btnDetail.Visible = HasDetail;
@@ -220,6 +216,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 });
             }, def.ConnectionString);
             if (listDef.AllowInsert) SetupListInsert();
+            GridCells.HookPickers(listGrid, MasterValueOf, def.SourcePath, this, def.ConnectionString);
             // 空白處雙擊（還沒有資料時）也能開編輯視窗，才有地方按「新增」
             listGrid.DoubleClick += (s, e) =>
             {
@@ -1001,6 +998,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.列印報表: PrintReport(b); break;
             case ButtonAction.開啟查詢條件畫面: QueryByConditionForm(b); break;
         }
+    }
+
+    /// <summary>Grid 的 @名稱 同一列沒有時：取單頭畫面上的欄位、目前這筆、開啟時的傳入參數</summary>
+    private object MasterValueOf(string name)
+    {
+        var field = def.Fields.FirstOrDefault(f => !f.IsCalculated && f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (field != null && inputs.ContainsKey(field)) return GetValue(field);
+        if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+        return openParams.TryGetValue(name, out var param) ? param : null;
     }
 
     /// <summary>
@@ -1953,7 +1959,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             grid.Columns.Add(col);
         }
         GridCells.HookEffectiveColumn(grid);
-        if (g.AutoFitColumns) GridCells.HookAutoFit(grid);           // 查出資料後欄寬依內容調整
+        if (g.FillColumns) GridCells.ApplyFill(grid);                 // 欄寬依比例填滿整個 Grid
+        else if (g.AutoFitColumns) GridCells.HookAutoFit(grid);      // 查出資料後欄寬依內容調整
         grid.DataError += (s, e) =>
         {
             if (GridCells.IgnoreDisplayError(grid, e)) return;     // 下拉選單裡沒有的值：顯示空白，不跳訊息

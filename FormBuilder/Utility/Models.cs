@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -196,7 +196,7 @@ public class FormDefinition
         foreach (var f in Fields) f.PickerForm = Fix(f.PickerForm);
         foreach (var g in Grids) g.OpenForm = Fix(g.OpenForm);
         foreach (var l in Grids.SelectMany(g => g.EditLists)) l.OpenForm = Fix(l.OpenForm);
-        foreach (var c in Grids.SelectMany(g => g.Columns)) c.EditPickerForm = Fix(c.EditPickerForm);
+        foreach (var c in Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))) c.EditPickerForm = Fix(c.EditPickerForm);
     }
 
     /// <summary>Grid（含編輯視窗的明細清單）上自訂按鈕欄位的按鈕</summary>
@@ -618,6 +618,11 @@ public class GridDefinition
      Description("True = 執行時查出資料後，每一欄的寬度依標題與畫面上看得到的資料自動調整（太長的最寬 " + "400" + " 點，使用者還是可以拖拉）；False = 照設計時的欄寬")]
     public bool AutoFitColumns { get; set; } = true;
 
+    [Category("畫面"), DisplayName("欄寬填滿"), DefaultValue(false),
+     Description("True = 欄位寬度依設計時的欄寬比例伸縮，剛好填滿整個 Grid（跟 DataGridView 的 AutoSizeColumnsMode = Fill 一樣），Grid 變寬變窄時跟著調整；"
+               + "設了這個「欄寬符合資料」就不作用")]
+    public bool FillColumns { get; set; }
+
     /// <summary>單身資料表的全部欄位（Visible 決定是否顯示在 Grid 上）；JOIN 帶進來的欄位也在這裡（JoinAlias 不是空的）</summary>
     [Browsable(false)]
     public List<GridColumnDefinition> Columns { get; set; } = new();
@@ -854,6 +859,11 @@ public class EditListDefinition
     [Category("畫面"), DisplayName("欄寬符合資料"), DefaultValue(true),
      Description("True = 執行時列出明細後，每一欄的寬度依標題與畫面上看得到的資料自動調整（太長的最寬 " + "400" + " 點，使用者還是可以拖拉）；False = 照設計時的欄寬")]
     public bool AutoFitColumns { get; set; } = true;
+
+    [Category("畫面"), DisplayName("欄寬填滿"), DefaultValue(false),
+     Description("True = 欄位寬度依設計時的欄寬比例伸縮，剛好填滿整個清單（跟 DataGridView 的 AutoSizeColumnsMode = Fill 一樣），視窗變寬變窄時跟著調整；"
+               + "設了這個「欄寬符合資料」就不作用")]
+    public bool FillColumns { get; set; }
 
     /// <summary>明細資料表的全部欄位（Visible 決定是否顯示在清單上）；JOIN 帶進來的欄位也在這裡</summary>
     [Browsable(false)]
@@ -1295,7 +1305,10 @@ public class GridColumnDefinition
     public string EditItems { get; set; }
     public string EditItemsSql { get; set; }
     public bool EditAllowFreeText { get; set; }
-    /// <summary>編輯視窗的開窗選取（同 FieldDefinition.PickerForm / PickerParams / PickerReturn）</summary>
+    /// <summary>
+    /// 編輯視窗的開窗選取（同 FieldDefinition.PickerForm / PickerParams / PickerReturn）；
+    /// Grid 的輸入方式是「開窗選取」時，Grid 儲存格也用這個設定開窗（帶回同一列）
+    /// </summary>
     public string EditPickerForm { get; set; }
     public string EditPickerParams { get; set; }
     public string EditPickerReturn { get; set; }

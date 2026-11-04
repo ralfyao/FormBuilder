@@ -16,6 +16,8 @@ public partial class DesignerForm : Form, IPickerHost
     private FormDefinition def = new();
     private List<ColumnInfo> defTableColumns = new();      // 畫面所屬資料表的全部欄位（用來提醒漏放的必填欄位）
     private string currentFilePath;
+    /// <summary>上次開啟、新增或存檔時的畫面定義（JSON）；關閉時跟目前的比，不一樣就提醒存檔</summary>
+    private string savedJson;
     /// <summary>目前選取的元件（欄位或單身 Grid；可多選：滑鼠圈選，或按住 Ctrl 點選）</summary>
     private readonly List<DesignBox> selection = new();
     /// <summary>拖曳移動時，每個被選元件按下滑鼠當下的位置；null = 沒有在移動</summary>
@@ -63,8 +65,13 @@ public partial class DesignerForm : Form, IPickerHost
         Activated += (s, e) => HookListSqlEditor();
 
         // ---- 工具列（按鈕在 Designer.cs；對齊按鈕由 AlignHelper 加在後面）----
-        btnNewForm.Click += (s, e) => NewForm();
-        btnOpen.Click += (s, e) => OpenForm();
+        btnNewForm.Click += (s, e) => { if (ConfirmClose()) NewForm(); };
+        btnOpen.Click += (s, e) => { if (ConfirmClose()) OpenForm(); };
+        FormClosing += (s, e) =>
+        {
+            if (e.Cancel) return;
+            if (!ConfirmClose()) e.Cancel = true;
+        };
         btnSave.Click += (s, e) => SaveForm(false);
         btnSaveAs.Click += (s, e) => SaveForm(true);
         // 「檔案」選單：發布到系統資料庫（登入後才有）
@@ -1383,6 +1390,42 @@ public partial class DesignerForm : Form, IPickerHost
         ApplyCanvasSize();
         UpdateStatus();
         history?.Reset();
+        MarkSaved();
+    }
+
+    /// <summary>目前的畫面定義當成「已存檔」的狀態（關閉時不用提醒）</summary>
+    private void MarkSaved() => savedJson = def.ToJson();
+
+    /// <summary>畫面定義跟上次開啟、存檔時不一樣（空白的新畫面不算）</summary>
+    private bool HasUnsavedChanges =>
+        savedJson != null && def.ToJson() != savedJson && (def.Fields.Count > 0 || def.Grids.Count > 0 || def.Buttons.Count > 0);
+
+    /// <summary>
+    /// 關閉畫面設計前：有沒存的修改就問「儲存並發布 / 儲存 / 不儲存 / 取消」（沒登入系統時沒有發布）。
+    /// 回傳 false = 不要關閉（取消，或存檔、發布失敗）
+    /// </summary>
+    private bool ConfirmClose()
+    {
+        if (!HasUnsavedChanges) return true;
+        var publish = new TaskDialogButton("儲存並發布") { Visible = SysContext.Active };
+        var save = new TaskDialogButton("儲存");
+        var discard = new TaskDialogButton("不儲存");
+        var page = new TaskDialogPage
+        {
+            Caption = "畫面設計",
+            Heading = $"「{def.Title ?? "新畫面"}」有修改還沒存檔",
+            Text = SysContext.Active
+                ? "關閉前要先儲存嗎？「儲存並發布」會存檔後發布到系統，使用者馬上看得到最新版。"
+                : "關閉前要先儲存嗎？",
+            Icon = TaskDialogIcon.Warning,
+            Buttons = { publish, save, discard, TaskDialogButton.Cancel },
+            DefaultButton = SysContext.Active ? publish : save,
+        };
+        var answer = TaskDialog.ShowDialog(this, page);
+        if (answer == discard) return true;
+        if (answer == save) return SaveForm(false);
+        if (answer == publish) return Publish();
+        return false;
     }
 
     private void ClearCanvas()
@@ -1466,6 +1509,7 @@ public partial class DesignerForm : Form, IPickerHost
             BuildCanvas();
             ReloadDefTableColumns();
             history.Reset();
+            MarkSaved();
             UpdateStatus("已開啟 " + Path.GetFileName(currentFilePath));
         }
         catch (Exception ex)
@@ -1478,11 +1522,11 @@ public partial class DesignerForm : Form, IPickerHost
     /// 發布到系統：先存檔，再把畫面定義（代號 = 檔名）和按鈕用到的列印樣板寫進系統資料庫。
     /// 「開啟畫面」按鈕指向的畫面（包含那些畫面再開啟的畫面）在本機有畫面定義檔的，問過後一併發布
     /// </summary>
-    private void Publish()
+    /// <summary>回傳 true = 存檔並發布成功</summary>
+    private bool Publish()
     {
-        if (!SysContext.Active) return;
-        SaveForm(false);
-        if (currentFilePath == null || !File.Exists(currentFilePath)) return;
+        if (!SysContext.Active) return false;
+        if (!SaveForm(false) || currentFilePath == null || !File.Exists(currentFilePath)) return false;
         string key = Path.GetFileNameWithoutExtension(currentFilePath);
         try
         {
@@ -1511,10 +1555,12 @@ public partial class DesignerForm : Form, IPickerHost
                             + "第一次發布的畫面，請到「選單管理」放進選單（只從按鈕開啟的畫面不用），並在「使用者、角色與權限」設定哪些角色可以用。"
                             + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Distinct()) : ""),
                             "發布");
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show("發布失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
 
@@ -1523,7 +1569,8 @@ public partial class DesignerForm : Form, IPickerHost
         form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
             .Concat(form.ColumnButtons())                                                                                  // Grid 上的自訂按鈕欄位
             .Concat(form.Fields.Select(ButtonRunner.PickerButton))
-            .Concat(form.Grids.SelectMany(g => g.Columns).Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
+            .Concat(form.Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))
+                          .Select(c => ButtonRunner.PickerButton(InputHelper.FromGridColumn(c, false))))
             .Concat(form.Grids.Select(g => ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams)))                  // 清單的雙擊開啟畫面
             .Concat(form.Grids.SelectMany(g => g.EditLists).Select(l => ButtonRunner.ListOpenButton(l.Title, l.OpenForm, l.OpenParams)))
             .Where(b => b != null).ToList();
@@ -1618,6 +1665,7 @@ public partial class DesignerForm : Form, IPickerHost
             BuildCanvas();
             ReloadDefTableColumns();
             history.Reset();
+            MarkSaved();
             UpdateStatus($"已開啟已發布的畫面 {key}（存檔會寫到 {currentFilePath}）");
         }
         catch (Exception ex)
@@ -1626,28 +1674,32 @@ public partial class DesignerForm : Form, IPickerHost
         }
     }
 
-    private void SaveForm(bool saveAs)
+    /// <summary>存檔；回傳 true = 存好了</summary>
+    private bool SaveForm(bool saveAs)
     {
         if (def.Fields.Count == 0 && !def.Grids.Any(g => g.IsSqlList || g.IsMasterList))       // 只放 SQL 清單、單頭清單的畫面不需要欄位
         {
             MessageBox.Show("畫面上還沒有欄位（或清單）。", "提醒");
-            return;
+            return false;
         }
         if (saveAs || currentFilePath == null)
         {
             using var dlg = new SaveFileDialog { Filter = "畫面定義 (*.json)|*.json", InitialDirectory = EnsureFolder(), FileName = def.Title + ".json" };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            if (dlg.ShowDialog(this) != DialogResult.OK) return false;
             currentFilePath = dlg.FileName;
         }
         try
         {
             def.Save(currentFilePath);
+            MarkSaved();
             propertyGrid.Refresh();                          // 開窗畫面等路徑存檔時改成相對路徑了
             UpdateStatus("已存檔 " + Path.GetFileName(currentFilePath));
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show("存檔失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
 
