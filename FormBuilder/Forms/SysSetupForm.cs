@@ -42,16 +42,38 @@ public partial class SysSetupForm : Form
         try
         {
             SysDb.EnsureSchema(connection);
-            if (SysDb.UserCount(connection) > 0)
-            {
-                grpAdmin.Enabled = false;
-                grpAdmin.Text = "這個系統資料庫已經有帳號，完成設定後用既有帳號登入";
-            }
+            if (SysDb.UserCount(connection) > 0) HideAdminGroup();
+            else ShowAdminGroup();
         }
         catch (Exception ex)
         {
             MessageBox.Show("建立系統資料表失敗（請確認帳號有建立資料表的權限）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /// <summary>「建立系統管理者帳號」藏起來時，下面的欄位往上移了多少（0 = 沒藏）</summary>
+    private int adminShift;
+
+    /// <summary>
+    /// 系統資料庫已經有帳號：不用建管理者，整組「建立系統管理者帳號」藏起來（不然看起來像要改密碼），下面的欄位往上移
+    /// </summary>
+    private void HideAdminGroup()
+    {
+        if (adminShift > 0) return;
+        adminShift = lblUpdate.Top - grpAdmin.Top;
+        grpAdmin.Visible = false;
+        foreach (Control c in new Control[] { lblUpdate, txtUpdate, btnOk, btnCancel }) c.Top -= adminShift;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height - adminShift);
+    }
+
+    /// <summary>換到還沒有帳號的系統資料庫：「建立系統管理者帳號」再顯示出來</summary>
+    private void ShowAdminGroup()
+    {
+        if (adminShift == 0) return;
+        foreach (Control c in new Control[] { lblUpdate, txtUpdate, btnOk, btnCancel }) c.Top += adminShift;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height + adminShift);
+        grpAdmin.Visible = true;
+        adminShift = 0;
     }
 
     private void Finish()

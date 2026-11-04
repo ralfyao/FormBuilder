@@ -47,23 +47,18 @@ public partial class LoginForm : Form
         ShowServer();
     }
 
-    /// <summary>「修改連線…」：直接開連線設定視窗改系統資料庫連線（只有 ERP Studio）</summary>
+    /// <summary>「修改連線…」：直接編輯系統資料庫的連線字串（只有 ERP Studio）</summary>
     private readonly LinkLabel lnkConnection = new() { Text = "修改連線…", TabStop = true };
 
     /// <summary>
-    /// 修改這台電腦的系統資料庫連線：先通過管理者驗證（跟「系統設定」一樣），在連線設定視窗改好、測試連得上才存；
+    /// 修改這台電腦的系統資料庫連線字串：先通過管理者驗證（跟「系統設定」一樣），改好、測試連得上才存；
     /// 新的系統資料庫還沒有帳號時，接著開「系統設定」建立第一個管理者
     /// </summary>
     private async Task ChangeConnection()
     {
         if (!VerifyAdminForSetup()) return;
-        using var dlg = new ConnectionDialog(config.GetConnection(), DbKind.SqlServer);
+        using var dlg = new ConnectionStringDialog(config.GetConnection());     // 直接改連線字串（也可以按「連線精靈」組）
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        if (dlg.DatabaseType != DbKind.SqlServer)
-        {
-            MessageBox.Show("系統資料庫目前只支援 SQL Server（各畫面的業務資料庫可以是 Oracle、MySQL）。", Text);
-            return;
-        }
         int users;
         try
         {
@@ -176,7 +171,8 @@ public partial class LoginForm : Form
         {
             return MessageBox.Show("目前的系統資料庫連不上，要重新設定連線嗎？", "系統設定", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
         }
-        var v = PromptDialog.Ask(this, "系統設定：請輸入系統管理者帳號密碼", values =>
+        // 只是驗證身分（改系統連線要管理者權限），不會改密碼
+        var v = PromptDialog.Ask(this, "驗證管理者身分（只是確認權限，不會修改密碼）", values =>
         {
             var (user, _, error) = SysDb.Login(cs, values[0], values[1], adminOnly: true);
             return user == null ? error : null;

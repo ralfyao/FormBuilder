@@ -29,7 +29,7 @@
     <Compile Include="$(Shared)Utility\*.cs"
              Exclude="$(Shared)Utility\Program.cs;$(Shared)Utility\AlignHelper.cs;$(Shared)Utility\ButtonBox.cs;$(Shared)Utility\CanvasResizer.cs;$(Shared)Utility\GridBox.cs;$(Shared)Utility\PrintItemBox.cs;$(Shared)Utility\SelectionBand.cs;$(Shared)Utility\ToolboxList.cs"
              LinkBase="Shared\Utility" />
-    <Compile Include="$(Shared)Forms\RuntimeForm*.cs;$(Shared)Forms\RecordNavigatorDialog*.cs;$(Shared)Forms\RecordEditDialog*.cs;$(Shared)Forms\LoginForm*.cs;$(Shared)Forms\SysSetupForm*.cs;$(Shared)Forms\ConnectionDialog*.cs;$(Shared)Forms\PromptDialog*.cs;$(Shared)Forms\PickListDialog*.cs"
+    <Compile Include="$(Shared)Forms\RuntimeForm*.cs;$(Shared)Forms\RecordNavigatorDialog*.cs;$(Shared)Forms\RecordEditDialog*.cs;$(Shared)Forms\LoginForm*.cs;$(Shared)Forms\SysSetupForm*.cs;$(Shared)Forms\ConnectionDialog*.cs;$(Shared)Forms\ConnectionStringDialog.cs;$(Shared)Forms\PromptDialog*.cs;$(Shared)Forms\PickListDialog*.cs"
              LinkBase="Shared\Forms" />
     <EmbeddedResource Include="$(Shared)Forms\RuntimeForm*.resx;$(Shared)Forms\RecordNavigatorDialog*.resx;$(Shared)Forms\RecordEditDialog*.resx;$(Shared)Forms\LoginForm*.resx;$(Shared)Forms\SysSetupForm*.resx;$(Shared)Forms\ConnectionDialog*.resx;$(Shared)Forms\PromptDialog*.resx;$(Shared)Forms\PickListDialog*.resx"
                       LinkBase="Shared\Forms" />
