@@ -1091,8 +1091,9 @@ public class ButtonDefinition
 
     [Category("開啟畫面"), DisplayName("回傳對應"),
      Description("有填時，開啟的畫面變成「選取視窗」：在清單雙擊（或按「選取帶回」）就關閉，把選的那筆資料填回本畫面的欄位。"
-               + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔"),
-     Editor("System.ComponentModel.Design.MultilineStringEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
+               + "用逗號分隔「本畫面欄位=對方欄位」，例如：聯絡人=姓名, 職稱=職稱。本畫面在新增、修改（主畫面也包含查詢）時才能按，帶回後再按「確定」存檔。"
+               + "按右邊的「…」可以列出開啟畫面的欄位，直接選要帶回哪個欄位（要先設定畫面定義檔）"),
+     Editor(typeof(ReturnMapEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string ReturnMap { get; set; }
 
     [Category("開啟畫面"), DisplayName("帶回到 Grid"), TypeConverter(typeof(ReturnGridConverter)),

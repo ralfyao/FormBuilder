@@ -25,6 +25,32 @@ public class ReturnGridMapEditor : UITypeEditor
 }
 
 /// <summary>
+/// 屬性面板按鈕「回傳對應」的「…」：列出本畫面的欄位，每個從開啟畫面（選取視窗）帶得回來的欄位下拉選，
+/// 寫成「本畫面欄位=對方欄位」
+/// </summary>
+public class ReturnMapEditor : UITypeEditor
+{
+    public override UITypeEditorEditStyle GetEditStyle(ITypeDescriptorContext context) => UITypeEditorEditStyle.Modal;
+
+    public override object EditValue(ITypeDescriptorContext context, IServiceProvider provider, object value)
+    {
+        if (context?.Instance is not ButtonDefinition b) return value;      // 多選：直接在屬性面板打字
+        var owner = Form.ActiveForm;
+        string folder = null;
+        IEnumerable<string> locals = null;
+        for (var f = owner; f != null; f = f.Owner)
+            if (f is IPickerHost h)
+            {
+                folder ??= h.PickerFolder;
+                locals ??= h.PickerLocalColumns;
+            }
+        using var dialog = new ReturnGridMapDialog(b.TargetForm, null, value as string, folder ?? FormDefinition.DefaultFolder,
+                                                   locals?.ToList() ?? new List<string>(), forFields: true);
+        return dialog.ShowDialog(owner) == DialogResult.OK ? dialog.ReturnMap : value;
+    }
+}
+
+/// <summary>
 /// 帶回 Grid 欄位對應：左邊是本畫面 Grid 的欄位，右邊從開啟畫面（選取視窗）帶得回來的欄位下拉選；
 /// 空白 = 這一欄不帶。原本的對應是空白時，先帶出兩邊同名的欄位
 /// </summary>
@@ -46,9 +72,10 @@ public class ReturnGridMapDialog : Form
     public string ReturnMap { get; private set; }
 
     /// <param name="gridColumns">本畫面 Grid 的欄位；null = 還沒選「帶回到 Grid」或找不到那個 Grid</param>
-    public ReturnGridMapDialog(string formFile, string gridName, string returnMap, string folder, IEnumerable<string> gridColumns)
+    /// <param name="forFields">true = 按鈕的「回傳對應」：左邊是本畫面（視窗）的欄位，選一筆帶回填進欄位；原本空白時不自動帶同名欄位</param>
+    public ReturnGridMapDialog(string formFile, string gridName, string returnMap, string folder, IEnumerable<string> gridColumns, bool forFields = false)
     {
-        Text = "帶回 Grid 欄位對應";
+        Text = forFields ? "回傳對應" : "帶回 Grid 欄位對應";
         Font = new Font("Microsoft JhengHei UI", 9F);
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;
@@ -65,9 +92,10 @@ public class ReturnGridMapDialog : Form
         else
         {
             theirs = PickerFormDialog.ReturnableColumns(target);
-            info = $"開啟「{target.Title}」，選好的每一筆新增成「{gridName}」的一列";
+            info = forFields ? $"開啟「{target.Title}」當選取視窗，選一筆後把右邊選的欄位值填進左邊的欄位"
+                             : $"開啟「{target.Title}」，選好的每一筆新增成「{gridName}」的一列";
         }
-        if (gridColumns == null)
+        if (gridColumns == null && !forFields)
             info += string.IsNullOrWhiteSpace(gridName) ? "；請先選「帶回到 Grid」。" : $"；這個畫面找不到 Grid「{gridName}」。";
 
         var current = ButtonRunner.ParsePairs(returnMap).Select(p => (Mine: p.Left, Theirs: p.Right.TrimStart('@'))).ToList();
@@ -76,7 +104,7 @@ public class ReturnGridMapDialog : Form
         var options = theirs.Select(t => t.Column).Concat(current.Select(p => p.Theirs))
                       .Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = ColMine, HeaderText = $"Grid「{gridName}」的欄位", FillWeight = 50 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = ColMine, HeaderText = forFields ? "本畫面的欄位" : $"Grid「{gridName}」的欄位", FillWeight = 50 });
         var colTheirs = new DataGridViewComboBoxColumn
         {
             Name = ColTheirs,
@@ -96,14 +124,14 @@ public class ReturnGridMapDialog : Form
 
         foreach (var m in mine)
         {
-            string t = current.Count > 0
+            string t = current.Count > 0 || forFields          // 回傳對應原本空白 = 不是選取視窗，不自動帶（不然主鍵等同名欄位會被蓋掉）
                 ? current.FirstOrDefault(p => p.Mine.Equals(m, StringComparison.OrdinalIgnoreCase)).Theirs
                 : options.FirstOrDefault(o => o.Equals(m, StringComparison.OrdinalIgnoreCase));     // 原本空白 = 同名欄位
             int i = grid.Rows.Add(m, t == null ? "" : options.First(o => o.Equals(t, StringComparison.OrdinalIgnoreCase)));
             if (gridColumns != null && !gridColumns.Contains(m, StringComparer.OrdinalIgnoreCase))
             {
                 grid.Rows[i].Cells[ColMine].Style.ForeColor = Color.Firebrick;
-                grid.Rows[i].Cells[ColMine].ToolTipText = "Grid 上找不到這個欄位";
+                grid.Rows[i].Cells[ColMine].ToolTipText = forFields ? "畫面上找不到這個欄位" : "Grid 上找不到這個欄位";
             }
         }
 
@@ -116,8 +144,10 @@ public class ReturnGridMapDialog : Form
         layout.Controls.Add(new Label
         {
             Dock = DockStyle.Fill,
-            Text = "選取視窗選好的每一筆，新增成 Grid 的一列：右邊選的欄位值帶進左邊的 Grid 欄位。"
-                 + "關聯欄位（單頭的單號等）、預設值會自動帶，不用設。Grid 沒列到的欄位可以在最下面一列自己加。",
+            Text = forFields
+                ? "右邊選了欄位的才會帶回（空白 = 不帶）；全部空白 = 不是選取視窗，按鈕直接開啟畫面。沒列到的欄位可以在最下面一列自己加。"
+                : "選取視窗選好的每一筆，新增成 Grid 的一列：右邊選的欄位值帶進左邊的 Grid 欄位。"
+                  + "關聯欄位（單頭的單號等）、預設值會自動帶，不用設。Grid 沒列到的欄位可以在最下面一列自己加。",
         }, 0, 2);
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };
