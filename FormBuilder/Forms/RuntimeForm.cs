@@ -80,6 +80,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private HashSet<DataRow> partialRows;
     /// <summary>目前使用者對這個畫面的權限（沒登入 = 全開）</summary>
     private FormPermission perm = FormPermission.All;
+    /// <summary>
+    /// 角色的編修權限（不管工具列有沒有顯示新增、修改、刪除）：自訂的「執行SQL」按鈕、按鈕的執行後動作看這個。
+    /// 工具列不顯示修改只是不讓使用者直接改單頭，畫面上設計好的按鈕照樣可以用
+    /// </summary>
+    private bool canRunSql = true;
 
     public RuntimeForm(FormDefinition definition) : this(definition, null, false) { }
 
@@ -98,6 +103,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         perm = SysContext.PermissionFor(def.FormKey);                        // 登入時依角色權限；沒登入、系統管理者 = 全開
         // 「編修」權限 = 新增、修改、刪除（主畫面、編輯視窗的按鈕都看這裡；舊資料的新增、刪除勾選不再使用）
         perm = perm with { Insert = perm.Modify, Delete = perm.Modify };
+        canRunSql = perm.Modify;
         // 畫面設定不顯示新增、修改、刪除、輸出按鈕：編輯視窗、清單右鍵選單也不能做（只要查詢的畫面）
         perm = perm with
         {
@@ -978,8 +984,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
         // 執行SQL 在新增、修改中可以按（例如取號、更名）；有單頭清單時瀏覽中也能按（對清單上選的每一列各執行一次）；
         // 只放 SQL 清單的畫面沒有新增、修改，瀏覽時就能按（對清單上選的資料執行）
-        ButtonAction.執行SQL => (HasMasterTable ? mode is Mode.Insert or Mode.Modify || mode == Mode.Browse && (listGrid != null && HasCurrent || sqlGrids.Count > 0)
-                                               : mode == Mode.Browse) && perm.Modify,
+        // 查詢模式（輸入條件中）也可以按：清單上的資料還在，打勾後不用先離開查詢
+        ButtonAction.執行SQL => (HasMasterTable ? mode is Mode.Insert or Mode.Modify || mode is Mode.Browse or Mode.Query && (listGrid != null && HasCurrent || sqlGrids.Count > 0)
+                                               : mode == Mode.Browse) && canRunSql,
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
         ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && (HasMasterTable || sqlGrids.Count > 0),
         _ => mode == Mode.Browse,
@@ -997,7 +1004,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         IReadOnlyDictionary<string, object> preResult = null;
         if (!startingQuery && !string.IsNullOrWhiteSpace(b.PreActionSql))
         {
-            if (!perm.Modify)
+            if (!canRunSql)
             {
                 MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
                 return;
@@ -1051,7 +1058,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
         if (b != null && !ButtonRunner.CheckAllowed(b, perm)) return;
-        if (b != null && (b.Action == ButtonAction.執行SQL || !string.IsNullOrWhiteSpace(b.PreActionSql)) && !perm.Modify)
+        if (b != null && (b.Action == ButtonAction.執行SQL || !string.IsNullOrWhiteSpace(b.PreActionSql)) && !canRunSql)
         {
             MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
             return;
