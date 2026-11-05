@@ -411,6 +411,7 @@ public partial class MainMenuForm : Form
             Cursor = Cursors.WaitCursor;
             var forms = SysDb.LoadPublished(cs, "form").Where(p => keys == null || keys.Contains(p.FormKey, StringComparer.OrdinalIgnoreCase)).ToList();
             var prints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var printUsers = new List<(string Key, List<string> Prints)>();     // 每個畫面用到哪些列印樣板（決定樣板放哪個資料夾）
             foreach (var p in forms)
             {
                 string content = SysDb.LoadContent(cs, p.FormKey);
@@ -425,9 +426,11 @@ public partial class MainMenuForm : Form
                 })));
                 try
                 {
-                    foreach (var b in DesignerForm.AllButtons(FormDefinition.FromJson(content))
-                                 .Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate)))
-                        prints.Add(Path.GetFileName(b.PrintTemplate.Trim()));
+                    var used = DesignerForm.AllButtons(FormDefinition.FromJson(content))
+                        .Where(b => b.Action == ButtonAction.列印報表 && !string.IsNullOrWhiteSpace(b.PrintTemplate))
+                        .Select(b => Path.GetFileName(b.PrintTemplate.Trim())).ToList();
+                    foreach (var print in used) prints.Add(print);
+                    printUsers.Add((p.FormKey, used));
                 }
                 catch (Exception ex)
                 {
@@ -440,11 +443,27 @@ public partial class MainMenuForm : Form
             // 選單架構：匯出的畫面放在哪些資料夾（匯入時照這個放回選單）
             var exported = forms.Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (exported.Count > 0)
-                files.Add((MenuExportFile.FileName, new MenuExportFile
+            {
+                var menuFile = new MenuExportFile
                 {
                     Menu = MenuExportFile.Build(SysDb.LoadMenu(cs), exported.Contains),
                     Unlisted = MenuExportFile.Build(SysDb.LoadUnlisted(cs), exported.Contains),
-                }.ToJson()));
+                };
+                // 檔案照選單的資料夾層次放（子資料夾）；列印樣板放在第一個用到它的畫面旁邊，沒有畫面用到的放最上層
+                var folderOf = menuFile.FolderOfForms();
+                var printFolder = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (key, used) in printUsers)
+                    if (folderOf.TryGetValue(key, out var dir))
+                        foreach (var print in used) printFolder.TryAdd(print, dir);
+                files = files.Select(f =>
+                {
+                    string dir = f.Name.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)
+                        ? printFolder.GetValueOrDefault(f.Name, "")
+                        : folderOf.GetValueOrDefault(Path.GetFileNameWithoutExtension(f.Name), "");
+                    return (dir == "" ? f.Name : Path.Combine(dir, f.Name), f.Content);
+                }).ToList();
+                files.Add((MenuExportFile.FileName, menuFile.ToJson()));
+            }
         }
         catch (Exception ex)
         {
@@ -476,12 +495,13 @@ public partial class MainMenuForm : Form
             string path = Path.Combine(folder, name);
             try
             {
-                if (name.IndexOfAny(bad) >= 0) throw new IOException("檔名有不能用的符號");
+                if (Path.GetFileName(name).IndexOfAny(bad) >= 0) throw new IOException("檔名有不能用的符號");
                 if (File.Exists(path) && !overwrite)
                 {
                     skipped++;
                     continue;
                 }
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);     // 選單的資料夾層次
                 File.WriteAllText(path, content);
                 written++;
             }
@@ -491,7 +511,7 @@ public partial class MainMenuForm : Form
             }
         }
         Audit.Write(null, "SYS_Form", "匯出", null, $"{what}：{written} 個檔案匯出到 {folder}");
-        MessageBox.Show($"已匯出 {written} 個檔案到：{Environment.NewLine}{folder}"
+        MessageBox.Show($"已匯出 {written} 個檔案到：{Environment.NewLine}{folder}{Environment.NewLine}（照選單的資料夾層次放在子資料夾裡）"
                         + (skipped > 0 ? $"{Environment.NewLine}{Environment.NewLine}略過已經有的 {skipped} 個" : "")
                         + (failed.Count > 0 ? Environment.NewLine + Environment.NewLine + "有問題的：" + Environment.NewLine
                                               + string.Join(Environment.NewLine, failed.Select(x => "　" + x)) : ""),
@@ -509,7 +529,8 @@ public partial class MainMenuForm : Form
             UseDescriptionForTitle = true,
         };
         if (pick.ShowDialog(this) == DialogResult.OK)
-            ImportFormsFrom(Directory.GetFiles(pick.SelectedPath, "*.json").OrderBy(f => f).ToList(), pick.SelectedPath);
+            ImportFormsFrom(Directory.GetFiles(pick.SelectedPath, "*.json", SearchOption.AllDirectories).OrderBy(f => f).ToList(), pick.SelectedPath,
+                            folderRoot: pick.SelectedPath);
     }
 
     /// <summary>匯入單筆：選一個（或幾個）畫面定義檔、列印樣板發布到系統；不照選單架構檔放，新的畫面在「未放進選單的畫面」</summary>
@@ -535,8 +556,10 @@ public partial class MainMenuForm : Form
     /// </summary>
     /// <param name="files">要匯入的檔案（資料夾匯入 = 資料夾裡全部的 *.json）</param>
     /// <param name="folder">訊息上顯示的來源（資料夾或檔名）</param>
-    private void ImportFormsFrom(IReadOnlyList<string> files, string folder)
+    /// <param name="folderRoot">匯入整個資料夾時的資料夾（沒有選單架構檔時，照子資料夾結構放進選單）；匯入單筆檔案 = null</param>
+    private void ImportFormsFrom(IReadOnlyList<string> files, string folder, string folderRoot = null)
     {
+        var formPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // 畫面代號 → 檔案（同名的只讀第一個）
         var cs = SysContext.Connection;
         var forms = new List<(string Key, string Title, FormDefinition Def)>();
         var prints = new List<(string Key, string Content)>();
@@ -550,18 +573,31 @@ public partial class MainMenuForm : Form
                 string text = File.ReadAllText(file);
                 if (name.Equals(MenuExportFile.FileName, StringComparison.OrdinalIgnoreCase)) menu = MenuExportFile.FromJson(text);
                 else if (name.EndsWith(".menu.json", StringComparison.OrdinalIgnoreCase)) continue;
-                else if (name.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)) prints.Add((name, text));
+                else if (name.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase) && !prints.Any(p => p.Key.Equals(name, StringComparison.OrdinalIgnoreCase))) prints.Add((name, text));
+                else if (name.EndsWith(".print.json", StringComparison.OrdinalIgnoreCase)) continue;
                 else
                 {
                     string key = Path.GetFileNameWithoutExtension(file);
+                    if (formPaths.ContainsKey(key))
+                    {
+                        failed.Add($"{Path.GetRelativePath(folder, file)}：跟 {Path.GetRelativePath(folder, formPaths[key])} 同名，略過");
+                        continue;
+                    }
                     var def = FormDefinition.FromJson(text);                          // 讀得出來才算畫面定義檔
                     forms.Add((key, DesignerForm.PublishTitle(def, key), def));
+                    formPaths[key] = file;
                 }
             }
             catch (Exception ex)
             {
                 failed.Add($"{name}：{ex.Message}");
             }
+        }
+        // 沒有選單架構檔、但資料夾裡有子資料夾：照資料夾結構放進選單
+        if (menu == null && folderRoot != null && formPaths.Values.Any(p => !string.Equals(Path.GetDirectoryName(p), folderRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+        {
+            var titles = forms.ToDictionary(f => f.Key, f => f.Title, StringComparer.OrdinalIgnoreCase);
+            menu = MenuExportFile.FromFolders(folderRoot, formPaths.Values, k => titles[k]);
         }
         if (forms.Count == 0)
         {
