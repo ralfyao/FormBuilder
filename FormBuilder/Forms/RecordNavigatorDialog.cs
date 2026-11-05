@@ -117,6 +117,17 @@ public partial class RecordNavigatorDialog : Form
         EditListView.Connect(listViews);                    // 有設上層清單的：點上層清單的一列才列出明細
         foreach (var view in listViews) view.HookOpenForm(sourcePath, this, ValueOf, connectionString);   // 雙擊一列開啟畫面
         foreach (var view in listViews) view.MasterValueOf = ValueOf;          // 新增、修改時直接輸入明細：預設值、執行後動作取視窗上的值
+        // 明細的公式用到視窗上的欄位：那個欄位改了，明細每一列重算
+        var listUsed = listViews.SelectMany(v => v.Definition.Columns).Where(c => c.HasFormula)
+            .SelectMany(c => { try { return Formula.Names(c.Formula); } catch (FormatException) { return new List<string>(); } })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (f, input) in inputs.Where(x => listUsed.Contains(x.Key.Column)))
+        {
+            EventHandler changed = (s, e) => { foreach (var view in listViews) view.RecalcFromMaster(); };
+            input.TextChanged += changed;
+            if (input is DateTimePicker dtp) dtp.ValueChanged += changed;
+            if (input is CheckBox cb) cb.CheckedChanged += changed;
+        }
         foreach (var view in listViews) view.Changed += RunListAfterChange;    // 明細有變動：清單的執行後動作（例如 AMOUNT=SUM(金額)）
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());

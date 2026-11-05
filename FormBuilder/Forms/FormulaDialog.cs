@@ -22,7 +22,9 @@ public class FormulaDialog : Form
     }
 
     /// <param name="fields">可以用的欄位名稱與標籤（例如 Grid 同一列的其他欄位）</param>
-    public FormulaDialog(string formula, IEnumerable<(string Column, string Label)> fields, string fieldsTitle = "畫面上的欄位（雙擊插入）")
+    /// <param name="masterFields">另外列出的畫面上的欄位（Grid 公式用到同一列沒有的欄位時取畫面上的值）；同名的以同一列為準</param>
+    public FormulaDialog(string formula, IEnumerable<(string Column, string Label)> fields, string fieldsTitle = "畫面上的欄位（雙擊插入）",
+                         IEnumerable<(string Column, string Label)> masterFields = null)
     {
         Text = "公式：欄位名稱和數字做 + - * /，可以用括號；& 接文字";
         Font = new Font("Microsoft JhengHei UI", 9F);
@@ -31,8 +33,15 @@ public class FormulaDialog : Form
         ShowInTaskbar = false;
         ClientSize = new Size(720, 420);
         var list = fields.ToList();
-        knownNames = list.Select(f => f.Column).ToList();
+        var masters = (masterFields ?? Enumerable.Empty<(string Column, string Label)>())
+            .Where(m => !list.Any(f => f.Column.Equals(m.Column, StringComparison.OrdinalIgnoreCase))).ToList();
+        knownNames = list.Select(f => f.Column).Concat(masters.Select(m => m.Column)).ToList();
         foreach (var (column, label) in list) lstFields.Items.Add(new FieldItem(column, label));
+        if (masters.Count > 0)
+        {
+            lstFields.Items.Add("── 畫面上的欄位 ──");
+            foreach (var (column, label) in masters) lstFields.Items.Add(new FieldItem(column, label));
+        }
         txtFormula.Text = formula ?? "";
 
         // 左邊：欄位清單（雙擊插入）
@@ -45,7 +54,7 @@ public class FormulaDialog : Form
         var ops = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36 };
         foreach (string op in new[] { "+", "-", "*", "/", "(", ")", "&" })
         {
-            var b = new Button { Text = op, Width = 40, Height = 28 };
+            var b = new Button { Text = op, Width = 40, Height = 28, UseMnemonic = false };     // & 不要當成快速鍵符號
             b.Click += (s, e) => Insert($" {op} ");
             ops.Controls.Add(b);
         }
@@ -62,7 +71,7 @@ public class FormulaDialog : Form
         {
             Text = "例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0。\n"
                  + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）",
-            Dock = DockStyle.Top, Height = 58,
+            Dock = DockStyle.Top, Height = 58, UseMnemonic = false,      // & 照字面顯示
         });
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };

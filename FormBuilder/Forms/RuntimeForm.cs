@@ -1354,6 +1354,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>公式用到的欄位（輸入、帶出、查詢顯示）有變動時重算</summary>
     private void HookFormulas()
     {
+        // 單身公式用到單頭畫面上的欄位：新增、修改時那個欄位改了，單身每一列重算
+        var detailUsed = def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList).SelectMany(g => g.Columns)
+            .Where(c => c.HasFormula).SelectMany(c => SafeNames(c.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in def.Fields.Where(f => detailUsed.Contains(f.Column) && inputs.ContainsKey(f)))
+        {
+            EventHandler changed = (s, e) =>
+            {
+                if (mode is not (Mode.Insert or Mode.Modify)) return;
+                foreach (var part in details) GridCells.RecalcRows(part.Table, part.Def.Columns, MasterValueOf);
+            };
+            inputs[f].TextChanged += changed;
+            if (inputs[f] is DateTimePicker dtp) dtp.ValueChanged += changed;
+            if (inputs[f] is CheckBox cb) cb.CheckedChanged += changed;
+        }
         var used = def.Fields.Where(f => f.HasFormula).SelectMany(f => SafeNames(f.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (used.Count == 0) return;
         foreach (var f in def.Fields.Where(f => used.Contains(f.Column)))
@@ -2023,8 +2037,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (e.Row.Table.Columns.Contains(detail))
                     e.Row[detail] = results.Rows[current][master];
         };
-        GridCells.FillEmptyFormulas(table, gridDef.Columns); // 公式欄位沒存值：讀進來就算出來顯示
-        GridCells.HookFormulas(table, gridDef.Columns);      // 數量、單價改了，金額跟著重算
+        GridCells.FillEmptyFormulas(table, gridDef.Columns, MasterValueOf); // 公式欄位沒存值：讀進來就算出來顯示
+        GridCells.HookFormulas(table, gridDef.Columns, MasterValueOf);      // 數量、單價改了，金額跟著重算（可以用單頭畫面上的欄位）
         part.Table = table;
         part.Grid.DataSource = part.Table;
     }

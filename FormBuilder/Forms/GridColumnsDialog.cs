@@ -349,7 +349,8 @@ public partial class GridColumnsDialog : Form
             .Select(r => workColumns.First(x => x.Column == (string)r["Column"]))
             .Where(x => !(x.IsCustom && x.CellType == GridCellKind.按鈕))
             .Select(x => (x.Column, x.Header ?? x.Column));
-        using var dlg = new FormulaDialog(Convert.ToString(columnTable.Rows[rowIndex]["Formula"]), fields, "同一列的欄位（雙擊插入）");
+        using var dlg = new FormulaDialog(Convert.ToString(columnTable.Rows[rowIndex]["Formula"]), fields, "同一列的欄位，和畫面上的欄位（雙擊插入）",
+                                          masterColumnNames.Select(n => (n, n)));
         if (dlg.ShowDialog(this) == DialogResult.OK) columnTable.Rows[rowIndex]["Formula"] = dlg.Formula == "" ? DBNull.Value : dlg.Formula;
     }
 

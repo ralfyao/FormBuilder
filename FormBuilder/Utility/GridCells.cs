@@ -49,7 +49,8 @@ public static class GridCells
     /// 有公式的欄位：同一列用到的欄位改了（Grid 輸入、編輯視窗寫回）就重算那一列，結果寫進 DataTable（資料表欄位會跟著存檔）。
     /// 讀進來的資料不重算，顯示資料庫裡存的值（空的由 FillEmptyFormulas 補算）。每個新的 DataTable 呼叫一次
     /// </summary>
-    public static void HookFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns)
+    /// <param name="master">公式用到同一列沒有的欄位時取值（單頭畫面、編輯視窗上的欄位）；畫面欄位改了要呼叫 RecalcRows</param>
+    public static void HookFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns, Func<string, object> master = null)
     {
         var formulas = columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column)).ToList();
         if (formulas.Count == 0) return;
@@ -61,7 +62,7 @@ public static class GridCells
             recalculating = true;
             try
             {
-                RecalcRow(e.Row, formulas);
+                RecalcRow(e.Row, formulas, master);
             }
             finally
             {
@@ -70,11 +71,27 @@ public static class GridCells
         };
     }
 
+    /// <summary>公式有用到同一列以外的欄位（畫面上的欄位）</summary>
+    public static bool UsesOutside(DataTable table, IEnumerable<GridColumnDefinition> columns) =>
+        table != null && columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column))
+                                .SelectMany(c => SafeNames(c.Formula)).Any(n => !table.Columns.Contains(n));
+
+    /// <summary>
+    /// 畫面上的欄位改了：公式用到畫面欄位的 Grid，每一列重算（值沒變的不動，不會變成有異動）
+    /// </summary>
+    public static void RecalcRows(DataTable table, IEnumerable<GridColumnDefinition> columns, Func<string, object> master)
+    {
+        if (!UsesOutside(table, columns)) return;
+        var formulas = columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column)).ToList();
+        foreach (DataRow row in table.Rows)
+            if (row.RowState != DataRowState.Deleted) RecalcRow(row, formulas, master);
+    }
+
     /// <summary>
     /// 讀進來時公式欄位是空的（資料庫沒存、只顯示在畫面的欄位）：照公式算出來顯示。
     /// 有值的不動（顯示資料庫裡存的值）；算出來的只是顯示，不算異動，不會因此存檔
     /// </summary>
-    public static void FillEmptyFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns)
+    public static void FillEmptyFormulas(DataTable table, IEnumerable<GridColumnDefinition> columns, Func<string, object> master = null)
     {
         var formulas = columns.Where(c => c.HasFormula && !Formula.HasAggregate(c.Formula) && table.Columns.Contains(c.Column)).ToList();
         if (formulas.Count == 0) return;
@@ -83,7 +100,7 @@ public static class GridCells
         {
             if (row.RowState != DataRowState.Unchanged || formulas.All(c => row[c.Column] != DBNull.Value)) continue;
             var stored = formulas.ToDictionary(c => c, c => row[c.Column]);
-            RecalcRow(row, formulas);
+            RecalcRow(row, formulas, master);
             foreach (var (c, value) in stored)
                 if (value != DBNull.Value) row[c.Column] = value;   // 資料庫有存值的欄位維持原值
             row.AcceptChanges();
@@ -97,8 +114,16 @@ public static class GridCells
     }
 
     /// <summary>重算一列的公式欄位；用到其他公式欄位時先算它（循環參照 = 算不出來，清空）</summary>
-    private static void RecalcRow(DataRow row, List<GridColumnDefinition> formulas)
+    private static void RecalcRow(DataRow row, List<GridColumnDefinition> formulas, Func<string, object> master = null)
     {
+        // 欄位先找同一列，沒有再找畫面上的欄位
+        object Outside(string name) =>
+            master != null ? master(name) ?? DBNull.Value : throw new FormatException($"公式裡的欄位「{name}」不在這一列");
+        // 值一樣就不寫（不然整列會變成有異動）
+        static void Set(DataRow r, string column, object value)
+        {
+            if (!Equals(r[column], value)) r[column] = value;
+        }
         var cache = new Dictionary<GridColumnDefinition, decimal?>();
         decimal? Compute(GridColumnDefinition c, HashSet<GridColumnDefinition> visiting)
         {
@@ -106,7 +131,7 @@ public static class GridCells
             if (!visiting.Add(c)) throw new FormatException("公式循環參照");
             decimal? result = Formula.Evaluate(c.Formula, name =>
             {
-                if (!row.Table.Columns.Contains(name)) throw new FormatException($"公式裡的欄位「{name}」不在這一列");
+                if (!row.Table.Columns.Contains(name)) return Outside(name);
                 var source = formulas.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
                 return source != null ? Compute(source, visiting) ?? throw new FormatException("算不出來") : row[name];
             });
@@ -120,15 +145,15 @@ public static class GridCells
             if (Formula.IsText(c.Formula))
             {
                 string text = Formula.EvaluateText(c.Formula, name =>
-                    row.Table.Columns.Contains(name) ? row[name] : throw new FormatException($"公式裡的欄位「{name}」不在這一列"), c.Decimals);
+                    row.Table.Columns.Contains(name) ? row[name] : Outside(name), c.Decimals);
                 try
                 {
-                    row[c.Column] = text == null ? DBNull.Value
-                        : column.DataType == typeof(string) ? text : Convert.ChangeType(text, column.DataType, CultureInfo.CurrentCulture);
+                    Set(row, c.Column, text == null ? DBNull.Value
+                        : column.DataType == typeof(string) ? text : Convert.ChangeType(text, column.DataType, CultureInfo.CurrentCulture));
                 }
                 catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
                 {
-                    row[c.Column] = DBNull.Value;           // 文字放不進數字、日期欄位
+                    Set(row, c.Column, DBNull.Value);           // 文字放不進數字、日期欄位
                 }
                 continue;
             }
@@ -138,13 +163,13 @@ public static class GridCells
             int decimals = integer ? 0 : c.Decimals;
             try
             {
-                row[c.Column] = value == null ? DBNull.Value
+                Set(row, c.Column, value == null ? DBNull.Value
                     : column.DataType == typeof(string) ? Formula.Format(value.Value, decimals)
-                    : Convert.ChangeType(decimals >= 0 ? Math.Round(value.Value, decimals, MidpointRounding.AwayFromZero) : value.Value, column.DataType, CultureInfo.InvariantCulture);
+                    : Convert.ChangeType(decimals >= 0 ? Math.Round(value.Value, decimals, MidpointRounding.AwayFromZero) : value.Value, column.DataType, CultureInfo.InvariantCulture));
             }
             catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
             {
-                row[c.Column] = DBNull.Value;               // 結果放不進這個欄位（例如超出範圍）
+                Set(row, c.Column, DBNull.Value);           // 結果放不進這個欄位（例如超出範圍）
             }
         }
     }

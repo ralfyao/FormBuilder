@@ -134,6 +134,12 @@ public class EditListView
     /// <summary>編輯視窗上的欄位值（新增明細的預設值、執行後動作的 @名稱）</summary>
     public Func<string, object> MasterValueOf { get; set; }
 
+    /// <summary>編輯視窗上的欄位改了：公式用到視窗欄位的明細，每一列重算（輸入中才算）</summary>
+    public void RecalcFromMaster()
+    {
+        if (editing && Grid.DataSource is DataTable table) GridCells.RecalcRows(table, list.Columns, name => MasterValueOf?.Invoke(name));
+    }
+
     /// <summary>可以直接輸入明細：資料表清單（不是 SQL 清單）、沒有上層清單、有設關聯欄位</summary>
     public bool Editable => !list.IsSqlList && parent == null && list.Links.Count > 0;
 
@@ -262,7 +268,7 @@ public class EditListView
     /// <summary>可以輸入的清單資料：公式欄位跟著重算、新增的列先帶入預設值</summary>
     private void PrepareEditTable(DataTable table)
     {
-        GridCells.HookFormulas(table, list.Columns);
+        GridCells.HookFormulas(table, list.Columns, name => MasterValueOf?.Invoke(name));   // 公式可以用編輯視窗上的欄位
         table.TableNewRow += (s, e) =>
         {
             foreach (var c in list.Columns.Where(c => !string.IsNullOrWhiteSpace(c.EditDefaultValue) && e.Row.Table.Columns.Contains(c.Column)))
@@ -389,7 +395,7 @@ public class EditListView
                 cmd.CommandText = $"{select} WHERE {string.Join(" AND ", conditions)}";
             }
             table = d.Fill(cmd);
-            GridCells.FillEmptyFormulas(table, list.Columns);   // 公式欄位沒存值（例如只顯示在畫面的金額）：讀進來就算出來顯示
+            GridCells.FillEmptyFormulas(table, list.Columns, name => MasterValueOf?.Invoke(name));   // 公式欄位沒存值（例如只顯示在畫面的金額）：讀進來就算出來顯示
             if (Editable) PrepareEditTable(table);
             Grid.DataSource = table;
         }
