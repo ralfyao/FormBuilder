@@ -129,6 +129,16 @@ public partial class RecordNavigatorDialog : Form
             if (input is CheckBox cb) cb.CheckedChanged += changed;
         }
         foreach (var view in listViews) view.Changed += RunListAfterChange;    // 明細有變動：清單的執行後動作（例如 AMOUNT=SUM(金額)）
+        // 執行後動作的欄位名稱寫錯會一直算不出來：打開時檢查一次，有錯就提醒
+        var afterChangeProblems = listViews.Where(v => !string.IsNullOrWhiteSpace(v.Definition.AfterChange))
+            .SelectMany(v => GridCells.CheckAfterChange(v.Definition.AfterChange, inputs.Keys.Select(f => f.Column),
+                                                        listViews.SelectMany(x => x.Definition.Columns).Select(c => c.Column))
+                .Select(p => $"「{v.Definition.Title ?? v.Definition.TableName}」{p}"))
+            .ToList();
+        if (afterChangeProblems.Count > 0)
+            Shown += (s, e) => BeginInvoke(() => MessageBox.Show(this,
+                "明細清單的執行後動作有欄位對不上，這幾行算不出來，請到編輯視窗版面修正：" + Environment.NewLine + Environment.NewLine
+                + string.Join(Environment.NewLine, afterChangeProblems), "執行後動作", MessageBoxButtons.OK, MessageBoxIcon.Warning));
         var content = bodySize ?? InputHelper.ContentSize(fields, 560);
         var buttonExtent = ButtonRunner.Extent(buttons ?? new List<ButtonDefinition>());
         var listExtent = EditListView.Extent(lists ?? new List<EditListDefinition>());

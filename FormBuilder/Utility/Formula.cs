@@ -17,6 +17,10 @@ public static class Formula
     public static List<string> Names(string formula) =>
         Tokenize(formula).Where(t => t.Kind == TokenKind.Name).Select(t => t.Text).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+    /// <summary>彙總函數括號裡的明細欄位（不重複，照出現順序）；格式不對時丟 FormatException</summary>
+    public static List<string> AggregateColumns(string formula) =>
+        Tokenize(formula).Where(t => t.Kind == TokenKind.Arg).Select(t => t.Text).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
     /// <summary>支援的彙總函數</summary>
     public static readonly string[] Aggregates = { "SUM", "AVG", "COUNT", "MAX", "MIN", "STD", "STDP" };
 

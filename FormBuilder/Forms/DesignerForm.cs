@@ -1694,6 +1694,10 @@ public partial class DesignerForm : Form, IPickerHost
             MarkSaved();
             propertyGrid.Refresh();                          // 開窗畫面等路徑存檔時改成相對路徑了
             UpdateStatus("已存檔 " + Path.GetFileName(currentFilePath));
+            var problems = AfterChangeProblems();
+            if (problems.Count > 0)
+                MessageBox.Show(this, "已存檔，但執行後動作有欄位對不上，這幾行執行時算不出來：" + Environment.NewLine + Environment.NewLine
+                                + string.Join(Environment.NewLine, problems), "執行後動作", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return true;
         }
         catch (Exception ex)
@@ -1701,6 +1705,31 @@ public partial class DesignerForm : Form, IPickerHost
             MessageBox.Show("存檔失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 檢查每個 Grid（畫面上的欄位、Grid 的欄位）和編輯視窗明細清單（編輯視窗的欄位、明細清單的欄位）的「執行後動作」，
+    /// 回傳對不上的地方
+    /// </summary>
+    private List<string> AfterChangeProblems()
+    {
+        var problems = new List<string>();
+        var screen = def.Fields.Select(f => f.Column).ToList();
+        var others = screen.Concat(defTableColumns.Select(c => c.Name)).ToList();
+        var gridColumns = def.Grids.SelectMany(g => g.Columns).Select(c => c.Column).ToList();
+        foreach (var g in def.Grids.Where(g => !string.IsNullOrWhiteSpace(g.AfterChange)))
+            problems.AddRange(GridCells.CheckAfterChange(g.AfterChange, screen, gridColumns, others)
+                .Select(p => $"Grid「{g.Title ?? g.TableName}」{p}"));
+        foreach (var g in def.Grids)
+        {
+            // 編輯視窗：欄位是 Grid 的欄位、文字標籤；明細清單之間可以互相加總
+            var window = g.Columns.Select(c => c.Column).Concat(g.EditTextLabels.Select(t => t.Column)).ToList();
+            var listColumns = g.EditLists.SelectMany(l => l.Columns).Select(c => c.Column).ToList();
+            foreach (var l in g.EditLists.Where(l => !string.IsNullOrWhiteSpace(l.AfterChange)))
+                problems.AddRange(GridCells.CheckAfterChange(l.AfterChange, window, listColumns, window)
+                    .Select(p => $"編輯視窗明細清單「{l.Title ?? l.TableName}」{p}"));
+        }
+        return problems;
     }
 
     private static string EnsureFolder()

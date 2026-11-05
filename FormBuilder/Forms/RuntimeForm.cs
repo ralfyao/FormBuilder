@@ -229,6 +229,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         // Grid 的執行後動作：資料有變動就重算（例如 AMOUNT=SUM(金額)、標籤8=SUM(金額)）
         foreach (var (g, grid) in AllGrids()) GridCells.HookDataChanged(grid, () => RunGridAfterChange(g, grid));
+        // 執行後動作的欄位名稱寫錯會一直算不出來：打開時檢查一次，有錯就提醒
+        var afterChangeProblems = def.Grids.Where(g => !string.IsNullOrWhiteSpace(g.AfterChange))
+            .SelectMany(g => GridCells.CheckAfterChange(g.AfterChange, inputs.Keys.Select(f => f.Column), def.Grids.SelectMany(x => x.Columns).Select(c => c.Column))
+                .Select(p => $"「{g.Title ?? g.TableName}」{p}"))
+            .ToList();
+        if (afterChangeProblems.Count > 0)
+            Shown += (s, e) => BeginInvoke(() => MessageBox.Show(this,
+                "Grid 的執行後動作有欄位對不上，這幾行算不出來，請到畫面設計修正：" + Environment.NewLine + Environment.NewLine
+                + string.Join(Environment.NewLine, afterChangeProblems), "執行後動作", MessageBoxButtons.OK, MessageBoxIcon.Warning));
         // 停靠在下方的 Grid：WinForms 是「後加入的先停靠（最外側）」，所以倒著加，
         // 讓先放的 Grid 在最下面，跟設計畫面一樣
         foreach (var g in def.Grids.AsEnumerable().Reverse())

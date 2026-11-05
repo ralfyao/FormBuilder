@@ -230,6 +230,46 @@ public static class GridCells
     }
 
     /// <summary>
+    /// 檢查 Grid / 明細清單的「執行後動作」：一行一組「畫面欄位=公式」。回傳每個問題的說明（沒問題 = 空的）：
+    /// 左邊的欄位不在畫面上（targets）、SUM(…) 括號裡的欄位明細沒有（detailColumns）、公式裡其他名稱都找不到（otherNames；null = 不檢查）
+    /// </summary>
+    public static List<string> CheckAfterChange(string text, IEnumerable<string> targets, IEnumerable<string> detailColumns, IEnumerable<string> otherNames = null)
+    {
+        var problems = new List<string>();
+        if (string.IsNullOrWhiteSpace(text)) return problems;
+        var targetSet = new HashSet<string>(targets, StringComparer.OrdinalIgnoreCase);
+        var detailSet = new HashSet<string>(detailColumns, StringComparer.OrdinalIgnoreCase);
+        var otherSet = otherNames == null ? null : new HashSet<string>(otherNames.Concat(targetSet).Concat(detailSet), StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string line = raw.Trim();
+            if (line == "") continue;
+            int eq = line.IndexOf('=');
+            if (eq <= 0)
+            {
+                problems.Add($"「{line}」少了「畫面欄位=」");
+                continue;
+            }
+            string target = line[..eq].Trim().TrimStart('@');
+            string formula = line[(eq + 1)..].Trim();
+            if (!targetSet.Contains(target)) problems.Add($"「{line}」：畫面上沒有「{target}」這個欄位");
+            try
+            {
+                foreach (var column in Formula.AggregateColumns(formula).Where(c => !detailSet.Contains(c)))
+                    problems.Add($"「{line}」：明細沒有「{column}」這個欄位");
+                if (otherSet != null)
+                    foreach (var name in Formula.Names(formula).Where(n => !otherSet.Contains(n)))
+                        problems.Add($"「{line}」：找不到「{name}」這個欄位");
+            }
+            catch (FormatException ex)
+            {
+                problems.Add($"「{line}」：{ex.Message}");
+            }
+        }
+        return problems;
+    }
+
+    /// <summary>
     /// Grid 的「執行後動作」：一行一組「畫面欄位=公式」，公式可以用 SUM(欄位) 等彙總函數（aggregateOf）和畫面上的欄位（valueOf）。
     /// 文字標籤、只當查詢條件的欄位一直顯示計算結果；資料表的欄位只在 fillData（新增、修改）時填，瀏覽時顯示資料庫裡存的值
     /// </summary>
