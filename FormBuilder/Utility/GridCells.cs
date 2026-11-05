@@ -398,6 +398,21 @@ public static class GridCells
         };
     }
 
+    /// <summary>
+    /// Grid 上自訂勾選框欄位打勾的列（有好幾個勾選框欄位時，任一個打勾就算）；沒有勾選框欄位或都沒打勾 = 空的。
+    /// 「執行SQL」按鈕有打勾的列時只對這些列執行
+    /// </summary>
+    public static List<DataRow> CheckedRows(DataGridView grid)
+    {
+        if (grid?.DataSource is not DataTable table) return new List<DataRow>();
+        var checks = grid.Columns.Cast<DataGridViewColumn>()
+            .Select(col => col.Tag as GridColumnDefinition)
+            .Where(c => c is { IsCustom: true } && Resolve(c) == GridCellKind.勾選框 && table.Columns.Contains(c.Column))
+            .Select(c => c.Column).ToList();
+        if (checks.Count == 0) return new List<DataRow>();
+        return table.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Deleted && checks.Any(c => r[c] is true)).ToList();
+    }
+
     // ================= 開窗選取 =================
 
     /// <summary>格子右邊「…」按鈕的寬度</summary>

@@ -263,7 +263,36 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
         // Ctrl+Z 復原、Ctrl+Y 取消復原：記錄版面（欄位、按鈕、大小）的快照
         history = new UndoHistory(this, CaptureLayout, RestoreLayout);
+        appliedLayout = CaptureLayout();
+        // 沒按「確定」就關閉（X、取消、Esc）而版面有改：問要不要套用（有「檔案 → 儲存」時也可以直接存檔）
+        FormClosing += (s, e) =>
+        {
+            if (e.Cancel || DialogResult == DialogResult.OK || CaptureLayout() == appliedLayout) return;
+            var applySave = new TaskDialogButton("套用並儲存") { Visible = saveForm != null };
+            var apply = new TaskDialogButton("套用");
+            var discard = new TaskDialogButton("不套用");
+            var answer = TaskDialog.ShowDialog(this, new TaskDialogPage
+            {
+                Caption = "編輯視窗版面",
+                Heading = "編輯視窗版面有修改還沒套用",
+                Text = "關閉前要把修改套用到畫面嗎？「套用並儲存」會接著存檔整個畫面定義檔（要給使用者用請再到畫面設計發布）。",
+                Icon = TaskDialogIcon.Warning,
+                Buttons = { applySave, apply, discard, TaskDialogButton.Cancel },
+                DefaultButton = saveForm != null ? applySave : apply,
+            });
+            if (answer == discard) return;
+            if ((answer == apply || answer == applySave) && WriteBack())
+            {
+                if (answer == applySave) saveForm();
+                DialogResult = DialogResult.OK;            // 呼叫端照「確定」處理（同步回單身欄位設定、重畫）
+                return;
+            }
+            e.Cancel = true;
+        };
     }
+
+    /// <summary>上次套用（開啟、確定、檔案 → 儲存）時的版面；關閉時比對有沒有沒套用的修改</summary>
+    private string appliedLayout;
 
     private readonly UndoHistory history;
 
@@ -1294,6 +1323,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
     {
         if (saveForm == null || !WriteBack()) return;
         saveForm();
+        appliedLayout = CaptureLayout();
         if (close) Finish();
         else lblHint.Text = $"  已儲存（{DateTime.Now:HH:mm:ss}）";
     }

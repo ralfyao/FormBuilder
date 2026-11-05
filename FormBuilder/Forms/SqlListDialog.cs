@@ -14,6 +14,9 @@ public partial class SqlListDialog : Form
     /// <summary>JOIN（按「確定」才寫回）與 JOIN 帶進來的欄位（欄位名稱 → 欄位）</summary>
     private readonly List<GridJoinDefinition> workJoins;
     private readonly Dictionary<string, GridColumnDefinition> joinColumns = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>自訂欄位（勾選框、按鈕、日期選擇、文字框）：不是 SQL 的欄位，不查詢、不存檔（欄位名稱 → 欄位）</summary>
+    private readonly Dictionary<string, GridColumnDefinition> customColumns = new(StringComparer.OrdinalIgnoreCase);
+    private const string CustomSource = "自訂欄位（不查詢、不存檔）";
 
     /// <param name="masterColumns">單頭的欄位（提示可以用的 @參數）</param>
     /// <param name="allowLayout">主畫面的 SQL 清單：有「編輯視窗版面…」按鈕（編輯視窗裡的 SQL 清單沒有）</param>
@@ -36,7 +39,8 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Source", typeof(string));
         workJoins = grid.Joins.Select(j => j.Clone()).ToList();
         foreach (var c in grid.Columns.Where(c => c.IsJoin && workJoins.Any(j => j.Alias == c.JoinAlias))) joinColumns[c.Column] = c;
-        foreach (var c in grid.Columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joinColumns.ContainsKey(c.Column))))   // 編輯視窗的畫面欄位不是 SQL 的欄位
+        foreach (var c in grid.Columns.Where(c => c.IsCustom)) customColumns[c.Column] = c;
+        foreach (var c in grid.Columns.Where(c => c.IsCustom || !c.ScreenOnly && (!c.IsJoin || joinColumns.ContainsKey(c.Column))))   // 編輯視窗的畫面欄位不是 SQL 的欄位
             columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
         dgvColumns.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Source", HeaderText = "來源（JOIN）", ReadOnly = true, Width = 220 });
         dgvColumns.DataSource = columnTable;
@@ -50,7 +54,24 @@ public partial class SqlListDialog : Form
                 RemoveJoin(jc.JoinAlias);
                 e.Handled = true;
             }
+            else if (dgvColumns.CurrentRow?.DataBoundItem is DataRowView cv && customColumns.TryGetValue((string)cv.Row["Column"], out var cc))
+            {
+                RemoveCustom(cc);
+                e.Handled = true;
+            }
         };
+        // 自訂按鈕欄位：雙擊設定按鈕動作
+        dgvColumns.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex >= 0 && dgvColumns.Rows[e.RowIndex].DataBoundItem is DataRowView v
+                && customColumns.TryGetValue((string)v.Row["Column"], out var c) && c.CellType == GridCellKind.按鈕)
+                EditButton(c);
+        };
+
+        // 自訂欄位：例如勾選框，使用者打勾的列，按「執行SQL」按鈕時只對打勾的列執行
+        var btnCustom = new Button { Text = "新增自訂欄位…", AutoSize = true, Height = 30 };
+        btnCustom.Click += (s, e) => AddCustom();
+        bottomPanel.Controls.Add(btnCustom);
 
         var btnJoin = new Button { Text = "JOIN 其他資料表…", AutoSize = true, Height = 30 };
         btnJoin.Click += (s, e) => AddJoin();
@@ -106,13 +127,13 @@ public partial class SqlListDialog : Form
             .GroupBy(r => (string)r["Column"], StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (Visible: g.First()["Visible"], Header: g.First()["Header"], Width: g.First()["Width"]), StringComparer.OrdinalIgnoreCase);
         columnTable.Clear();
-        foreach (var c in columns.Where(c => !joinColumns.ContainsKey(c.Column)))
+        foreach (var c in columns.Where(c => !joinColumns.ContainsKey(c.Column) && !customColumns.ContainsKey(c.Column)))
         {
             if (old.TryGetValue(c.Column, out var o)) columnTable.Rows.Add(o.Visible, c.Column, o.Header, o.Width, "");
             else columnTable.Rows.Add(true, c.Column, c.Column, c.Width, "");
         }
-        // JOIN 帶進來的欄位接在後面
-        foreach (var c in joinColumns.Values)
+        // JOIN 帶進來的欄位、自訂欄位接在後面
+        foreach (var c in joinColumns.Values.Concat(customColumns.Values))
         {
             if (old.TryGetValue(c.Column, out var o)) columnTable.Rows.Add(o.Visible, c.Column, o.Header, o.Width, SourceText(c));
             else columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
@@ -151,7 +172,15 @@ public partial class SqlListDialog : Form
         grid.Columns = columnTable.Rows.Cast<DataRow>().Select(r =>
         {
             string name = (string)r["Column"];
-            var existing = grid.Columns.FirstOrDefault(c => c.Column.Equals(name, StringComparison.OrdinalIgnoreCase) && !c.IsJoin);
+            if (customColumns.TryGetValue(name, out var custom))
+            {
+                custom.Visible = r["Visible"] is true;
+                custom.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
+                custom.Width = r["Width"] is int cw && cw > 0 ? Math.Clamp(cw, 30, 600) : 90;
+                if (custom.Button != null) custom.Button.Text = GridCells.ButtonText(custom);
+                return custom;                             // 自訂欄位維持「不查詢、不存檔」
+            }
+            var existing = grid.Columns.FirstOrDefault(c => c.Column.Equals(name, StringComparison.OrdinalIgnoreCase) && !c.IsJoin && !c.IsCustom);
             var c = joinColumns.TryGetValue(name, out var joined) ? joined
                   : existing ?? new GridColumnDefinition { Column = name, IsNullable = true, NoEntry = true };
             if (!c.IsJoin && types.TryGetValue(name, out var t)) c.DataType = t.DataType;
@@ -160,7 +189,7 @@ public partial class SqlListDialog : Form
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
             return c;
-        }).Concat(grid.Columns.Where(c => c.ScreenOnly && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
+        }).Concat(grid.Columns.Where(c => c.ScreenOnly && !c.IsCustom && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
           .ToList();                                       // 編輯視窗的畫面欄位保留（SQL 有同名欄位時就用 SQL 的）
         grid.Joins = workJoins.Where(j => grid.Columns.Any(c => c.JoinAlias == j.Alias)).ToList();
         return true;
@@ -168,6 +197,7 @@ public partial class SqlListDialog : Form
 
     private string SourceText(GridColumnDefinition c)
     {
+        if (c.IsCustom) return CustomSource + (c.CellType == GridCellKind.按鈕 ? "，雙擊設定按鈕動作" : "");
         if (!c.IsJoin) return "";
         var join = workJoins.FirstOrDefault(j => j.Alias == c.JoinAlias);
         return join == null ? c.JoinAlias : $"{c.JoinAlias}：{join.TableName}.{c.SourceColumn}";
@@ -192,6 +222,35 @@ public partial class SqlListDialog : Form
             joinColumns[c.Column] = c;
             columnTable.Rows.Add(true, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
         }
+    }
+
+    /// <summary>新增自訂欄位（勾選框、按鈕、日期選擇、文字框），加在清單最後面；按鈕接著設定動作</summary>
+    private void AddCustom()
+    {
+        dgvColumns.EndEdit();
+        var used = columnTable.Rows.Cast<DataRow>().Select(r => (string)r["Column"]).ToList();
+        using var dlg = new CustomColumnDialog(used);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var c = dlg.Column;
+        customColumns[c.Column] = c;
+        columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
+        if (c.CellType == GridCellKind.按鈕) EditButton(c);
+    }
+
+    private void EditButton(GridColumnDefinition c)
+    {
+        var rowColumns = columnTable.Rows.Cast<DataRow>().Select(r => (string)r["Column"]).Where(n => n != c.Column);
+        var edited = CustomColumnDialog.EditButton(this, c.Button, c.Header ?? c.Column, rowColumns);
+        if (edited != null) c.Button = edited;
+    }
+
+    private void RemoveCustom(GridColumnDefinition c)
+    {
+        if (MessageBox.Show($"確定要移除自訂欄位「{c.Header ?? c.Column}」嗎？", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        dgvColumns.EndEdit();
+        customColumns.Remove(c.Column);
+        columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))?.Delete();
+        columnTable.AcceptChanges();
     }
 
     /// <summary>移除一個 JOIN，連同它帶進來的欄位</summary>

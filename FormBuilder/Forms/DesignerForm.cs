@@ -1391,10 +1391,45 @@ public partial class DesignerForm : Form, IPickerHost
         UpdateStatus();
         history?.Reset();
         MarkSaved();
+        publishedJson = SysContext.Active ? "" : null;    // 新畫面還沒發布過
     }
 
     /// <summary>目前的畫面定義當成「已存檔」的狀態（關閉時不用提醒）</summary>
     private void MarkSaved() => savedJson = def.ToJson();
+
+    /// <summary>系統上已發布的版本（比對用的 JSON）；"" = 還沒發布過；null = 不用比（沒登入系統）</summary>
+    private string publishedJson;
+
+    /// <summary>比對發布用的 JSON：標題照發布時的規則（沒改過標題用檔名）</summary>
+    private string PublishComparable(FormDefinition form)
+    {
+        string key = currentFilePath == null ? null : Path.GetFileNameWithoutExtension(currentFilePath);
+        if (key == null) return form.ToJson();
+        var copy = FormDefinition.FromJson(form.ToJson());
+        copy.Title = PublishTitle(copy, key);
+        return copy.ToJson();
+    }
+
+    /// <summary>開檔後：讀系統上已發布的同名畫面，之後關閉時比對有沒有發布過最新版</summary>
+    private void LoadPublishedBaseline()
+    {
+        publishedJson = null;
+        if (!SysContext.Active || currentFilePath == null) return;
+        try
+        {
+            string content = SysDb.LoadContent(SysContext.Connection, Path.GetFileNameWithoutExtension(currentFilePath));
+            publishedJson = content == null ? "" : PublishComparable(FormDefinition.FromJson(content));
+        }
+        catch (Exception)
+        {
+            publishedJson = null;                          // 讀不到系統資料庫就不比
+        }
+    }
+
+    /// <summary>已存檔，但跟系統上發布的版本不一樣（或還沒發布過）</summary>
+    private bool HasUnpublishedChanges =>
+        SysContext.Active && publishedJson != null && (def.Fields.Count > 0 || def.Grids.Count > 0 || def.Buttons.Count > 0)
+        && PublishComparable(def) != publishedJson;
 
     /// <summary>畫面定義跟上次開啟、存檔時不一樣（空白的新畫面不算）</summary>
     private bool HasUnsavedChanges =>
@@ -1406,17 +1441,21 @@ public partial class DesignerForm : Form, IPickerHost
     /// </summary>
     private bool ConfirmClose()
     {
-        if (!HasUnsavedChanges) return true;
-        var publish = new TaskDialogButton("儲存並發布") { Visible = SysContext.Active };
-        var save = new TaskDialogButton("儲存");
-        var discard = new TaskDialogButton("不儲存");
+        bool unsaved = HasUnsavedChanges;
+        bool unpublished = !unsaved && HasUnpublishedChanges;
+        if (!unsaved && !unpublished) return true;
+        var publish = new TaskDialogButton(unsaved ? "儲存並發布" : "發布") { Visible = SysContext.Active };
+        var save = new TaskDialogButton("儲存") { Visible = unsaved };
+        var discard = new TaskDialogButton(unsaved ? "不儲存" : "不發布");
         var page = new TaskDialogPage
         {
             Caption = "畫面設計",
-            Heading = $"「{def.Title ?? "新畫面"}」有修改還沒存檔",
-            Text = SysContext.Active
-                ? "關閉前要先儲存嗎？「儲存並發布」會存檔後發布到系統，使用者馬上看得到最新版。"
-                : "關閉前要先儲存嗎？",
+            Heading = unsaved ? $"「{def.Title ?? "新畫面"}」有修改還沒存檔"
+                    : publishedJson == "" ? $"「{def.Title ?? "新畫面"}」已存檔，但還沒發布到系統"
+                    : $"「{def.Title ?? "新畫面"}」已存檔，但系統上還是舊版（還沒發布）",
+            Text = unpublished ? "使用者看到的還是系統上發布的版本。要現在發布嗎？"
+                 : SysContext.Active ? "關閉前要先儲存嗎？「儲存並發布」會存檔後發布到系統，使用者馬上看得到最新版。"
+                 : "關閉前要先儲存嗎？",
             Icon = TaskDialogIcon.Warning,
             Buttons = { publish, save, discard, TaskDialogButton.Cancel },
             DefaultButton = SysContext.Active ? publish : save,
@@ -1510,6 +1549,7 @@ public partial class DesignerForm : Form, IPickerHost
             ReloadDefTableColumns();
             history.Reset();
             MarkSaved();
+            LoadPublishedBaseline();
             UpdateStatus("已開啟 " + Path.GetFileName(currentFilePath));
         }
         catch (Exception ex)
@@ -1551,6 +1591,7 @@ public partial class DesignerForm : Form, IPickerHost
                 notes.AddRange(related.Where(r => !published.Contains(r.Key)).Select(r => $"畫面「{r.Def.Title ?? r.Key}」（{r.Key}）還沒發布，按鈕會開不起來"));
             }
             UpdateStatus($"已發布 {done.Count} 個畫面：" + string.Join("、", done));
+            publishedJson = PublishComparable(def);        // 系統上現在是最新版
             MessageBox.Show("已發布：" + Environment.NewLine + string.Join(Environment.NewLine, done.Select(x => "　" + x)) + Environment.NewLine + Environment.NewLine
                             + "第一次發布的畫面，請到「選單管理」放進選單（只從按鈕開啟的畫面不用），並在「使用者、角色與權限」設定哪些角色可以用。"
                             + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Distinct()) : ""),
@@ -1666,6 +1707,7 @@ public partial class DesignerForm : Form, IPickerHost
             ReloadDefTableColumns();
             history.Reset();
             MarkSaved();
+            LoadPublishedBaseline();
             UpdateStatus($"已開啟已發布的畫面 {key}（存檔會寫到 {currentFilePath}）");
         }
         catch (Exception ex)

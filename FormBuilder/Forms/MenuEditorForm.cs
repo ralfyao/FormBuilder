@@ -47,6 +47,53 @@ public partial class MenuEditorForm : Form
         };
 
         LoadTree();
+        savedTree = TreeSnapshot();
+        // 關閉前：選單有改還沒儲存就問「儲存 / 不儲存 / 取消」
+        FormClosing += (s, e) =>
+        {
+            if (e.Cancel || DialogResult == DialogResult.OK || TreeSnapshot() == savedTree) return;
+            var save = new TaskDialogButton("儲存");
+            var discard = new TaskDialogButton("不儲存");
+            var answer = TaskDialog.ShowDialog(this, new TaskDialogPage
+            {
+                Caption = Text,
+                Heading = "選單有修改還沒儲存",
+                Text = "關閉前要先儲存嗎？儲存後使用者重新登入就會看到新的選單。",
+                Icon = TaskDialogIcon.Warning,
+                Buttons = { save, discard, TaskDialogButton.Cancel },
+                DefaultButton = save,
+            });
+            if (answer == discard) return;
+            if (answer != save || !Save()) e.Cancel = true;
+        };
+    }
+
+    /// <summary>開啟、儲存時的選單（比對有沒有沒儲存的修改）</summary>
+    private string savedTree;
+
+    private List<MenuTree> BuildTree(TreeNodeCollection nodes) =>
+        nodes.Cast<TreeNode>().Select(tn =>
+        {
+            var tree = new MenuTree { Node = (MenuNode)tn.Tag };
+            tree.Children.AddRange(BuildTree(tn.Nodes));
+            return tree;
+        }).ToList();
+
+    /// <summary>目前選單的樣子（每個節點的標題、畫面、順序、層次）</summary>
+    private string TreeSnapshot()
+    {
+        var sb = new System.Text.StringBuilder();
+        void Walk(TreeNodeCollection nodes, int depth)
+        {
+            foreach (TreeNode tn in nodes)
+            {
+                var n = (MenuNode)tn.Tag;
+                sb.Append(depth).Append('|').Append(n.IsFolder).Append('|').Append(n.Title).Append('|').Append(n.FormKey).Append('\n');
+                Walk(tn.Nodes, depth + 1);
+            }
+        }
+        Walk(treeMenu.Nodes, 0);
+        return sb.ToString();
     }
 
     private static bool IsAncestor(TreeNode node, TreeNode of)
@@ -148,25 +195,22 @@ public partial class MenuEditorForm : Form
         treeMenu.SelectedNode = node;
     }
 
-    private void Save()
+    /// <summary>儲存選單；回傳 true = 存好了</summary>
+    private bool Save()
     {
-        List<MenuTree> Build(TreeNodeCollection nodes) =>
-            nodes.Cast<TreeNode>().Select(tn =>
-            {
-                var tree = new MenuTree { Node = (MenuNode)tn.Tag };
-                tree.Children.AddRange(Build(tn.Nodes));
-                return tree;
-            }).ToList();
         try
         {
-            var roots = Build(treeMenu.Nodes);
+            var roots = BuildTree(treeMenu.Nodes);
             SysDb.SaveMenu(Cs, roots);
             Audit.Write(null, "SYS_Menu", "修改選單", null, $"{CountNodes(treeMenu.Nodes)} 個節點");
+            savedTree = TreeSnapshot();
             DialogResult = DialogResult.OK;
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show("儲存選單失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
 

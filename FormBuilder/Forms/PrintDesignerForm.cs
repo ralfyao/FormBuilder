@@ -199,7 +199,29 @@ public partial class PrintDesignerForm : Form
         SetSelection(Array.Empty<DesignBox>());
         Load += (s, e) => LoadColumns();
         history = new UndoHistory(this, () => template.ToJson(), RestoreSnapshot);
+        savedJson = template.ToJson();
+        // 關閉前：有沒存的修改就問「儲存 / 不儲存 / 取消」（列印樣板跟著畫面一起發布）
+        FormClosing += (s, e) =>
+        {
+            if (e.Cancel || template.ToJson() == savedJson) return;
+            var save = new TaskDialogButton("儲存");
+            var discard = new TaskDialogButton("不儲存");
+            var answer = TaskDialog.ShowDialog(this, new TaskDialogPage
+            {
+                Caption = "列印樣板設計",
+                Heading = "列印樣板有修改還沒存檔",
+                Text = "關閉前要先儲存嗎？存好後到畫面設計「儲存並發布」，使用者列印時才會用到新的樣板。",
+                Icon = TaskDialogIcon.Warning,
+                Buttons = { save, discard, TaskDialogButton.Cancel },
+                DefaultButton = save,
+            });
+            if (answer == discard) return;
+            if (answer != save || !Save(false)) e.Cancel = true;
+        };
     }
+
+    /// <summary>上次開啟、存檔時的樣板（JSON）；關閉時比對有沒有沒存的修改</summary>
+    private string savedJson;
 
     private static int Snap(int v) => Math.Max(0, (int)Math.Round(v / 5.0) * 5);
 
@@ -707,7 +729,8 @@ public partial class PrintDesignerForm : Form
 
     // ================= 檔案 / 預覽 =================
 
-    private void Save(bool saveAs)
+    /// <summary>存檔；回傳 true = 存好了</summary>
+    private bool Save(bool saveAs)
     {
         if (saveAs || templatePath == null)
         {
@@ -718,19 +741,22 @@ public partial class PrintDesignerForm : Form
                 InitialDirectory = templatePath != null ? Path.GetDirectoryName(templatePath) : defaultFolder,
                 FileName = templatePath != null ? Path.GetFileName(templatePath) : defaultName + ".print.json",
             };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            if (dlg.ShowDialog(this) != DialogResult.OK) return false;
             templatePath = dlg.FileName;
         }
         try
         {
             template.Save(templatePath);
+            savedJson = template.ToJson();
             SavedPath = templatePath;
             UpdateTitle();
             UpdateStatus("已儲存 " + Path.GetFileName(templatePath));
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show("儲存失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
 

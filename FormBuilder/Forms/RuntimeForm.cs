@@ -976,8 +976,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
         ButtonAction.單身 => btnDetail.Enabled,
         ButtonAction.離開 => btnExit.Enabled,
         ButtonAction.自訂查詢 => mode == Mode.Browse || mode == Mode.Query,
-        // 執行SQL 只在新增、修改中可以按（例如取號、更名）；只放 SQL 清單的畫面沒有新增、修改，瀏覽時就能按（對清單上選的資料執行）
-        ButtonAction.執行SQL => (HasMasterTable ? mode is Mode.Insert or Mode.Modify : mode == Mode.Browse) && perm.Modify,
+        // 執行SQL 在新增、修改中可以按（例如取號、更名）；有單頭清單時瀏覽中也能按（對清單上選的每一列各執行一次）；
+        // 只放 SQL 清單的畫面沒有新增、修改，瀏覽時就能按（對清單上選的資料執行）
+        ButtonAction.執行SQL => (HasMasterTable ? mode is Mode.Insert or Mode.Modify || mode == Mode.Browse && (listGrid != null && HasCurrent || sqlGrids.Count > 0)
+                                               : mode == Mode.Browse) && perm.Modify,
         ButtonAction.列印報表 => mode == Mode.Browse && perm.Print,
         ButtonAction.開啟查詢條件畫面 => mode == Mode.Browse && (HasMasterTable || sqlGrids.Count > 0),
         _ => mode == Mode.Browse,
@@ -1132,9 +1134,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         // 新增、修改中：只執行一次，@欄位名稱 先取畫面上正在輸入的值；執行完不重讀資料，才不會蓋掉正在輸入的內容
         bool editing = mode is Mode.Insert or Mode.Modify;
-        var indexes = editing ? new List<int>() : SelectedRowIndexes();
-        if (!editing && indexes.Count == 0 && HasCurrent) indexes.Add(current);
-        var rows = editing ? new List<DataRow>() : HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
+        // SQL 清單上自訂勾選框有打勾的列：只對打勾的列執行（每列各一次），執行完重查清單
+        var checkedSqlRows = editing ? new List<DataRow>() : sqlGrids.Select(x => GridCells.CheckedRows(x.Grid)).FirstOrDefault(r => r.Count > 0) ?? new List<DataRow>();
+        // 單頭清單有自訂勾選框且有打勾：用打勾的列，沒有才用選取的列
+        var ticked = editing || listGrid == null ? new List<int>()
+                   : GridCells.CheckedRows(listGrid).Select(r => results.Rows.IndexOf(r)).Where(i => i >= 0).OrderBy(i => i).ToList();
+        var indexes = editing || checkedSqlRows.Count > 0 ? new List<int>() : ticked.Count > 0 ? ticked : SelectedRowIndexes();
+        if (!editing && checkedSqlRows.Count == 0 && indexes.Count == 0 && HasCurrent) indexes.Add(current);
+        var rows = editing ? new List<DataRow>() : checkedSqlRows.Count > 0 ? checkedSqlRows
+                 : HasMasterTable ? indexes.Select(i => results.Rows[i]).ToList() : SelectedDataRows().Rows;
         Func<string, object> editingValue = name =>
         {
             var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -1152,7 +1160,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RefreshRows(indexes);
             SetMode(mode);
         }
-        else if (ok && !HasMasterTable) LoadSqlLists();           // 只放 SQL 清單的畫面：資料可能被 SQL 改過，重查清單
+        else if (ok && (!HasMasterTable || checkedSqlRows.Count > 0)) LoadSqlLists();   // SQL 清單的資料可能被 SQL 改過（打勾也一併清掉），重查清單
         // SQL 查出來的值（「SQL 回傳對應」）等重讀完再填進畫面上的欄位，才不會被重讀蓋掉
         if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn) && onResult == null);
         if (result != null) onResult?.Invoke(result);
