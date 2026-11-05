@@ -11,6 +11,9 @@ public class CustomColumnDialog : Form
     private readonly TextBox txtName = new() { Width = 220 };
     private readonly TextBox txtHeader = new() { Width = 220 };
     private readonly ComboBox cboKind = new() { Width = 220, DropDownStyle = ComboBoxStyle.DropDownList };
+    /// <summary>下拉選單的選項：固定選項（值=顯示，逗號分隔）或 SELECT 開頭的選項 SQL</summary>
+    private readonly TextBox txtOptions = new() { Width = 220, Height = 60, Multiline = true, ScrollBars = ScrollBars.Vertical,
+                                                  PlaceholderText = "例如：Y=是,N=否 或 SELECT 代碼, 名稱 FROM …" };
     private readonly IReadOnlyCollection<string> usedNames;
     /// <summary>類型的「數字框」= 文字框 + 數字型別（靠右顯示、可以設公式）</summary>
     private const string NumberBox = "數字框";
@@ -31,7 +34,7 @@ public class CustomColumnDialog : Form
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Padding = new Padding(12);
 
-        cboKind.Items.AddRange(new object[] { GridCellKind.勾選框, GridCellKind.按鈕, GridCellKind.日期選擇, GridCellKind.文字框, NumberBox });
+        cboKind.Items.AddRange(new object[] { GridCellKind.勾選框, GridCellKind.下拉選單, GridCellKind.日期選擇, GridCellKind.按鈕, GridCellKind.文字框, NumberBox });
         cboKind.SelectedIndex = 0;
         int n = 1;
         while (this.usedNames.Contains($"自訂{n}")) n++;
@@ -46,6 +49,10 @@ public class CustomColumnDialog : Form
         Row("類型", cboKind);
         Row("欄位名稱", txtName);
         Row("標題", txtHeader);
+        Row("選項", txtOptions);
+        void KindChanged() => txtOptions.Enabled = Equals(cboKind.SelectedItem, GridCellKind.下拉選單);
+        cboKind.SelectedIndexChanged += (s, e) => KindChanged();
+        KindChanged();
         var hint = new Label
         {
             AutoSize = true,
@@ -54,6 +61,7 @@ public class CustomColumnDialog : Form
             Margin = new Padding(0, 8, 0, 8),
             Text = "自訂欄位不是資料表的欄位：不查詢、不存檔，值只留在畫面上。"
                  + "按鈕的 SQL、執行前檢查可以用 @欄位名稱 取得那一列的值（例如勾選框打勾 = 1）。"
+                 + "下拉選單：選項填固定選項（值=顯示，逗號分隔）或 SELECT（第一欄是值、第二欄是顯示文字），之後可以在「選項 / 格式」修改。"
                  + "按鈕的動作在欄位清單上按右鍵（或雙擊那一列）設定。"
                  + "文字框 / 數字框只顯示資料：在欄位清單上雙擊那一列設定顯示的 SQL，數字框也可以雙擊「公式」欄用同一列的欄位計算。",
         };
@@ -89,6 +97,12 @@ public class CustomColumnDialog : Form
         }
         bool number = Equals(cboKind.SelectedItem, NumberBox);
         var kind = number ? GridCellKind.文字框 : (GridCellKind)cboKind.SelectedItem;
+        if (kind == GridCellKind.下拉選單 && string.IsNullOrWhiteSpace(txtOptions.Text))
+        {
+            MessageBox.Show("請填下拉選單的選項，例如：Y=是,N=否，或 SELECT 代碼, 名稱 FROM …", "提醒");
+            txtOptions.Focus();
+            return;
+        }
         string header = string.IsNullOrWhiteSpace(txtHeader.Text) ? name : txtHeader.Text.Trim();
         Column = new GridColumnDefinition
         {
@@ -96,7 +110,8 @@ public class CustomColumnDialog : Form
             Header = header,
             DataType = number ? "numeric" : kind switch { GridCellKind.勾選框 => "bit", GridCellKind.日期選擇 => "datetime", _ => "nvarchar" },
             IsNullable = true,
-            Width = kind == GridCellKind.日期選擇 ? 110 : kind == GridCellKind.勾選框 ? 60 : kind == GridCellKind.文字框 && !number ? 150 : 90,
+            Width = kind == GridCellKind.日期選擇 ? 110 : kind == GridCellKind.勾選框 ? 60 : kind is GridCellKind.文字框 or GridCellKind.下拉選單 && !number ? 150 : 90,
+            CellOptions = kind == GridCellKind.下拉選單 ? txtOptions.Text.Trim().Replace("\r\n", ",").Replace("\n", ",") : null,
             Visible = true,
             NoEntry = true,                                // 不寫回資料庫
             ScreenOnly = true,                             // 不查詢

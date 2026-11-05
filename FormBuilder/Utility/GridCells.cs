@@ -648,6 +648,9 @@ public static class GridCells
             else if (Resolve(c) == GridCellKind.日期選擇)
                 PickDate(grid, grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false), row[c.Column] as DateTime?,
                          date => SetCustomValue(row, c.Column, date));
+            else if (Resolve(c) == GridCellKind.下拉選單 && grid.Columns[e.ColumnIndex] is DataGridViewComboBoxColumn { DataSource: List<Option> options })
+                PickOption(grid, grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false), options, row[c.Column],
+                           value => SetCustomValue(row, c.Column, value));
         };
         // 這一列的按鈕是不是灰的：不符合執行前檢查；檢查寫錯就照樣可以按（按下去會提醒寫法有誤）
         bool Disabled(GridColumnDefinition c, DataRow row)
@@ -794,6 +797,36 @@ public static class GridCells
     }
 
     /// <summary>在格子下方跳出月曆，點選日期就帶回</summary>
+    /// <summary>自訂下拉選單：在格子下面跳出選項清單，點一個就帶入</summary>
+    private static void PickOption(DataGridView grid, Rectangle cell, List<Option> options, object current, Action<object> onPick)
+    {
+        var list = new ListBox
+        {
+            IntegralHeight = false,
+            BorderStyle = BorderStyle.None,
+            Font = grid.Font,
+            Width = Math.Max(cell.Width, 120),
+            DisplayMember = nameof(Option.Text),
+        };
+        foreach (var o in options) list.Items.Add(o);
+        list.Height = Math.Min(options.Count, 12) * list.ItemHeight + 4;
+        list.SelectedItem = options.FirstOrDefault(o => Equals(o.Value, current) || o.Value is string s && current is string t && s.Trim() == t.Trim());
+        var popup = new ToolStripDropDown { Padding = Padding.Empty };
+        popup.Items.Add(new ToolStripControlHost(list) { Margin = Padding.Empty, Padding = Padding.Empty, AutoSize = false, Size = list.Size });
+        void Choose()
+        {
+            if (list.SelectedItem is not Option o) return;
+            onPick(o.Value ?? DBNull.Value);
+            try { popup.Close(); }
+            catch (ObjectDisposedException) { }            // 已經自己關掉（點到外面）了
+        }
+        list.MouseClick += (s, e) => Choose();
+        list.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) Choose(); };
+        popup.Closed += (s, e) => popup.Dispose();
+        popup.Show(grid, new Point(cell.Left, cell.Bottom));
+        list.Focus();
+    }
+
     private static void PickDate(DataGridView grid, Rectangle cell, DateTime? value, Action<DateTime> onPick)
     {
         var calendar = new MonthCalendar { MaxSelectionCount = 1 };

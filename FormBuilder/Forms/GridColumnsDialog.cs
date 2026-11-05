@@ -102,7 +102,7 @@ public partial class GridColumnsDialog : Form
             if (e.ColumnIndex == colIsKey.Index || e.ColumnIndex == colNoEntry.Index || e.ColumnIndex == colFormula.Index || e.ColumnIndex == colDecimals.Index) e.Cancel = true;
             // 自訂欄位：類型建立時就決定了；「選項 / 格式」只有按鈕用來改按鈕文字
             if (ColumnAt(e.RowIndex) is { IsCustom: true } c &&
-                (e.ColumnIndex == colCellType.Index || e.ColumnIndex == colCellOptions.Index && c.CellType != GridCellKind.按鈕))
+                (e.ColumnIndex == colCellType.Index || e.ColumnIndex == colCellOptions.Index && c.CellType is not (GridCellKind.按鈕 or GridCellKind.下拉選單)))
                 e.Cancel = true;
         };
         // 「按鈕」只給自訂欄位用，資料表的欄位選了就改回自動
