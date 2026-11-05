@@ -146,6 +146,11 @@ public static class Formula
         _ => Convert.ToDecimal(value, CultureInfo.CurrentCulture),
     };
 
+    /// <summary>計算結果顯示在畫面上（欄位、文字標籤）：同 Format，再加千分號，例如 80,700.00</summary>
+    public static string Display(decimal value, int decimals) =>
+        decimals >= 0 ? Math.Round(value, decimals, MidpointRounding.AwayFromZero).ToString("N" + decimals, CultureInfo.CurrentCulture)
+                      : Math.Round(value, 4, MidpointRounding.AwayFromZero).ToString("#,##0.####", CultureInfo.CurrentCulture);
+
     /// <summary>計算結果轉成要顯示的文字：decimals &lt; 0 = 自動（最多 4 位小數，去掉尾端的 0）</summary>
     public static string Format(decimal value, int decimals) =>
         decimals >= 0 ? Math.Round(value, decimals, MidpointRounding.AwayFromZero).ToString("F" + decimals, CultureInfo.CurrentCulture)

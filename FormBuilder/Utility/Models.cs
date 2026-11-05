@@ -504,6 +504,12 @@ public class FieldDefinition : IPickerField
                + "同一個欄位可以放好幾個（例如多組關鍵字搭配「任一符合」），重複放上去的會自動設成 True")]
     public bool QueryOnly { get; set; }
 
+    [Category("畫面"), DisplayName("查詢方式"), DefaultValue(QueryCompare.自動),
+     Description("查詢時這個欄位的條件怎麼比對：自動 = 文字完全相同（可用 * ? 萬用字元）、日期同一天、數字相等；"
+               + "大於等於 / 小於等於 = 區間查詢，例如日期放兩個（第二個「只當查詢條件」），起始日設大於等於、結束日設小於等於（含結束日當天）；"
+               + "包含 = 文字裡有輸入的字")]
+    public QueryCompare QueryCompare { get; set; }
+
     /// <summary>複製一份（同一個欄位再放一個當查詢條件用）</summary>
     public FieldDefinition Clone() => (FieldDefinition)MemberwiseClone();
 
@@ -1409,6 +1415,25 @@ public static class TypeHelper
     public static bool IsDate(string t) => DateTypes.Contains(t);
     public static bool IsString(string t) => StringTypes.Contains(t);
     public static bool IsNumber(string t) => IntegerTypes.Contains(t) || DecimalTypes.Contains(t) || FloatTypes.Contains(t);
+
+    /// <summary>
+    /// 金額類的欄位（decimal、numeric、money、float…，主鍵除外）：顯示時加千分號。
+    /// 整數（int 等）常是識別碼、數量、年份，不加
+    /// </summary>
+    public static bool UsesThousands(string t, bool isKey = false) => !isKey && (DecimalTypes.Contains(t) || FloatTypes.Contains(t));
+
+    /// <summary>數字加千分號：decimal 照它本身的小數位數（資料庫讀出來的 80700.00 → 80,700.00），double 最多 10 位小數；其他照原樣</summary>
+    public static string Thousands(object value) => value switch
+    {
+        decimal d => d.ToString("N" + ((decimal.GetBits(d)[3] >> 16) & 0xFF), CultureInfo.CurrentCulture),
+        double or float => Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("#,##0.##########", CultureInfo.CurrentCulture),
+        null or DBNull => "",
+        _ => Convert.ToString(value, CultureInfo.CurrentCulture),
+    };
+
+    /// <summary>使用者打的數字（可以有千分號）重新加上千分號；不是數字就照原樣</summary>
+    public static string ReformatThousands(string text) =>
+        decimal.TryParse(text?.Trim(), NumberStyles.Number, CultureInfo.CurrentCulture, out var d) ? Thousands(d) : text;
 
     /// <summary>把輸入框的文字轉成資料庫型別；格式不對時丟 FormatException</summary>
     public static object Parse(string text, string dataType)

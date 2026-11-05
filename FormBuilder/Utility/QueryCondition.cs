@@ -13,6 +13,23 @@ public enum QueryOp
     Like,
     /// <summary>只比對日期部分，不管時間</summary>
     SameDate,
+    /// <summary>大於等於（查詢方式 = 大於等於；日期只比日期部分 = 這天以後，含這天）</summary>
+    GreaterEqual,
+    /// <summary>小於等於（查詢方式 = 小於等於；日期只比日期部分 = 這天以前，含這天整天）</summary>
+    LessEqual,
+}
+
+/// <summary>欄位當查詢條件時的比對方式（FieldDefinition.QueryCompare）</summary>
+public enum QueryCompare
+{
+    /// <summary>文字 = 完全相同（有 * ? 時萬用字元）；日期 = 同一天；其他 = 相等</summary>
+    自動,
+    /// <summary>欄位 &gt;= 輸入的值（日期區間的起始日）</summary>
+    大於等於,
+    /// <summary>欄位 &lt;= 輸入的值（日期區間的結束日，含當天整天）</summary>
+    小於等於,
+    /// <summary>文字包含輸入的值（LIKE '%值%'）</summary>
+    包含,
 }
 
 /// <summary>一個查詢條件：查詢時在輸入框填了值的欄位</summary>
@@ -34,6 +51,9 @@ public record QueryCondition(FieldDefinition Field, QueryOp Op, object Value)
             {
                 QueryOp.Like => $"{col} LIKE {q}",
                 QueryOp.SameDate => $"{d.DateOnly(col)} = {q}",
+                // 日期只比日期部分（結束日當天有時間的資料也算在內）
+                QueryOp.GreaterEqual => $"{(c.Value is DateTime ? d.DateOnly(col) : col)} >= {q}",
+                QueryOp.LessEqual => $"{(c.Value is DateTime ? d.DateOnly(col) : col)} <= {q}",
                 _ => $"{col} = {q}",
             });
             d.AddParam(cmd, $"q{i}", c.Value);
@@ -57,11 +77,25 @@ public record QueryCondition(FieldDefinition Field, QueryOp Op, object Value)
                 return Regex.IsMatch(Text(value), pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
             case QueryOp.SameDate:
                 return value is DateTime d && Value is DateTime day && d.Date == day.Date;
+            case QueryOp.GreaterEqual or QueryOp.LessEqual:
+            {
+                int? cmp = Compare(value, Value);
+                return cmp != null && (Op == QueryOp.GreaterEqual ? cmp >= 0 : cmp <= 0);
+            }
             default:
                 if (IsNumber(value) && IsNumber(Value)) return Convert.ToDecimal(value) == Convert.ToDecimal(Value);
                 if (value is DateTime || Value is DateTime) return Equals(value, Value);
                 return string.Equals(Text(value), Text(Value), StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    /// <summary>比大小：數字比數值、日期比日期部分、其他比文字（不分大小寫）；比不了回傳 null</summary>
+    private static int? Compare(object value, object target)
+    {
+        if (IsNumber(value) && IsNumber(target)) return Convert.ToDecimal(value).CompareTo(Convert.ToDecimal(target));
+        if (value is DateTime a && target is DateTime b) return a.Date.CompareTo(b.Date);
+        if (value is DateTime || target is DateTime) return null;
+        return string.Compare(Text(value), Text(target), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Text(object value) => (Convert.ToString(value, CultureInfo.InvariantCulture) ?? "").TrimEnd();

@@ -69,6 +69,17 @@ public static class InputHelper
         var tb = new TextBox { PlaceholderText = f.Placeholder ?? "" };
         if (TypeHelper.IsString(f.DataType) && f.MaxLength > 0) tb.MaxLength = f.MaxLength;
         if (TypeHelper.IsNumber(f.DataType)) tb.TextAlign = HorizontalAlignment.Right;
+        if (TypeHelper.UsesThousands(f.DataType, f.IsKey))
+        {
+            // 金額欄位：顯示千分號；打完離開時也補上（存檔、公式都認得千分號）
+            thousandInputs.AddOrUpdate(tb, null);
+            tb.Leave += (s, e) =>
+            {
+                if (tb.ReadOnly) return;
+                string text = TypeHelper.ReformatThousands(tb.Text);
+                if (text != tb.Text) tb.Text = text;
+            };
+        }
         return tb;
     }
 
@@ -100,6 +111,8 @@ public static class InputHelper
     /// 文字框裡的日期只顯示日期；記住原本的值，使用者沒改文字時取回原本的值（datetime 欄位的時間不會被存成 00:00）
     /// </summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, Tuple<string, DateTime>> shownDates = new();
+    /// <summary>金額欄位的輸入框（SetValue 時加千分號）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> thousandInputs = new();
 
     /// <summary>
     /// 日期選擇。date、datetime 欄位直接用日期；文字、數字欄位依「日期格式」轉成文字存取（Tag 放格式），
@@ -270,6 +283,8 @@ public static class InputHelper
             default:
                 if (shownDates.TryGetValue(c, out var shown) && shown.Item1 == c.Text && TypeHelper.IsDate(f.DataType)) return shown.Item2;
                 text = c.Text;
+                if (c is Label && text.Contains(',') && decimal.TryParse(text.Trim(), NumberStyles.Number, CultureInfo.CurrentCulture, out var labelNumber))
+                    text = labelNumber.ToString(CultureInfo.InvariantCulture);
                 break;
         }
         if (TypeHelper.IsString(f.DataType))
@@ -348,6 +363,7 @@ public static class InputHelper
                     c.Text = dateValue.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture);
                     shownDates.Add(c, Tuple.Create(c.Text, dateValue));
                 }
+                else if (!isNull && value is decimal or double or float && thousandInputs.TryGetValue(c, out _)) c.Text = TypeHelper.Thousands(value);
                 else c.Text = isNull ? "" : Convert.ToString(value);
                 break;
         }

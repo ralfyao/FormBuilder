@@ -555,6 +555,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
             else inputs[f].Enabled = editable;
+            // 必填的日期欄位平常沒有勾選框；查詢時要能不勾（不當條件），所以查詢時一律顯示、預設不勾
+            if (inputs[f] is DateTimePicker dtp && TypeHelper.IsDate(f.DataType) && !f.IsNullable && dtp.ShowCheckBox != (mode == Mode.Query))
+            {
+                dtp.ShowCheckBox = mode == Mode.Query;
+                if (dtp.ShowCheckBox) dtp.Checked = false;
+            }
         }
 
         lblMode.Text = mode switch
@@ -900,10 +906,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var f in def.Fields.Where(f => !f.IsCalculated))       // 計算欄位不是資料表的欄位，不能當條件
         {
             Control c = inputs[f];
+            // 查詢方式 = 大於等於 / 小於等於（區間查詢）
+            QueryOp? range = f.QueryCompare switch { QueryCompare.大於等於 => QueryOp.GreaterEqual, QueryCompare.小於等於 => QueryOp.LessEqual, _ => null };
             if (c is TextBox tb && tb.Text.Trim() != "")
             {
                 string text = tb.Text.Trim();
-                if (TypeHelper.IsString(f.DataType))
+                if (TypeHelper.IsString(f.DataType) && f.QueryCompare == QueryCompare.包含)
+                    conditions.Add(new(f, QueryOp.Like, "%" + text.Replace('*', '%').Replace('?', '_') + "%"));
+                else if (TypeHelper.IsString(f.DataType) && range != null)
+                    conditions.Add(new(f, range.Value, text));
+                else if (TypeHelper.IsString(f.DataType))
                 {
                     bool wildcard = text.Contains('*') || text.Contains('?');
                     conditions.Add(wildcard ? new(f, QueryOp.Like, text.Replace('*', '%').Replace('?', '_')) : new(f, QueryOp.Equal, text));
@@ -920,7 +932,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
                         throw new FormatException($"「{f.Label}」的查詢條件格式不正確：{text}");
                     }
                     // 日期只輸入到日（畫面也只顯示日期）：只比對日期部分，不管時間
-                    if (TypeHelper.IsDate(f.DataType) && DateTime.TryParse(text, out var day) && day.TimeOfDay == TimeSpan.Zero)
+                    DateTime day = default;
+                    bool dateOnly = TypeHelper.IsDate(f.DataType) && DateTime.TryParse(text, out day) && day.TimeOfDay == TimeSpan.Zero;
+                    if (range != null)
+                        conditions.Add(new(f, range.Value, dateOnly ? day : value));
+                    else if (dateOnly)
                         conditions.Add(new(f, QueryOp.SameDate, day));
                     else
                         conditions.Add(new(f, QueryOp.Equal, value));
@@ -929,7 +945,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             else if (c is DateTimePicker dtp && dtp.ShowCheckBox && dtp.Checked)
             {
                 // 文字、數字欄位存的是日期格式文字（例如 yyyyMMdd），直接用同樣格式的文字比對
-                conditions.Add(TypeHelper.IsDate(f.DataType) ? new(f, QueryOp.SameDate, dtp.Value.Date) : new(f, QueryOp.Equal, InputHelper.GetValue(f, c)));
+                conditions.Add(TypeHelper.IsDate(f.DataType) ? new(f, range ?? QueryOp.SameDate, dtp.Value.Date)
+                                                             : new(f, range ?? QueryOp.Equal, InputHelper.GetValue(f, c)));
             }
             else if ((c is ComboBox || c is RadioGroup) && InputHelper.GetValue(f, c) is var comboValue && comboValue != DBNull.Value
                      && !(comboValue is string cs && cs == ""))
@@ -1420,7 +1437,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     continue;
                 }
                 decimal? value = showing ? Compute(f, cache, new HashSet<FieldDefinition>()) : null;
-                SetValue(f, value == null ? null : Formula.Format(value.Value, decimals));
+                SetValue(f, value == null ? null : Formula.Display(value.Value, decimals));
             }
         }
         finally
@@ -1983,6 +2000,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             grid.Columns.Add(col);
         }
         GridCells.HookEffectiveColumn(grid);
+        GridCells.HookThousands(grid);                                // 金額欄位顯示千分號
         if (g.FillColumns) GridCells.ApplyFill(grid);                 // 欄寬依比例填滿整個 Grid
         else if (g.AutoFitColumns) GridCells.HookAutoFit(grid);      // 查出資料後欄寬依內容調整
         grid.DataError += (s, e) =>

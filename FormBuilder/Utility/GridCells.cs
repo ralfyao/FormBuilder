@@ -296,7 +296,7 @@ public static class GridCells
             }
             decimal? value = Formula.Evaluate(formula, valueOf, aggregateOf);
             InputHelper.SetValue(inputs[f], value == null ? (display ? "" : null)
-                                          : Formula.Format(value.Value, integer ? 0 : f.Decimals));
+                                          : Formula.Display(value.Value, integer ? 0 : f.Decimals));
         }
     }
 
@@ -362,6 +362,39 @@ public static class GridCells
             {
                 running = false;
             }
+        };
+    }
+
+    /// <summary>
+    /// 金額欄位（decimal、numeric、money、float，主鍵除外）顯示千分號；輸入時打不打千分號都可以。每個 Grid 呼叫一次
+    /// </summary>
+    public static void HookThousands(DataGridView grid)
+    {
+        static bool Uses(DataGridViewColumn col) =>
+            col?.Tag is GridColumnDefinition c && TypeHelper.UsesThousands(c.DataType, c.IsKey) && col is DataGridViewTextBoxColumn;
+        grid.CellFormatting += (s, e) =>
+        {
+            if (e.ColumnIndex < 0 || e.Value is not (decimal or double or float) || !Uses(grid.Columns[e.ColumnIndex])) return;
+            e.Value = TypeHelper.Thousands(e.Value);
+            e.FormattingApplied = true;
+        };
+        grid.CellParsing += (s, e) =>
+        {
+            if (e.ColumnIndex < 0 || e.Value is not string text || !Uses(grid.Columns[e.ColumnIndex])) return;
+            if (text.Trim() == "")
+            {
+                e.Value = DBNull.Value;
+                e.ParsingApplied = true;
+                return;
+            }
+            if (!decimal.TryParse(text.Trim(), NumberStyles.Number, CultureInfo.CurrentCulture, out var d)) return;     // 打錯的交給 DataError 提醒
+            var type = Nullable.GetUnderlyingType(e.DesiredType) ?? e.DesiredType;
+            try
+            {
+                e.Value = type == typeof(decimal) ? d : Convert.ChangeType(d, type, CultureInfo.CurrentCulture);
+                e.ParsingApplied = true;
+            }
+            catch (Exception ex) when (ex is InvalidCastException or OverflowException or FormatException) { }
         };
     }
 
@@ -733,7 +766,7 @@ public static class GridCells
     private static object ToColumnValue(DataColumn column, GridColumnDefinition c, decimal? value)
     {
         if (value == null) return DBNull.Value;
-        if (column.DataType == typeof(string)) return Formula.Format(value.Value, c.Decimals);
+        if (column.DataType == typeof(string)) return Formula.Display(value.Value, c.Decimals);     // 自訂欄位只顯示，加千分號
         return c.Decimals >= 0 ? Math.Round(value.Value, c.Decimals, MidpointRounding.AwayFromZero) : value.Value;
     }
 
