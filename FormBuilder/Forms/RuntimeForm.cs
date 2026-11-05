@@ -2610,6 +2610,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             if (listGrid.DataSource != results)
             {
+                GridCells.FillEmptyFormulas(results, listDef.Columns, MasterValueOf);   // 公式欄位資料庫沒存值（例如 金額2 = 數量2 * 單價2）：讀進來就算出來顯示
                 GridCells.HookFormulas(results, listDef.Columns);     // 直接新增的那一列：公式欄位跟著重算
                 listGrid.DataSource = results;
                 // 排序箭頭（換 DataSource 時 Grid 會清掉，要重新標）
