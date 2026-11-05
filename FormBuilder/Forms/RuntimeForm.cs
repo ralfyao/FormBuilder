@@ -624,6 +624,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
         SetMode(Mode.Modify);
+        DefaultValue.FillInputs(inputs, def.ConnectionString, modify: true);   // 修改人、修改日期等「修改時的值」
     }
 
     private void Accept()

@@ -51,21 +51,24 @@ public static class DefaultValue
     /// 新增開始時，把有設預設值的欄位填上預設值（有編號規則的欄位交給編號規則）。
     /// 先帶固定值、日期，再執行 SQL 的預設值（SQL 的 @欄位 才取得到先帶好的值）；SQL 錯誤時提醒是哪個欄位，其他欄位照常帶入
     /// </summary>
-    public static void FillInputs(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString = null)
+    /// <param name="modify">true = 按「修改」時：填「修改時的值」（UpdateValue），不看編號規則</param>
+    public static void FillInputs(IReadOnlyDictionary<FieldDefinition, Control> inputs, string connectionString = null, bool modify = false)
     {
+        string TextOf(FieldDefinition f) => modify ? f.UpdateValue : f.DefaultValue;
         object ValueOf(string name)
         {
             var p = inputs.FirstOrDefault(x => x.Key.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
             return p.Key == null ? null : InputHelper.GetValue(p.Key, p.Value);
         }
         var errors = new List<string>();
-        foreach (var (f, input) in inputs.OrderBy(p => IsSql(p.Key.DefaultValue)))
+        foreach (var (f, input) in inputs.OrderBy(p => IsSql(TextOf(p.Key))))
         {
-            if (!string.IsNullOrWhiteSpace(f.NumberRule)) continue;
+            if (!modify && !string.IsNullOrWhiteSpace(f.NumberRule)) continue;
+            if (string.IsNullOrWhiteSpace(TextOf(f))) continue;
             object value;
             try
             {
-                value = Resolve(f.DefaultValue, connectionString, ValueOf);
+                value = Resolve(TextOf(f), connectionString, ValueOf);
             }
             catch (Exception ex)
             {
@@ -76,7 +79,8 @@ public static class DefaultValue
             Apply(f, input, value);
         }
         if (errors.Count > 0)
-            MessageBox.Show("預設值的 SQL 執行失敗（這些欄位維持空白）：" + Environment.NewLine + string.Join(Environment.NewLine, errors), "預設值");
+            MessageBox.Show((modify ? "修改時的值的 SQL 執行失敗（這些欄位維持原值）：" : "預設值的 SQL 執行失敗（這些欄位維持空白）：")
+                            + Environment.NewLine + string.Join(Environment.NewLine, errors), modify ? "修改時的值" : "預設值");
     }
 
     /// <summary>把預設值填進輸入框：日期依日期選擇或日期格式顯示；格式跟欄位對不上就略過</summary>

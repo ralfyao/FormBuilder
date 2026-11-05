@@ -717,6 +717,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
             DateFormat = c.EditDateFormat,
             NumberRule = c.EditNumberRule,
             DefaultValue = c.EditDefaultValue,
+            UpdateValue = c.EditUpdateValue,
             IsReadOnly = c.EditReadOnly,
             CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
             UncheckedValue = c.EditUncheckedValue ?? "0",
@@ -1356,6 +1357,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
                 c.EditDateFormat = string.IsNullOrWhiteSpace(box.Field.DateFormat) ? null : box.Field.DateFormat.Trim();
                 c.EditNumberRule = string.IsNullOrWhiteSpace(box.Field.NumberRule) ? null : box.Field.NumberRule.Trim();
                 c.EditDefaultValue = string.IsNullOrWhiteSpace(box.Field.DefaultValue) ? null : box.Field.DefaultValue.Trim();
+                c.EditUpdateValue = string.IsNullOrWhiteSpace(box.Field.UpdateValue) ? null : box.Field.UpdateValue.Trim();
                 c.EditReadOnly = box.Field.IsReadOnly;
                 c.EditCheckedValue = box.Field.CheckedValue == "1" ? null : box.Field.CheckedValue;
                 c.EditUncheckedValue = box.Field.UncheckedValue == "0" ? null : box.Field.UncheckedValue;
@@ -1525,6 +1527,11 @@ public class EditFieldView : IPickerField
                                      + "也可以寫 SELECT 查資料庫，取第一筆的第一個欄位，@欄位名稱 取視窗上的值，例如：SELECT 姓名 FROM H員工清冊 WHERE 工號 = @員工編號。有設編號規則時以編號規則為準"),
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string DefaultValue { get => field.DefaultValue; set => field.DefaultValue = value; }
+
+    [DisplayName("修改時的值"), Description("按「修改」時自動填入的值，按確定跟著存檔（例如修改人、修改日期）。寫法同預設值：NOW()（現在日期時間）、TODAY()（今天）、"
+                                         + "USER() = 登入帳號、{使用者名稱} = 登入的姓名，也可以寫 SELECT。欄位設成唯讀，使用者就不能改"),
+     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string UpdateValue { get => field.UpdateValue; set => field.UpdateValue = value; }
 
     [DisplayName("日期格式"), Description("日期選擇用在文字、數字欄位時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
     public string DateFormat { get => field.DateFormat; set => field.DateFormat = value; }

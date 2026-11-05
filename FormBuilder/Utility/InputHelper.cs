@@ -387,6 +387,7 @@ public static class InputHelper
         DateFormat = c.EditDateFormat,
         NumberRule = c.EditNumberRule,
         DefaultValue = c.EditDefaultValue,
+        UpdateValue = c.EditUpdateValue,
         IsReadOnly = c.EditReadOnly || c.HasFormula,     // 有公式的欄位由同一列的值算出來（寫回 Grid 那一列時重算）
         CheckedValue = string.IsNullOrEmpty(c.EditCheckedValue) ? "1" : c.EditCheckedValue,
         UncheckedValue = c.EditUncheckedValue ?? "0",

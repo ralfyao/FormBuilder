@@ -520,6 +520,7 @@ public partial class RecordNavigatorDialog : Form
         bool exists = nav.Refresh();
         ShowRecord();
         SetMode(exists ? EditMode.Modify : EditMode.Browse);
+        if (exists) DefaultValue.FillInputs(inputs, connectionString, modify: true);   // 修改人、修改日期等「修改時的值」
     }
 
     private void DeleteRecord()

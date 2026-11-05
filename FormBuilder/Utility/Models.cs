@@ -419,6 +419,11 @@ public class FieldDefinition : IPickerField
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string DefaultValue { get; set; }
 
+    [Category("編號"), DisplayName("修改時的值"),
+     Description("按「修改」時自動填入的值，按確定跟著存檔（例如修改人、修改日期）。寫法同預設值：NOW()（現在日期時間）、TODAY()（今天）、"
+               + "USER() = 登入帳號、{使用者名稱} = 登入的姓名，也可以寫 SELECT。欄位設成唯讀，使用者就不能改")]
+    public string UpdateValue { get; set; }
+
     [Category("日期選擇"), DisplayName("日期格式"),
      Description("文字、數字欄位用日期選擇時，存進資料庫的格式（ERP 常見的是 yyyyMMdd）；沒填就用 yyyyMMdd。date、datetime 欄位不需要")]
     public string DateFormat { get; set; }
@@ -1327,6 +1332,8 @@ public class GridColumnDefinition
     public string EditNumberRule { get; set; }
     /// <summary>編輯視窗新增時的預設值（同 FieldDefinition.DefaultValue）；單身 Grid 新增明細時也用它</summary>
     public string EditDefaultValue { get; set; }
+    /// <summary>編輯視窗按「修改」時自動填入的值（同 FieldDefinition.UpdateValue）</summary>
+    public string EditUpdateValue { get; set; }
     /// <summary>編輯視窗欄位是否唯讀（同 FieldDefinition.IsReadOnly）</summary>
     public bool EditReadOnly { get; set; }
     public string EditCheckedValue { get; set; }
