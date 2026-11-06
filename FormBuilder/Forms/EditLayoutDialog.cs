@@ -11,7 +11,9 @@ namespace FormBuilder;
 public partial class EditLayoutDialog : Form, IPickerHost
 {
     // 屬性面板「開窗畫面」的設定視窗：回傳值可以填進這個編輯視窗的欄位；資料夾交給畫面設計（擁有者視窗）
-    IEnumerable<string> IPickerHost.PickerLocalColumns => columns.Select(c => c.Column);
+    // 文字標籤也可以接回傳值（例如帶回姓名顯示在標籤上）
+    IEnumerable<string> IPickerHost.PickerLocalColumns => columns.Select(c => c.Column)
+        .Concat(canvas.Controls.OfType<FieldBox>().Where(b => b.Field.IsTextLabel).Select(b => b.Field.Column)).Distinct(StringComparer.OrdinalIgnoreCase);
     string IPickerHost.PickerFolder => null;
     void IPickerHost.PickerChanged() => propertyGrid.Refresh();
 

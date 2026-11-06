@@ -6,7 +6,8 @@ namespace FormBuilder;
 public partial class DesignerForm : Form, IPickerHost
 {
     // 屬性面板「開窗畫面」的設定視窗：回傳值可以填進畫面上的欄位，相對路徑以目前畫面的資料夾為準
-    IEnumerable<string> IPickerHost.PickerLocalColumns => def.Fields.Where(f => !f.IsTextLabel).Select(f => f.Column);
+    // 文字標籤也可以接回傳值（例如帶回姓名顯示在標籤上）
+    IEnumerable<string> IPickerHost.PickerLocalColumns => def.Fields.Select(f => f.Column);
     string IPickerHost.PickerFolder => ButtonRunner.FolderOf(currentFilePath);
     // 傳入參數的 @名稱：畫面上的欄位（含文字標籤），再來是目前這筆資料（單頭清單的欄位）
     IEnumerable<string> IPickerHost.ParamColumns => def.Fields.Select(f => f.Column)
