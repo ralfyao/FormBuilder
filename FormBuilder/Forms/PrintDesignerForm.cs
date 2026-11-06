@@ -579,6 +579,7 @@ public partial class PrintDesignerForm : Form
         box.Dragging += (s, delta) => MoveSelection(box, delta);
         box.DragFinished += (s, e) => { dragStarts = null; propertyGrid.Refresh(); };
         box.Resized += (s, e) => propertyGrid.Refresh();
+        box.ResizeCompanions = () => box.IsSelected ? selection.ToList() : Enumerable.Empty<DesignBox>();   // 多選時拖邊緣一起調整
         canvas.Controls.Add(box);
         box.BringToFront();
     }

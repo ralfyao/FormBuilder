@@ -850,6 +850,7 @@ public partial class DesignerForm : Form, IPickerHost
         box.Dragging += (s, delta) => MoveSelection((DesignBox)s, delta);
         box.DragFinished += (s, e) => { dragStarts = null; propertyGrid.Refresh(); ApplyCanvasSize(); };
         box.Resized += (s, e) => { propertyGrid.Refresh(); ApplyCanvasSize(); };
+        box.ResizeCompanions = () => box.IsSelected ? selection.ToList() : Enumerable.Empty<DesignBox>();   // 多選時拖邊緣一起調整
         canvas.Controls.Add(box);
         if (box is FieldBox) box.RefreshFromModel();       // 加進畫面後才知道底色，標籤文字顏色要重算
         if (box is ButtonBox bb) bb.DoubleClick += (s, e) => OpenPrintDesigner(bb);

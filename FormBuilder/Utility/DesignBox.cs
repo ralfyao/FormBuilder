@@ -58,6 +58,14 @@ public abstract class DesignBox : Panel
     private Point pressMouse;
     private Size pressSize;
 
+    /// <summary>
+    /// 拖這個元件的邊緣調整大小時，一起調整的其他元件（例如同時選取的其他欄位）；由設計視窗設定，null = 只調整自己。
+    /// 一起調整的元件套用同樣的位移（標籤寬度、輸入框寬度、高度各自加減一樣多）
+    /// </summary>
+    public Func<IEnumerable<DesignBox>> ResizeCompanions { get; set; }
+    /// <summary>這次拖邊緣一起調整的元件與它們按下時的大小</summary>
+    private List<(DesignBox Box, Size PressSize)> companions = new();
+
     /// <summary>子控制項上的滑鼠動作也當成整個元件的動作</summary>
     protected void AttachMouse(Control c)
     {
@@ -72,10 +80,14 @@ public abstract class DesignBox : Panel
     {
         if (e.Button != MouseButtons.Left) return;
         pressMouse = MousePosition;
+        // 選取了好幾個同類的元件時，拖其中一個的邊緣，全部一起調整
+        companions = (ResizeCompanions?.Invoke() ?? Enumerable.Empty<DesignBox>())
+            .Where(b => b != this && b.GetType() == GetType()).Select(b => (b, b.ResizableSize)).ToList();
         if (HitLeftResize(PointToClient(MousePosition)))
         {
             resizeLeft = true;
             BeginLeftResize();
+            foreach (var (b, _) in companions) b.BeginLeftResize();
             return;
         }
         (resizeRight, resizeBottom) = HitResize(PointToClient(MousePosition));
@@ -96,15 +108,18 @@ public abstract class DesignBox : Panel
         if (resizeLeft)
         {
             ApplyLeftResize(delta.Width);
+            foreach (var (b, _) in companions) b.ApplyLeftResize(delta.Width);
             return;
         }
         if (resizeRight || resizeBottom)
         {
             // 從上邊緣拖時，滑鼠往上（位移為負）是變高
             int heightDelta = ResizeFromTop ? -delta.Height : delta.Height;
-            ResizableSize = new Size(
-                resizeRight ? Snap(pressSize.Width + delta.Width) : pressSize.Width,
-                resizeBottom ? Snap(pressSize.Height + heightDelta) : pressSize.Height);
+            Size Resize(Size press) => new(
+                resizeRight ? Snap(press.Width + delta.Width) : press.Width,
+                resizeBottom ? Snap(press.Height + heightDelta) : press.Height);
+            ResizableSize = Resize(pressSize);
+            foreach (var (b, press) in companions) b.ResizableSize = Resize(press);
             return;
         }
         if (moving)
@@ -127,6 +142,8 @@ public abstract class DesignBox : Panel
         {
             resizeLeft = resizeRight = resizeBottom = false;
             Resized?.Invoke(this, EventArgs.Empty);
+            foreach (var (b, _) in companions) b.Resized?.Invoke(b, EventArgs.Empty);
+            companions = new();
         }
         if (moving)
         {

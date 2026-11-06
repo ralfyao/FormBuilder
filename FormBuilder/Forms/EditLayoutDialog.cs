@@ -113,27 +113,17 @@ public partial class EditLayoutDialog : Form, IPickerHost
         lstAvailable.DisplayMember = nameof(GridColumnDefinition.Header);
         // 可以多選（Ctrl、Shift 點選），選好的一起拖到版面（由上往下排），或雙擊一起加入
         lstAvailable.SelectionMode = SelectionMode.MultiExtended;
-        List<GridColumnDefinition> selectionNow = new(), selectionBefore = new(), dragItems = null;
+        List<GridColumnDefinition> dragItems = null;
         Point dragStart = Point.Empty;
-        lstAvailable.SelectedIndexChanged += (s, e) =>
-        {
-            selectionBefore = selectionNow;
-            selectionNow = lstAvailable.SelectedItems.OfType<GridColumnDefinition>().ToList();
-        };
+        // 在已經選好的多個欄位上按下去：ListBox 預設會馬上改成只選這一個，就拖不了整批。
+        // 攔下這個按下：先不改選取，有拖曳就整批拖，沒拖只是點一下（放開）才改成只選這一個
+        new MultiDragGuard(lstAvailable, items => lstAvailable.DoDragDrop(items.OfType<GridColumnDefinition>().ToArray(), DragDropEffects.Copy),
+                           items => PlaceColumns(items.OfType<GridColumnDefinition>().ToList(), NextFreePoint()));
         lstAvailable.MouseDown += (s, e) =>
         {
             dragItems = null;
             int i = lstAvailable.IndexFromPoint(e.Location);
             if (e.Button != MouseButtons.Left || e.Clicks != 1 || i < 0 || ModifierKeys != Keys.None) return;
-            // 在已經選好的多個欄位上按下去：ListBox 會只留這一個，先還原成原本的多選，才能整批拖
-            var clicked = lstAvailable.Items[i] as GridColumnDefinition;
-            if (selectionBefore.Count > 1 && selectionBefore.Contains(clicked) && selectionNow.Count == 1)
-            {
-                var restore = selectionBefore.ToList();
-                lstAvailable.BeginUpdate();
-                foreach (var c in restore) lstAvailable.SetSelected(lstAvailable.Items.IndexOf(c), true);
-                lstAvailable.EndUpdate();
-            }
             dragItems = lstAvailable.SelectedItems.OfType<GridColumnDefinition>().ToList();
             dragStart = e.Location;
         };
@@ -808,6 +798,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
         box.Dragging += (s, delta) => MoveSelection(box, delta);
         box.DragFinished += (s, e) => { dragStarts = null; UpdateCanvasSize(); };
         box.Resized += (s, e) => UpdateCanvasSize();
+        box.ResizeCompanions = () => box.IsSelected ? selection.ToList() : Enumerable.Empty<DesignBox>();   // 多選時拖邊緣一起調整
         canvas.Controls.Add(box);
         if (box is FieldBox) box.RefreshFromModel();       // 加進版面後才知道底色，標籤文字顏色要重算
         // 雙擊「列印報表」按鈕：開啟列印樣板設計（資料表、主鍵用這個 Grid 的）
@@ -1688,4 +1679,87 @@ public class EditFieldView : IPickerField
 
     [DisplayName("Y")]
     public int Y { get => field.Y; set => field.Y = Math.Max(0, value); }
+}
+
+/// <summary>
+/// 多選 ListBox 的整批拖曳：在已經選取（而且選了不只一個）的項目上按下滑鼠時，ListBox 預設會馬上改成只選這一個。
+/// 這裡先攔下按下：滑鼠拖動超過拖曳距離就把全部選取的項目交給 startDrag；沒有拖動就放開 = 一般的點一下，改成只選這一個
+/// </summary>
+internal sealed class MultiDragGuard : NativeWindow
+{
+    private const int WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_LBUTTONDBLCLK = 0x0203;
+    private readonly ListBox list;
+    private readonly Action<List<object>> startDrag;
+    private readonly Action<List<object>> doubleClick;
+    private int pendingIndex = -1;
+    private Point downPoint;
+    /// <summary>點一下放開後，等雙擊時間過了才改成只選這一個（雙擊 = 整批加入）</summary>
+    private readonly System.Windows.Forms.Timer collapse = new();
+    private int collapseIndex = -1;
+
+    public MultiDragGuard(ListBox list, Action<List<object>> startDrag, Action<List<object>> doubleClick)
+    {
+        this.list = list;
+        this.startDrag = startDrag;
+        this.doubleClick = doubleClick;
+        collapse.Interval = SystemInformation.DoubleClickTime;
+        collapse.Tick += (s, e) =>
+        {
+            collapse.Stop();
+            list.ClearSelected();
+            if (collapseIndex >= 0 && collapseIndex < list.Items.Count) list.SetSelected(collapseIndex, true);
+        };
+        list.Disposed += (s, e) => collapse.Dispose();
+        if (list.IsHandleCreated) AssignHandle(list.Handle);
+        list.HandleCreated += (s, e) => AssignHandle(list.Handle);
+        list.HandleDestroyed += (s, e) => ReleaseHandle();
+    }
+
+    private static Point PointOf(IntPtr lParam)
+    {
+        long v = lParam.ToInt64();
+        return new Point((short)(v & 0xFFFF), (short)((v >> 16) & 0xFFFF));
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        switch (m.Msg)
+        {
+            case WM_LBUTTONDOWN when Control.ModifierKeys == Keys.None:
+            {
+                var p = PointOf(m.LParam);
+                int i = list.IndexFromPoint(p);
+                if (i >= 0 && list.SelectedIndices.Count > 1 && list.GetSelected(i))
+                {
+                    pendingIndex = i;                      // 先不改選取
+                    downPoint = p;
+                    list.Focus();
+                    return;
+                }
+                break;
+            }
+            case WM_MOUSEMOVE when pendingIndex >= 0:
+            {
+                if ((m.WParam.ToInt64() & 0x0001) == 0) { pendingIndex = -1; break; }    // MK_LBUTTON：左鍵已經放開
+                var p = PointOf(m.LParam);
+                var size = SystemInformation.DragSize;
+                if (Math.Abs(p.X - downPoint.X) < size.Width && Math.Abs(p.Y - downPoint.Y) < size.Height) return;
+                pendingIndex = -1;
+                startDrag(list.SelectedItems.Cast<object>().ToList());
+                return;
+            }
+            case WM_LBUTTONUP when pendingIndex >= 0:
+            {
+                collapseIndex = pendingIndex;              // 沒有拖：一般的點一下，等一下（不是雙擊時）只選這一個
+                pendingIndex = -1;
+                collapse.Start();
+                return;
+            }
+            case WM_LBUTTONDBLCLK when collapse.Enabled:
+                collapse.Stop();                           // 在多選上雙擊：整批加入
+                doubleClick(list.SelectedItems.Cast<object>().ToList());
+                return;
+        }
+        base.WndProc(ref m);
+    }
 }
