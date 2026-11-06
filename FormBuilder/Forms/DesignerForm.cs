@@ -142,27 +142,36 @@ public partial class DesignerForm : Form, IPickerHost
         txtTableFilter.TextChanged += (s, e) => FillTableList();
         treeTables.BeforeExpand += (s, e) => LoadColumnNodes(e.Node);
         treeTables.AfterSelect += (s, e) => OnTreeSelect(e.Node);
+        // 欄位可以多選：Ctrl 點選加減、Shift 點選一段（同一個資料表裡），選好的一起拖到畫面或雙擊加入
+        var columnPick = new TreeColumnPicker(treeTables);
         treeTables.ItemDrag += (s, e) =>
         {
             if (e.Item is TreeNode { Tag: ColumnDragData data })
-                DoDragDrop(data, DragDropEffects.Copy);
+            {
+                var many = columnPick.DragSet((TreeNode)e.Item).Select(n => n.Tag).OfType<ColumnDragData>().ToArray();
+                if (many.Length > 1) DoDragDrop(many, DragDropEffects.Copy);
+                else DoDragDrop(data, DragDropEffects.Copy);
+            }
             else if (e.Item is TreeNode { Tag: ValueTuple<string, string> t })
                 DoDragDrop(new TableDragData { Schema = t.Item1, Table = t.Item2 }, DragDropEffects.Copy);
         };
-        treeTables.NodeMouseDoubleClick += (s, e) =>
+        columnPick.DoubleClicked += nodes =>
         {
-            if (e.Node.Tag is ColumnDragData data)
-                AddField(data, NextFreePoint());
+            var columns = nodes.Select(n => n.Tag).OfType<ColumnDragData>().ToList();
+            if (columns.Count > 0) AddFields(columns, NextFreePoint());
         };
         canvas.DragEnter += (s, e) =>
-            e.Effect = e.Data.GetDataPresent(typeof(ColumnDragData)) || e.Data.GetDataPresent(typeof(TableDragData))
+            e.Effect = e.Data.GetDataPresent(typeof(ColumnDragData)) || e.Data.GetDataPresent(typeof(ColumnDragData[]))
+                    || e.Data.GetDataPresent(typeof(TableDragData))
                     || e.Data.GetDataPresent(typeof(ToolboxDragData))
                 ? DragDropEffects.Copy : DragDropEffects.None;
         canvas.DragDrop += (s, e) =>
         {
             Point p = canvas.PointToClient(new Point(e.X, e.Y));
             var location = new Point(Snap(p.X), Snap(p.Y));
-            if (e.Data.GetData(typeof(ColumnDragData)) is ColumnDragData column)
+            if (e.Data.GetData(typeof(ColumnDragData[])) is ColumnDragData[] columns)
+                AddFields(columns, location);
+            else if (e.Data.GetData(typeof(ColumnDragData)) is ColumnDragData column)
                 AddField(column, location);
             else if (e.Data.GetData(typeof(TableDragData)) is TableDragData table)
                 AddGrid(table, location);
@@ -548,6 +557,19 @@ public partial class DesignerForm : Form, IPickerHost
     }
 
     // ================= 欄位放置 =================
+
+    /// <summary>一次放好幾個欄位：從 location 開始由上往下排（照資料表欄位的順序）</summary>
+    private void AddFields(IEnumerable<ColumnDragData> columns, Point location)
+    {
+        int y = location.Y;
+        foreach (var data in columns)
+        {
+            int before = def.Fields.Count;
+            AddField(data, new Point(location.X, y));
+            if (def.Fields.Count == before) continue;               // 已經在畫面上了（沒有新增）
+            y += Math.Max(32, def.Fields[^1].Height + 6);
+        }
+    }
 
     private void AddField(ColumnDragData data, Point location)
     {
