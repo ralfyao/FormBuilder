@@ -111,15 +111,46 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
         // ---- 左邊「欄位」頁籤：拖到版面或雙擊加入 ----
         lstAvailable.DisplayMember = nameof(GridColumnDefinition.Header);
+        // 可以多選（Ctrl、Shift 點選），選好的一起拖到版面（由上往下排），或雙擊一起加入
+        lstAvailable.SelectionMode = SelectionMode.MultiExtended;
+        List<GridColumnDefinition> selectionNow = new(), selectionBefore = new(), dragItems = null;
+        Point dragStart = Point.Empty;
+        lstAvailable.SelectedIndexChanged += (s, e) =>
+        {
+            selectionBefore = selectionNow;
+            selectionNow = lstAvailable.SelectedItems.OfType<GridColumnDefinition>().ToList();
+        };
         lstAvailable.MouseDown += (s, e) =>
         {
+            dragItems = null;
             int i = lstAvailable.IndexFromPoint(e.Location);
-            if (e.Button == MouseButtons.Left && e.Clicks == 1 && i >= 0)
-                lstAvailable.DoDragDrop(lstAvailable.Items[i], DragDropEffects.Copy);
+            if (e.Button != MouseButtons.Left || e.Clicks != 1 || i < 0 || ModifierKeys != Keys.None) return;
+            // 在已經選好的多個欄位上按下去：ListBox 會只留這一個，先還原成原本的多選，才能整批拖
+            var clicked = lstAvailable.Items[i] as GridColumnDefinition;
+            if (selectionBefore.Count > 1 && selectionBefore.Contains(clicked) && selectionNow.Count == 1)
+            {
+                var restore = selectionBefore.ToList();
+                lstAvailable.BeginUpdate();
+                foreach (var c in restore) lstAvailable.SetSelected(lstAvailable.Items.IndexOf(c), true);
+                lstAvailable.EndUpdate();
+            }
+            dragItems = lstAvailable.SelectedItems.OfType<GridColumnDefinition>().ToList();
+            dragStart = e.Location;
         };
+        lstAvailable.MouseMove += (s, e) =>
+        {
+            if (dragItems == null || dragItems.Count == 0 || e.Button != MouseButtons.Left) return;
+            var size = SystemInformation.DragSize;
+            if (Math.Abs(e.X - dragStart.X) < size.Width && Math.Abs(e.Y - dragStart.Y) < size.Height) return;
+            var items = dragItems.ToArray();
+            dragItems = null;
+            lstAvailable.DoDragDrop(items, DragDropEffects.Copy);
+        };
+        lstAvailable.MouseUp += (s, e) => dragItems = null;
         lstAvailable.DoubleClick += (s, e) =>
         {
-            if (lstAvailable.SelectedItem is GridColumnDefinition c) PlaceColumn(c, NextFreePoint());
+            var items = lstAvailable.SelectedItems.OfType<GridColumnDefinition>().ToList();
+            if (items.Count > 0) PlaceColumns(items, NextFreePoint());
         };
         // JOIN 其他資料表：帶出關聯資料表的欄位放到編輯視窗上（只顯示，例如用客戶編號帶出客戶名稱）
         var btnJoin = new Button { Text = "JOIN 其他資料表…", Dock = DockStyle.Bottom, Height = 28 };
@@ -136,7 +167,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
         lstAvailable.MouseDown += (s, e) =>
         {
             int i = lstAvailable.IndexFromPoint(e.Location);
-            if (e.Button == MouseButtons.Right && i >= 0) lstAvailable.SelectedIndex = i;
+            if (e.Button == MouseButtons.Right && i >= 0)
+            {
+                lstAvailable.ClearSelected();
+                lstAvailable.SelectedIndex = i;
+            }
         };
         lstAvailable.ContextMenuStrip = availableMenu;
         // ---- 左邊「工具箱」頁籤 ----
@@ -163,14 +198,16 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
         // ---- 中間：版面 ----
         canvas.DragEnter += (s, e) =>
-            e.Effect = e.Data.GetDataPresent(typeof(GridColumnDefinition)) || e.Data.GetDataPresent(typeof(ToolboxDragData))
+            e.Effect = e.Data.GetDataPresent(typeof(GridColumnDefinition)) || e.Data.GetDataPresent(typeof(GridColumnDefinition[]))
+                    || e.Data.GetDataPresent(typeof(ToolboxDragData))
                     || e.Data.GetDataPresent(typeof(TableDragData))
                 ? DragDropEffects.Copy : DragDropEffects.None;
         canvas.DragDrop += (s, e) =>
         {
             Point p = canvas.PointToClient(new Point(e.X, e.Y));
             var location = new Point(Snap(p.X), Snap(p.Y));
-            if (e.Data.GetData(typeof(GridColumnDefinition)) is GridColumnDefinition c) PlaceColumn(c, location);
+            if (e.Data.GetData(typeof(GridColumnDefinition[])) is GridColumnDefinition[] many) PlaceColumns(many, location);
+            else if (e.Data.GetData(typeof(GridColumnDefinition)) is GridColumnDefinition c) PlaceColumn(c, location);
             else if (e.Data.GetData(typeof(ToolboxDragData)) is ToolboxDragData tool) AddToolboxItem(tool.Kind, location);
             else if (e.Data.GetData(typeof(TableDragData)) is TableDragData table) AddListFromTable(table.Schema, table.Table, location);
         };
@@ -1166,6 +1203,22 @@ public partial class EditLayoutDialog : Form, IPickerHost
         lstAvailable.Items.Clear();
         foreach (var c in columns.Where(c => !placed.ContainsKey(c) && !removedColumns.Contains(c))) lstAvailable.Items.Add(c);
         lstAvailable.EndUpdate();
+    }
+
+    /// <summary>一次放好幾個欄位：從 location 開始由上往下排（照清單上的順序），放完全部選取</summary>
+    private void PlaceColumns(IEnumerable<GridColumnDefinition> columns, Point location)
+    {
+        var boxes = new List<FieldBox>();
+        int y = location.Y;
+        foreach (var c in columns.OrderBy(c => this.columns.IndexOf(c)))
+        {
+            if (placed.ContainsKey(c)) continue;
+            PlaceColumn(c, new Point(location.X, y), select: false);
+            if (!placed.TryGetValue(c, out var box)) continue;
+            boxes.Add(box);
+            y += Math.Max(32, box.Field.Height + 6);
+        }
+        if (boxes.Count > 0) SetSelection(boxes);
     }
 
     private Point NextFreePoint()
