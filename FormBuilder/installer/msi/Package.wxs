@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ERP Studio / ERP 系統的 MSI 安裝程式，由 ERPSetup.wixproj 建置（App = FormBuilder 或 ERPClient）。
+  每位使用者各自安裝到 %LOCALAPPDATA%\Programs\<程式>，不需要系統管理員權限，自動更新才能直接覆蓋檔案。
+  兩個程式的 UpgradeCode 不同，可以裝在同一台電腦；同一個程式裝新版會自動取代舊版。
+-->
+<?if $(App) = "FormBuilder" ?>
+  <?define AppTitle = "ERP Studio" ?>
+  <?define FolderName = "ERPStudio" ?>
+  <?define ExeName = "FormBuilder" ?>
+  <?define UpgradeCode = "25B1478F-0F8C-4B5E-9CBF-4440AFAB7D10" ?>
+<?else?>
+  <?define AppTitle = "ERP 系統" ?>
+  <?define FolderName = "ERPClient" ?>
+  <?define ExeName = "ERPClient" ?>
+  <?define UpgradeCode = "767D9838-9B77-40A1-80A8-869CD4DF93ED" ?>
+<?endif?>
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="$(AppTitle)" Manufacturer="YJF" Version="$(AppVersion)" UpgradeCode="$(UpgradeCode)"
+           Scope="perUser" Language="1028" Codepage="950">
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="這台電腦已經裝了較新版本的 [ProductName]。要改裝舊版，請先到「設定 → 應用程式」解除安裝。" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- 「設定 → 應用程式」顯示的圖示 -->
+    <Icon Id="AppIcon.exe" SourceFile="$(SourceDir)\$(ExeName).exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="$(FolderName)" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="$(AppTitle)">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="Shortcuts" />
+<?ifdef ConfigFile ?>
+      <ComponentRef Id="ConfigJson" />
+<?endif?>
+    </Feature>
+
+    <!-- 自含式發布的全部檔案（含 .NET 執行環境），使用者電腦不用另外裝 .NET -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="MainExe">
+        <File Id="MainExe" Source="$(SourceDir)\$(ExeName).exe" />
+      </Component>
+      <Files Include="$(SourceDir)\**">
+        <Exclude Files="$(SourceDir)\$(ExeName).exe" />
+      </Files>
+    </ComponentGroup>
+
+    <!-- 開始功能表與桌面捷徑 -->
+    <Component Id="Shortcuts" Directory="INSTALLFOLDER">
+      <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="$(AppTitle)"
+                Target="[#MainExe]" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="$(AppTitle)"
+                Target="[#MainExe]" WorkingDirectory="INSTALLFOLDER" />
+<?if $(App) = "FormBuilder" ?>
+      <Shortcut Id="DesignerShortcut" Directory="ProgramMenuFolder" Name="ERP Studio 畫面設計（開發用）"
+                Target="[#MainExe]" Arguments="--designer" WorkingDirectory="INSTALLFOLDER" />
+<?endif?>
+      <RegistryValue Root="HKCU" Key="Software\YJF\$(FolderName)" Name="Shortcuts" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+<?ifdef ConfigFile ?>
+    <!-- IT 預先準備的 config.json：已經有的不覆蓋，解除安裝也保留 -->
+    <Component Id="ConfigJson" Directory="INSTALLFOLDER" NeverOverwrite="yes" Permanent="yes">
+      <File Id="ConfigJson" Source="$(ConfigFile)" Name="config.json" />
+    </Component>
+<?endif?>
+
+    <!-- 安裝精靈：歡迎 → 選安裝資料夾 → 安裝 → 完成（可勾選馬上啟動），沒有授權合約頁 -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="啟動 $(AppTitle)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#MainExe]" />
+    <CustomAction Id="LaunchApplication" BinaryRef="Wix4UtilCA_X64" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
+
+  </Package>
+</Wix>

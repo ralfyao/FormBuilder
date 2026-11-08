@@ -68,7 +68,7 @@
 - 開發：.NET 8 SDK（`net8.0-windows`）、Visual Studio 2022 或 `dotnet` CLI
 - 系統資料庫：SQL Server（存帳號、權限、選單、已發布畫面、稽核紀錄、設定）
 - 業務資料庫（畫面連的資料表）：SQL Server、Oracle 12c 以上或 MySQL
-- 製作安裝程式（選用）：Inno Setup 6
+- 製作 MSI 安裝程式：WiX Toolset 5（第一次建置時從 NuGet 自動下載，不用另外安裝）
 
 ## 建置與執行
 
@@ -119,7 +119,7 @@ Visual Studio 的 `Properties/launchSettings.json` 已經有「ERP Studio」和�
 
 1. 自含式發布（win-x64，使用者電腦不用另外安裝 .NET）
 2. 產生自動更新用的 `files\` 和 `version.json`
-3. 有安裝 Inno Setup 6 時，製作安裝程式
+3. 用 WiX 製作 MSI 安裝程式（`installer/msi/`）
 
 ```powershell
 # ERP Studio（後台）
@@ -128,6 +128,10 @@ Visual Studio 的 `Properties/launchSettings.json` 已經有「ERP Studio」和�
 # ERP 系統（使用者端）
 .\installer\build-release.ps1 -Project ERPClient -Version 1.0.1 -UpdateShare "\\server\ERPStudio\release"
 ```
+
+兩個程式各產生一個 MSI：`release\ERPStudio-Setup-x.y.z.msi`、`release-client\ERPClient-Setup-x.y.z.msi`。MSI 每位使用者各自安裝到 `%LOCALAPPDATA%\Programs\ERPStudio`、`ERPClient`，不需要系統管理員權限（自動更新才能直接覆蓋檔案），會建立開始功能表與桌面捷徑。兩個程式可以裝在同一台電腦；同一個程式裝新版會自動取代舊版（MSI 只比對版本號的前三段）。在 `installer` 資料夾放一份 `config.json` 會一起裝到執行檔旁，已經有的不覆蓋。
+
+靜默安裝（派送用）：`msiexec /i ERPClient-Setup-1.0.1.msi /qn`；解除安裝：`msiexec /x ERPClient-Setup-1.0.1.msi /qn`。
 
 版本號在 `FormBuilder.csproj` 的 `<Version>`，自動更新靠它比對新舊版本。使用者電腦的「更新來源」設成 `-UpdateShare` 指定的共用資料夾，下次啟動就會自動更新。
 
@@ -181,7 +185,7 @@ FormBuilder/
 │  ├─ Sys.cs              系統資料庫、本機設定、登入狀態
 │  ├─ Updater.cs          自動更新
 │  └─ DesignBox / FieldBox / GridBox / ButtonBox …   設計畫面上的元件
-├─ installer/             發布腳本、Inno Setup 腳本、同步到 GitHub 的 split-github.sh
+├─ installer/             發布腳本、MSI 安裝專案（msi/）、同步到 GitHub 的 split-github.sh
 └─ docs/screenshots/      操作畫面截圖
 ```
 

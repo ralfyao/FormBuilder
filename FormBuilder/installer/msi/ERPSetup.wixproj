@@ -1,0 +1,40 @@
+<!--
+  ERP Studio / ERP 系統的 MSI 安裝程式（WiX Toolset 5，第一次建置時從 NuGet 自動下載，不用另外安裝）。
+  由 ..\build-release.ps1 呼叫：
+    dotnet build ERPSetup.wixproj -c Release -p:App=ERPClient -p:AppVersion=1.0.1 -p:SourceDir=<發布的檔案資料夾>
+  App：FormBuilder = ERP Studio（後台）、ERPClient = ERP 系統（使用者端）
+-->
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <App Condition="'$(App)' == ''">ERPClient</App>
+    <AppVersion Condition="'$(AppVersion)' == ''">1.0.0</AppVersion>
+    <!-- dotnet publish 的輸出資料夾（自含式，含 .NET 執行環境） -->
+    <SourceDir Condition="'$(SourceDir)' == '' and '$(App)' == 'ERPClient'">$(MSBuildThisFileDirectory)..\..\release-client\files</SourceDir>
+    <SourceDir Condition="'$(SourceDir)' == ''">$(MSBuildThisFileDirectory)..\..\release\files</SourceDir>
+    <!-- IT 可以在 installer 資料夾預先放一份 config.json（系統資料庫連線、更新來源）一起安裝 -->
+    <ConfigFile Condition="'$(ConfigFile)' == ''">$(MSBuildThisFileDirectory)..\config.json</ConfigFile>
+
+    <OutputName Condition="'$(App)' == 'ERPClient'">ERPClient-Setup-$(AppVersion)</OutputName>
+    <OutputName Condition="'$(App)' == 'FormBuilder'">ERPStudio-Setup-$(AppVersion)</OutputName>
+    <OutputPath>bin\$(App)\</OutputPath>
+    <IntermediateOutputPath>obj\$(App)\</IntermediateOutputPath>
+
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Cultures>zh-TW</Cultures>
+    <DefineConstants>App=$(App);AppVersion=$(AppVersion);SourceDir=$(SourceDir)</DefineConstants>
+    <DefineConstants Condition="Exists('$(ConfigFile)')">$(DefineConstants);ConfigFile=$(ConfigFile)</DefineConstants>
+    <!--
+      安裝到使用者自己的資料夾（%LOCALAPPDATA%\Programs），自動更新才能直接覆蓋檔案。
+      這幾個 ICE 檢查是針對「裝在使用者設定檔裡的檔案要用登錄值當 KeyPath、每層資料夾要 RemoveFolder」，
+      對每位使用者各自安裝的程式不適用；ICE61 是允許重裝同一版本、ICE69 是捷徑指向同一功能裡別的元件的檔案，都是刻意的
+    -->
+    <SuppressIces>ICE38;ICE61;ICE64;ICE69;ICE91</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>
