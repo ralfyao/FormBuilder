@@ -289,6 +289,7 @@ public static class ButtonRunner
         List<DataRow> failing;
         try
         {
+            if (UsesBlocks(b)) return RunBlocks(b, rows, labelOf);
             failing = FailingRows(rows, b.PreCheck);
         }
         catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
@@ -303,6 +304,38 @@ public static class ButtonRunner
                      + (failing.Count > 10 ? $" 等 {failing.Count} 筆" : "");
         MessageBox.Show(message, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         return false;
+    }
+
+    /// <summary>執行前檢查是用設定視窗的擋下規則設的（而且執行前檢查沒被直接改過）</summary>
+    public static bool UsesBlocks(ButtonDefinition b) =>
+        b.PreCheckBlocks is { Count: > 0 } && ConditionText.PassCondition(b.PreCheckBlocks) == b.PreCheck?.Trim();
+
+    /// <summary>
+    /// 擋下規則：由上往下，第一條有資料符合的規則跳它的訊息。「顯示訊息並停止」回傳 false；
+    /// 「詢問是否繼續」按「是」就接著檢查下一條，按「否」回傳 false。都沒擋下回傳 true
+    /// </summary>
+    private static bool RunBlocks(ButtonDefinition b, IReadOnlyList<DataRow> rows, Func<DataRow, string> labelOf)
+    {
+        foreach (var block in b.PreCheckBlocks)
+        {
+            var passing = FailingRows(rows, block.Condition).ToHashSet();          // 規則不成立的資料
+            var hit = rows.Where(r => !passing.Contains(r)).ToList();
+            if (hit.Count == 0) continue;
+            string message = !string.IsNullOrWhiteSpace(block.Message) ? block.Message.Trim()
+                           : !string.IsNullOrWhiteSpace(b.PreCheckMessage) ? b.PreCheckMessage : $"符合不能執行的條件：{block.Condition}";
+            if (labelOf != null)
+                message += Environment.NewLine + Environment.NewLine + "符合的資料：" + string.Join("、", hit.Take(10).Select(labelOf))
+                         + (hit.Count > 10 ? $" 等 {hit.Count} 筆" : "");
+            if (block.Action == PreCheckAction.詢問是否繼續)
+            {
+                if (MessageBox.Show(message + Environment.NewLine + Environment.NewLine + "要繼續執行嗎？", b.Text,
+                                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return false;
+                continue;
+            }
+            MessageBox.Show(message, b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        return true;
     }
 
     public static List<DataRow> FailingRows(IReadOnlyList<DataRow> rows, string condition)
@@ -333,7 +366,11 @@ public static class ButtonRunner
         {
             try
             {
-                if (FailingRows(new[] { row }, b.PreCheck).Count > 0)
+                if (UsesBlocks(b))
+                {
+                    if (!RunBlocks(b, new[] { row }, null)) return false;
+                }
+                else if (FailingRows(new[] { row }, b.PreCheck).Count > 0)
                 {
                     MessageBox.Show(string.IsNullOrWhiteSpace(b.PreCheckMessage) ? $"這一列不符合條件：{b.PreCheck}" : b.PreCheckMessage,
                                     b.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -385,25 +422,30 @@ public static class ButtonRunner
 
     /// <summary>
     /// SQL 裡 DECLARE 宣告的變數名稱（不含 @），例如 DECLARE @NB nvarchar(20)、DECLARE @a int = 1, @b date、DECLARE @t TABLE (…)。
-    /// 一個 DECLARE 宣告到分號為止，只算括號外、逗號後面接的 @名稱（DECLARE @a int = ISNULL(@x, 0) 的 @x 還是參數）
+    /// 一個 DECLARE 宣告到分號或下一個敘述為止，只算括號外、逗號後面接的 @名稱（DECLARE @a int = ISNULL(@x, 0) 的 @x 還是參數）
     /// </summary>
     private static HashSet<string> DeclaredVariables(string sql)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in Regex.Matches(sql, @"\bDECLARE\b([^;]*)", RegexOptions.IgnoreCase))
+        // 每個 DECLARE 往後看到分號、或括號外的下一個敘述（DECLARE、SET、SELECT…；T-SQL 常不寫分號，一行一個 DECLARE）為止
+        var next = new Regex(@"^(?:DECLARE|SET|SELECT|INSERT|UPDATE|DELETE|IF|ELSE|WHILE|BEGIN|END|EXEC|EXECUTE|WITH|MERGE|RETURN|PRINT|THROW|RAISERROR|OPEN|FETCH|CLOSE|DEALLOCATE)\b",
+                             RegexOptions.IgnoreCase);
+        foreach (Match m in Regex.Matches(sql, @"\bDECLARE\b", RegexOptions.IgnoreCase))
         {
-            string body = m.Groups[1].Value;
             int depth = 0;
             bool start = true;                              // DECLARE 之後、或括號外的逗號之後：下一個 @名稱是宣告的變數
-            for (int i = 0; i < body.Length; i++)
+            for (int i = m.Index + m.Length; i < sql.Length; i++)
             {
-                char c = body[i];
+                char c = sql[i];
+                if (c == ';') break;
+                if (depth == 0 && char.IsLetter(c) && !char.IsLetterOrDigit(sql[i - 1]) && sql[i - 1] != '_' && sql[i - 1] != '@'
+                    && next.IsMatch(sql.AsSpan(i).ToString())) break;
                 if (c == '(') depth++;
                 else if (c == ')') depth = Math.Max(0, depth - 1);
                 else if (c == ',' && depth == 0) start = true;
                 else if (c == '@' && start)
                 {
-                    var name = Regex.Match(body[(i + 1)..], @"^[\p{L}\p{N}_]+");
+                    var name = Regex.Match(sql[(i + 1)..], @"^[\p{L}\p{N}_]+");
                     if (name.Success) names.Add(name.Value);
                     start = false;
                 }
@@ -689,15 +731,27 @@ public static class ButtonRunner
                                 Action<IReadOnlyDictionary<string, object>> onSaved = null, string connectionString = null,
                                 Action<IReadOnlyList<IReadOnlyDictionary<string, object>>> onReturnRows = null)
     {
-        if (string.IsNullOrWhiteSpace(b.TargetForm))
+        string targetFile, caseParams;
+        try
         {
-            MessageBox.Show($"按鈕「{b.Text}」還沒有設定要開啟的畫面定義檔。", "提醒");
+            (targetFile, caseParams) = ChooseTargetForm(b, valueOf);  // 「依條件開啟」第一個符合的畫面，都不符合用畫面定義檔
+        }
+        catch (Exception ex) when (ex is EvaluateException or SyntaxErrorException)
+        {
+            MessageBox.Show($"按鈕「{b.Text}」的「依條件開啟」條件寫法有誤：{ex.Message}", "提醒", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(targetFile))
+        {
+            MessageBox.Show(string.IsNullOrWhiteSpace(b.TargetFormCases)
+                ? $"按鈕「{b.Text}」還沒有設定要開啟的畫面定義檔。"
+                : $"目前的資料不符合按鈕「{b.Text}」任何一個「依條件開啟」的條件，也沒有設定預設的畫面定義檔。", "提醒");
             return;
         }
         try
         {
             // 登入時從系統資料庫讀已發布的畫面（看檔名），沒登入從檔案讀
-            var target = FormStore.LoadForm(b.TargetForm, FolderOf(sourcePath));
+            var target = FormStore.LoadForm(targetFile, FolderOf(sourcePath));
             if (!SysContext.PermissionFor(target.FormKey).Open)
             {
                 MessageBox.Show($"你沒有開啟「{target.Title}」的權限，請洽系統管理者。", "提醒");
@@ -706,6 +760,8 @@ public static class ButtonRunner
             var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, source) in ParsePairs(b.OpenParams))
                 parameters[name] = ParamValue(name, source, valueOf, connectionString);     // @欄位、SQL 運算式或固定值
+            foreach (var (name, source) in ParsePairs(caseParams))                           // 符合的那一列「帶入參數」，同名的以它為準
+                parameters[name] = ParamValue(name, source, valueOf, connectionString);
             if (IsGridPicker(b))
             {
                 // 帶回到 Grid：選取視窗可以多選，每一筆依「帶回 Grid 欄位對應」轉成一列（空白 = 全部欄位，同名的帶進 Grid）
@@ -764,6 +820,77 @@ public static class ButtonRunner
         {
             MessageBox.Show("開啟畫面失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /// <summary>
+    /// 「依條件開啟」：每行「條件 => 畫面定義檔」，後面可以接「| 帶入參數」（開這個畫面時另外帶的傳入參數，「對方欄位=值」用逗號分隔）。
+    /// 用條件後面第一個不在單引號字串裡的 =&gt; 切開（條件裡的 &gt;= 不是）；檔名不會有 |，所以畫面後面第一個 | 之後是帶入參數
+    /// </summary>
+    public static IEnumerable<(string Condition, string File, string Params)> ParseFormCases(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) yield break;
+        foreach (string raw in text.Split('\n'))
+        {
+            string line = raw.Trim();
+            int arrow = -1;
+            bool quoted = false;
+            for (int i = 0; i < line.Length - 1 && arrow < 0; i++)
+            {
+                if (line[i] == '\'') quoted = !quoted;
+                else if (!quoted && line[i] == '=' && line[i + 1] == '>') arrow = i;
+            }
+            if (arrow <= 0) continue;
+            string condition = line[..arrow].Trim(), rest = line[(arrow + 2)..];
+            int pipe = rest.IndexOf('|');
+            string file = (pipe < 0 ? rest : rest[..pipe]).Trim().Trim('"');
+            string parameters = pipe < 0 ? null : rest[(pipe + 1)..].Trim();
+            if (condition.Length > 0 && file.Length > 0) yield return (condition, file, string.IsNullOrEmpty(parameters) ? null : parameters);
+        }
+    }
+
+    /// <summary>「依條件開啟」的一行：條件 => 畫面定義檔 | 帶入參數（沒有帶入參數就不寫 |）；帶入參數裡的換行改成逗號，才不會拆成兩行</summary>
+    public static string FormatFormCase(string condition, string file, string parameters)
+    {
+        string p = string.Join(", ", (parameters ?? "").Split('\n').Select(s => s.Trim().TrimEnd(',')).Where(s => s.Length > 0));
+        return $"{condition} => {file}" + (p.Length > 0 ? " | " + p : "");
+    }
+
+    /// <summary>
+    /// 按鈕要開的畫面：「依條件開啟」由上往下第一個條件成立的畫面（和那一列的帶入參數）；都不成立用「畫面定義檔」。
+    /// 條件裡的欄位名稱用 valueOf 取值（畫面上的欄位、目前這筆）；條件寫錯時丟 EvaluateException / SyntaxErrorException
+    /// </summary>
+    public static (string File, string Params) ChooseTargetForm(ButtonDefinition b, Func<string, object> valueOf)
+    {
+        foreach (var (condition, file, parameters) in ParseFormCases(b.TargetFormCases))
+            if (ConditionHolds(condition, valueOf)) return (file, parameters);
+        return (b.TargetForm?.Trim(), null);
+    }
+
+    /// <summary>條件運算式裡不是欄位名稱的字</summary>
+    private static readonly HashSet<string> ExpressionWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AND", "OR", "NOT", "LIKE", "IN", "IS", "NULL", "TRUE", "FALSE", "ISNULL", "LEN", "IIF", "TRIM", "SUBSTRING", "CONVERT",
+    };
+
+    /// <summary>
+    /// 用 DataTable 運算式判斷條件（寫法同「執行前檢查」）：把條件裡用到的欄位名稱（[名稱] 或一般名稱，單引號字串裡的不算）
+    /// 用 valueOf 取值做成一筆資料再判斷；取不到值的欄位當成 NULL
+    /// </summary>
+    public static bool ConditionHolds(string condition, Func<string, object> valueOf)
+    {
+        string bare = Regex.Replace(condition, "'(?:[^']|'')*'", "''");
+        var names = Regex.Matches(bare, @"\[([^\]]+)\]|(?<![\p{L}\p{N}_.#])([\p{L}_][\p{L}\p{N}_]*)")
+            .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
+            .Where(n => !ExpressionWords.Contains(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var table = new DataTable();
+        var values = names.Select(n => (Name: n, Value: valueOf?.Invoke(n))).ToList();
+        foreach (var (name, value) in values)
+            table.Columns.Add(name, value is null or DBNull ? typeof(string) : value.GetType());
+        var row = table.NewRow();
+        foreach (var (name, value) in values) row[name] = value ?? DBNull.Value;
+        table.Rows.Add(row);
+        return table.Select(condition).Length > 0;
     }
 
     /// <summary>

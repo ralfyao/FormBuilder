@@ -17,7 +17,7 @@ public class OpenParamsEditor : UITypeEditor
         // 要開的畫面、清單那一列的欄位（雙擊那一列時 @名稱 先取那一列）
         (string form, IEnumerable<string> rowColumns) = context?.Instance switch
         {
-            ButtonDefinition b => (b.TargetForm, Enumerable.Empty<string>()),
+            ButtonDefinition b => (b.AllTargetForms.FirstOrDefault(), Enumerable.Empty<string>()),   // 沒填畫面定義檔時用依條件開啟的第一個畫面
             GridDefinition g => (g.OpenForm, g.Columns.Select(c => c.Column)),
             EditListDefinition l => (l.OpenForm, l.Columns.Select(c => c.Column)),
             IPickerField f => (f.PickerForm, Enumerable.Empty<string>()),

@@ -347,10 +347,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
             ToolTipText = "把目前選的資料帶回原來的畫面（在清單上雙擊也可以；帶回到 Grid 時可以用 Ctrl、Shift 多選）",
         };
         btnPick.Click += (s, e) => Pick();
-        // 只放 SQL 清單的畫面：在清單上雙擊一列 = 選這筆帶回
-        if (!HasMasterTable)
-            foreach (var (_, grid) in sqlGrids)
-                grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) Pick(); };
+        // SQL 清單上雙擊一列 = 選這筆帶回（只放 SQL 清單的畫面，或有資料表但沒有單頭清單、用 SQL 清單挑資料的畫面也一樣）
+        foreach (var (_, grid) in sqlGrids)
+        {
+            var g = grid;
+            g.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) Pick(g); };
+        }
         toolStrip.Items.Insert(0, btnPick);
         toolStrip.Items.Insert(1, new ToolStripSeparator());
         btnExit.Text = "取消";
@@ -407,15 +409,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
         DialogResult = DialogResult.OK;
     }
 
-    /// <summary>選取目前這筆，關閉選取視窗</summary>
-    private void Pick()
+    /// <summary>
+    /// 選取目前這筆，關閉選取視窗。從 SQL 清單帶回的情況：在 SQL 清單上雙擊（fromGrid）、只放 SQL 清單的畫面、
+    /// 有資料表但沒有單頭清單（用 SQL 清單挑資料）、正在操作 SQL 清單；其他從單頭目前這筆帶回
+    /// </summary>
+    private void Pick(DataGridView fromGrid = null)
     {
         if (mode != Mode.Browse) return;
-        if (!HasMasterTable)
+        if (fromGrid != null || !HasMasterTable || sqlGrids.Count > 0 && (listGrid == null || sqlGrids.Any(x => x.Grid.ContainsFocus)))
         {
-            // 只放 SQL 清單的畫面：帶回清單上選的那列（有多個清單時先看正在操作的那個）
-            var grid = sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus)
-                               .FirstOrDefault(g => g.CurrentRow?.DataBoundItem is DataRowView);
+            // 帶回 SQL 清單上選的那列（有多個清單時先看正在操作的那個）
+            var grid = fromGrid ?? sqlGrids.Select(x => x.Grid).OrderByDescending(g => g.ContainsFocus)
+                                           .FirstOrDefault(g => g.CurrentRow?.DataBoundItem is DataRowView);
             var row = (grid?.CurrentRow?.DataBoundItem as DataRowView)?.Row;
             if (row == null)
             {
@@ -1187,7 +1192,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     /// <summary>
     /// SQL 清單的「雙擊開啟畫面」：雙擊一列開啟設定的畫面，傳入參數的 @名稱 先取那一列的值，再找畫面上的欄位、目前這筆、開啟時的傳入參數。
-    /// 只放 SQL 清單的選取視窗，雙擊仍是選取帶回
+    /// 選取視窗裡雙擊是選取帶回（見 SetupPickMode）
     /// </summary>
     private void HookSqlListOpen(GridDefinition g, DataGridView grid)
     {
@@ -1196,7 +1201,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (button == null && !editable) return;
         grid.CellDoubleClick += (s, e) =>
         {
-            if (e.RowIndex < 0 || pickMode && !HasMasterTable) return;
+            if (e.RowIndex < 0 || pickMode) return;                  // 選取視窗：雙擊是選取帶回（SetupPickMode）
             if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
             var row = view.Row;
             if (editable)

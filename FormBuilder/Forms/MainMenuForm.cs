@@ -85,8 +85,8 @@ public partial class MainMenuForm : Form
             var miDeleteFolder = nodeMenu.Items.Add("刪除資料夾", null, (s, e) => DeleteFolder());
             var miDeleteForm = nodeMenu.Items.Add("刪除畫面…", null, (s, e) => DeleteFormSelected());
             nodeMenu.Items.Add(new ToolStripSeparator());
-            // 新增表單：開空白的畫面設計（設計好用「檔案 → 發布到系統」，再拖進選單的資料夾）
-            nodeMenu.Items.Add("新增表單", null, (s, e) => new DesignerForm().Show());
+            // 新增表單：開空白的畫面設計，第一次發布時自動放進按右鍵的那個資料夾
+            nodeMenu.Items.Add("新增表單", null, (s, e) => NewFormHere());
             nodeMenu.Items.Add("全部發布…", null, (s, e) => PublishAll());
             var miExport = nodeMenu.Items.Add("匯出 JSON…", null, (s, e) => ExportSelected());
             nodeMenu.Items.Add("匯入 JSON…", null, (s, e) => ImportForms());
@@ -291,6 +291,41 @@ public partial class MainMenuForm : Form
             MessageBox.Show("儲存選單失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         LoadMenu(select);
+    }
+
+    // ================= 管理者：新增表單 =================
+
+    /// <summary>
+    /// 新增表單：開空白的畫面設計，記住按右鍵的位置（資料夾 = 放在裡面；畫面 = 放在它所在的資料夾；空白處 = 最上層），
+    /// 第一次發布成功時自動放進那裡，不用再從「未放進選單的畫面」拖過去
+    /// </summary>
+    private void NewFormHere()
+    {
+        var selected = treeMenu.SelectedNode;
+        var folderNode = selected?.Tag is MenuNode { IsFolder: true } || selected == unlistedFolder ? selected : selected?.Parent;
+        string folderPath = folderNode?.FullPath;                                    // null = 選單最上層
+        string folderName = folderNode == null ? "最上層" : folderNode.Text.Replace("📁 ", "");
+        var designer = new DesignerForm();
+        bool placed = false;
+        designer.PlaceInMenu = (key, title) =>
+        {
+            if (placed || IsDisposed) return null;
+            placed = true;                                                             // 只有第一次發布時放（之後使用者自己搬的不動）
+            LoadMenu();                                                                // 剛發布的畫面先出現在「未放進選單的畫面」
+            var existing = AllNodes(treeMenu.Nodes).FirstOrDefault(tn =>
+                tn.Tag is MenuNode { IsFolder: false } m && m.FormKey.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (existing != null && !InUnlisted(existing)) return null;                // 已經在選單上（例如存成已有的代號）：不動
+            TreeNode target = null;
+            if (folderPath != null && (target = AllNodes(treeMenu.Nodes).FirstOrDefault(tn => tn.FullPath == folderPath)) == null)
+                return null;                                                           // 資料夾在這段時間被刪掉、改名了
+            var node = existing ?? new TreeNode(title) { Tag = new MenuNode { Title = title, FormKey = key } };
+            node.Remove();
+            if (target == null) treeMenu.Nodes.Insert(unlistedFolder?.Index ?? treeMenu.Nodes.Count, node);
+            else target.Nodes.Add(node);
+            SaveMenuFromTree($"新增畫面「{title}」到「{folderName}」", node.FullPath);
+            return folderName;
+        };
+        designer.Show();
     }
 
     // ================= 管理者：新增、刪除資料夾 =================
@@ -949,8 +984,8 @@ public partial class MainMenuForm : Form
             try
             {
                 var def = FormDefinition.FromJson(SysDb.LoadContent(SysContext.Connection, p.FormKey));
-                if (DesignerForm.AllButtons(def).Any(b => b.OpensForm && !string.IsNullOrWhiteSpace(b.TargetForm)
-                                                          && Path.GetFileNameWithoutExtension(b.TargetForm.Trim()).Equals(key, StringComparison.OrdinalIgnoreCase)))
+                if (DesignerForm.AllButtons(def).Any(b => b.OpensForm
+                                                          && b.AllTargetForms.Any(t => Path.GetFileNameWithoutExtension(t).Equals(key, StringComparison.OrdinalIgnoreCase))))
                     result.Add($"{p.Title ?? p.FormKey}（{p.FormKey}）");
             }
             catch

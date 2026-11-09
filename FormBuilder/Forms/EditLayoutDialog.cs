@@ -1547,6 +1547,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
         public bool CanPrint => true;
         public bool CanApprove => false;
         public FormPermission Permission { get; } = new(true, false, false, false, true);
+        public bool IsPreview => true;
         public void MoveTo(int index) { if (index >= 0 && index < data.Rows.Count) current = index; }
         public bool Refresh() => current >= 0;
         public bool Insert(Dictionary<string, object> values) => NotSaved(values);
@@ -1595,7 +1596,7 @@ public class EditFieldView : IPickerField
     public bool IsReadOnly { get => field.IsReadOnly; set => field.IsReadOnly = value; }
 
     [DisplayName("編號規則"),
-     Description("新增時自動產生編號（可再手動修改；設成唯讀就不能改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期；"
+     Description("新增時自動產生編號（可再手動修改；設成唯讀就不能改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期（[YYY] = 民國年，例如 114）；"
                + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
     public string NumberRule { get => field.NumberRule; set => field.NumberRule = value; }
 

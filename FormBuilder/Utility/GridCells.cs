@@ -314,11 +314,15 @@ public static class GridCells
                 && grid.CurrentCell.OwningColumn.Tag is GridColumnDefinition { EditAfterSelectSql: { Length: > 0 } })
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
-        grid.CellValueChanged += (s, e) =>
+        grid.CellValueChanged += (s, e) => Run(e.RowIndex, e.ColumnIndex);
+        // 開窗選取帶回值是直接寫進資料列，不會觸發 CellValueChanged：由 HookPickers 帶回後呼叫
+        afterSelectRunners.AddOrUpdate(grid, Run);
+
+        void Run(int rowIndex, int columnIndex)
         {
-            if (running || e.RowIndex < 0 || e.ColumnIndex < 0 || grid.ReadOnly) return;
-            if (grid.Columns[e.ColumnIndex].Tag is not GridColumnDefinition c || string.IsNullOrWhiteSpace(c.EditAfterSelectSql)) return;
-            if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
+            if (running || rowIndex < 0 || columnIndex < 0 || rowIndex >= grid.Rows.Count || grid.ReadOnly) return;
+            if (grid.Columns[columnIndex].Tag is not GridColumnDefinition c || string.IsNullOrWhiteSpace(c.EditAfterSelectSql)) return;
+            if (grid.Rows[rowIndex].DataBoundItem is not DataRowView view) return;
             var table = view.Row.Table;
             object ValueOf(string name) => table.Columns.Contains(name) ? view[name] : fallback(name);
             if (ValueOf(c.Column) is null or DBNull || ValueOf(c.Column) is string text && text.Trim() == "") return;   // 清空時不查
@@ -338,6 +342,7 @@ public static class GridCells
                     try
                     {
                         var column = table.Columns[name];
+                        column.ReadOnly = false;                // 關聯資料表帶出來的欄位（例如項目名稱）載入時是唯讀
                         view[name] = value is null or DBNull ? DBNull.Value
                                    : column.DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
                                    : Convert.ChangeType(value, column.DataType, CultureInfo.CurrentCulture);
@@ -347,8 +352,9 @@ public static class GridCells
                         notFound.Add($"{name}（型別不符）");
                     }
                 }
+                view.EndEdit();
                 if (notFound.Count > 0) MessageBox.Show("執行後動作查出來的值帶不進這些單身欄位：" + string.Join("、", notFound), "提醒");
-                grid.InvalidateRow(e.RowIndex);
+                grid.InvalidateRow(rowIndex);
             }
             catch (FormatException ex)
             {
@@ -362,7 +368,20 @@ public static class GridCells
             {
                 running = false;
             }
-        };
+        }
+    }
+
+    /// <summary>各 Grid 的執行後動作（HookAfterSelect 登記，開窗選取帶回值後依欄位執行）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Action<int, int>> afterSelectRunners = new();
+
+    /// <summary>開窗帶回值後：帶回的欄位有設定執行後動作就執行（跟手動輸入完離開格子一樣）</summary>
+    private static void RunAfterSelect(DataGridView grid, int rowIndex, IEnumerable<string> columns)
+    {
+        if (!afterSelectRunners.TryGetValue(grid, out var run)) return;
+        foreach (string name in columns.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            foreach (DataGridViewColumn col in grid.Columns)
+                if (col.Tag is GridColumnDefinition { EditAfterSelectSql: { Length: > 0 } } c && c.Column.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    run(rowIndex, col.Index);
     }
 
     /// <summary>
@@ -493,6 +512,8 @@ public static class GridCells
                     view.EndEdit();
                     if (notFound.Count > 0) MessageBox.Show("開窗帶回來的值放不進這些欄位：" + string.Join("、", notFound), "提醒");
                     if (rowIndex < grid.Rows.Count) grid.InvalidateRow(rowIndex);
+                    // 帶回的欄位有設定執行後動作（例如選了項目編號帶出項目名稱）就接著執行
+                    RunAfterSelect(grid, rowIndex, values.Keys.Where(table.Columns.Contains));
                 }, connectionString: connectionString);
             }
             finally
@@ -601,7 +622,9 @@ public static class GridCells
         var custom = grid.Columns.Cast<DataGridViewColumn>().Select(CustomOf).Where(c => c != null).ToList();
         if (custom.Count == 0) return;
         // 按鈕有「執行前檢查」：不符合的列畫成灰色、按了沒反應。符合的列每個按鈕算一次記起來，資料有變動再重算
-        var checks = custom.Where(c => Resolve(c) == GridCellKind.按鈕 && !string.IsNullOrWhiteSpace(c.Button?.PreCheck)).ToHashSet();
+        // 有「詢問是否繼續」的條件時不畫灰：要讓使用者按下去選擇要不要繼續
+        var checks = custom.Where(c => Resolve(c) == GridCellKind.按鈕 && !string.IsNullOrWhiteSpace(c.Button?.PreCheck)
+                                       && !(c.Button.PreCheckBlocks ?? new()).Any(r => r.Action == PreCheckAction.詢問是否繼續)).ToHashSet();
         var passed = new Dictionary<GridColumnDefinition, HashSet<DataRow>>();
         DataTable checkedTable = null;
         void ClearChecks(object s, EventArgs e) => passed.Clear();

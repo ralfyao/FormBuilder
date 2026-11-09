@@ -7,7 +7,7 @@ namespace FormBuilder;
 /// 編號規則：新增時依規則自動產生編號（例如 [BF][YYYY][MM][DD][XXX] → BF20240131001）。
 /// 規則由中括號片段組成：
 ///   [BF]            固定文字，原樣輸出（依使用者要求手動輸入的前綴、分隔符號等）
-///   [YYYY][YY][MM][DD]  新增當天的日期（可以寫在同一個括號裡，例如 [YYYYMMDD]）
+///   [YYYY][YY][MM][DD]  新增當天的日期（可以寫在同一個括號裡，例如 [YYYYMMDD]）；[YYY] = 民國年（西元年 - 1911）
 ///   [XXX]           流水號，幾個 X 就是幾碼，前面補 0；到資料表查同樣前綴的最大流水號 + 1
 /// 規則裡必須有一個流水號片段；括號外的文字也當固定文字
 /// </summary>
@@ -17,7 +17,7 @@ public static class NumberRule
     public sealed record Parsed(string Prefix, int Digits, string Suffix);
 
     private static readonly Regex Segment = new(@"\[([^\]]*)\]", RegexOptions.Compiled);
-    private static readonly Regex DateToken = new("YYYY|YY|MM|DD", RegexOptions.Compiled);
+    private static readonly Regex DateToken = new("YYYY|YYY|YY|MM|DD", RegexOptions.Compiled);
     private static readonly Regex SerialToken = new("^X+$", RegexOptions.Compiled);
 
     /// <summary>解析規則；date = 日期片段要用的日期。規則不合法時丟 FormatException（含說明）</summary>
@@ -50,6 +50,7 @@ public static class NumberRule
                 Append(DateToken.Replace(body, t => t.Value switch
                 {
                     "YYYY" => date.ToString("yyyy"),
+                    "YYY" => (date.Year - 1911).ToString("000"),         // 民國年（西元年 - 1911），例如 2025 → 114
                     "YY" => date.ToString("yy"),
                     "MM" => date.ToString("MM"),
                     _ => date.ToString("dd"),

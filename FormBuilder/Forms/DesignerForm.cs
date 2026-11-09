@@ -36,6 +36,12 @@ public partial class DesignerForm : Form, IPickerHost
     private DbKind databaseType;                           // 連線的資料庫類型（SQL Server / Oracle / MySQL）
     private List<(string Schema, string Name)> allTables = new();
 
+    /// <summary>
+    /// 從選單的資料夾按右鍵「新增表單」開的設計視窗：發布成功時呼叫（代號、名稱），把畫面放進那個資料夾；
+    /// 回傳放進的資料夾名稱（沒放 = null，例如已經在選單上了）
+    /// </summary>
+    public Func<string, string, string> PlaceInMenu { get; set; }
+
     public DesignerForm()
     {
         InitializeComponent();
@@ -1616,8 +1622,19 @@ public partial class DesignerForm : Form, IPickerHost
             }
             UpdateStatus($"已發布 {done.Count} 個畫面：" + string.Join("、", done));
             publishedJson = PublishComparable(def);        // 系統上現在是最新版
+            string placed = null;
+            try
+            {
+                placed = PlaceInMenu?.Invoke(key, PublishTitle(def, key));          // 從資料夾「新增表單」開的：放進那個資料夾
+            }
+            catch (Exception ex)
+            {
+                notes.Add("放進選單失敗：" + ex.Message);
+            }
             MessageBox.Show("已發布：" + Environment.NewLine + string.Join(Environment.NewLine, done.Select(x => "　" + x)) + Environment.NewLine + Environment.NewLine
-                            + "第一次發布的畫面，請到「選單管理」放進選單（只從按鈕開啟的畫面不用），並在「使用者、角色與權限」設定哪些角色可以用。"
+                            + (placed != null
+                                ? $"已放進選單的「{placed}」。請在「使用者、角色與權限」設定哪些角色可以用。"
+                                : "第一次發布的畫面，請到「選單管理」放進選單（只從按鈕開啟的畫面不用），並在「使用者、角色與權限」設定哪些角色可以用。")
                             + (notes.Count > 0 ? Environment.NewLine + Environment.NewLine + "注意：" + Environment.NewLine + string.Join(Environment.NewLine, notes.Distinct()) : ""),
                             "發布");
             return true;
@@ -1679,11 +1696,11 @@ public partial class DesignerForm : Form, IPickerHost
         {
             var (form, path) = queue.Dequeue();
             string folder = Path.GetDirectoryName(path);
-            foreach (var b in AllButtons(form).Where(b => b.OpensForm && !string.IsNullOrWhiteSpace(b.TargetForm)))
+            foreach (var (b, targetForm) in AllButtons(form).Where(b => b.OpensForm).SelectMany(b => b.AllTargetForms.Select(t => (b, t))))
             {
-                string key = Path.GetFileNameWithoutExtension(b.TargetForm.Trim());
+                string key = Path.GetFileNameWithoutExtension(targetForm);
                 if (!seen.Add(key)) continue;
-                string file = ButtonRunner.ResolvePath(b.TargetForm.Trim(), folder);
+                string file = ButtonRunner.ResolvePath(targetForm, folder);
                 if (!File.Exists(file)) file = Path.Combine(folder, key + ".json");
                 if (!File.Exists(file))
                 {

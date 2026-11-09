@@ -191,6 +191,8 @@ public class FormDefinition
         foreach (var b in Buttons.Concat(Grids.SelectMany(g => g.EditButtons)).Concat(ColumnButtons()))
         {
             b.TargetForm = Fix(b.TargetForm);
+            if (!string.IsNullOrWhiteSpace(b.TargetFormCases))
+                b.TargetFormCases = string.Join(Environment.NewLine, ButtonRunner.ParseFormCases(b.TargetFormCases).Select(c => ButtonRunner.FormatFormCase(c.Condition, Fix(c.File), c.Params)));
             b.PrintTemplate = Fix(b.PrintTemplate);
         }
         foreach (var f in Fields) f.PickerForm = Fix(f.PickerForm);
@@ -407,7 +409,7 @@ public class FieldDefinition : IPickerField
     public InputKind InputType { get; set; } = InputKind.自動;
 
     [Category("編號"), DisplayName("編號規則"),
-     Description("新增時自動產生編號（可再手動修改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期；"
+     Description("新增時自動產生編號（可再手動修改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期（[YYY] = 民國年，例如 114）；"
                + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
     public string NumberRule { get; set; }
 
@@ -961,6 +963,21 @@ public enum ButtonPermission
 }
 
 /// <summary>按鈕按下去要做的事</summary>
+/// <summary>執行前檢查的擋下規則成立時要做什麼</summary>
+public enum PreCheckAction
+{
+    顯示訊息並停止,
+    詢問是否繼續,
+}
+
+/// <summary>執行前檢查的一條擋下規則：Condition 成立時做 Action（跳 Message）</summary>
+public class PreCheckBlock
+{
+    public string Condition { get; set; }
+    public PreCheckAction Action { get; set; }
+    public string Message { get; set; }
+}
+
 public enum ButtonAction
 {
     查詢, 新增, 修改, 刪除, 首筆, 上筆, 下筆, 末筆, 確定, 取消, 單身, 離開,
@@ -1042,13 +1059,21 @@ public class ButtonDefinition
     [Category("按鈕"), DisplayName("執行前檢查"),
      Description("有填時，按下按鈕要先在清單選取資料（沒有清單的畫面檢查目前這筆），每一筆都符合這個條件才執行，否則顯示「檢查不符訊息」；Grid 上的自訂按鈕檢查那一列，不符合的列按鈕直接變灰、不能按。"
                + "寫法：欄位名稱有空白或符號時用 [ ]，文字用單引號；可用 = <> > < >= <= AND OR NOT、LIKE（* 或 % 只能放在頭尾）、IN ('A','B')、"
-               + "ISNULL(欄位, 值)、LEN(欄位)。例如：核准 = 'Y' AND 數量 > 0"),
-     Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
+               + "ISNULL(欄位, 值)、LEN(欄位)。例如：核准 = 'Y' AND 數量 > 0。按右邊的「…」用視窗設定（一列一個條件，下拉選欄位、比較方式，用且 / 或連接）"),
+     Editor(typeof(PreCheckEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PreCheck { get; set; }
 
     [Category("按鈕"), DisplayName("檢查不符訊息"),
      Description("「執行前檢查」不通過時顯示的訊息，後面會自動列出不符合的資料；空白 = 顯示檢查條件")]
     public string PreCheckMessage { get; set; }
+
+    /// <summary>
+    /// 執行前檢查設定視窗設的「擋下規則」：由上往下，第一條成立的就跳它的訊息（停止或詢問是否繼續）。
+    /// 「執行前檢查」存的是由這些規則算出來的通過條件（NOT 規則1 AND NOT 規則2 …）；
+    /// 執行前檢查被直接改過、跟規則對不上時，改用執行前檢查的文字（舊的寫法）
+    /// </summary>
+    [Browsable(false)]
+    public List<PreCheckBlock> PreCheckBlocks { get; set; }
 
     [Category("按鈕"), DisplayName("需要的權限"), DefaultValue(ButtonPermission.無),
      Editor(typeof(FlagsCheckEditor), typeof(System.Drawing.Design.UITypeEditor)),
@@ -1086,6 +1111,22 @@ public class ButtonDefinition
                + "只寫檔名時，會找跟目前畫面同一個資料夾的檔案；存檔時完整路徑會自動改成相對路徑"),
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string TargetForm { get; set; }
+
+    [Category("開啟畫面"), DisplayName("依條件開啟"),
+     Description("動作 = 開啟畫面 時，依畫面上的欄位值開不同的畫面。每行一組「條件 => 畫面定義檔」，由上往下比對，第一個符合的就開那個畫面；"
+               + "都不符合時開「畫面定義檔」（沒填就提醒）。條件寫法同「執行前檢查」，例如：\n"
+               + "收費機制 = '保固' => 保固零件申請單.json\n"
+               + "申請用途 IN ('售後維修', '客服') => 維修零件申請單.json | 單據類別=維修, 部門=@部門\n"
+               + "畫面後面可以接「| 帶入參數」：開這個畫面時另外帶的傳入參數（寫法同「傳入參數」），加在「傳入參數」之後，同名的以帶入參數為準。"
+               + "回傳對應照用同一組設定，所以這些畫面的欄位名稱要一樣。按右邊的「…」用視窗設定（下拉選欄位、比較方式、畫面、帶入參數）"),
+     Editor(typeof(FormCasesEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string TargetFormCases { get; set; }
+
+    /// <summary>這個按鈕可能開啟的所有畫面定義檔（畫面定義檔 + 依條件開啟的每個畫面），發布、查參照時用</summary>
+    [JsonIgnore, Browsable(false)]
+    public IEnumerable<string> AllTargetForms =>
+        new[] { TargetForm }.Concat(ButtonRunner.ParseFormCases(TargetFormCases).Select(c => c.File))
+                            .Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => f.Trim());
 
     [Category("開啟畫面"), DisplayName("條件組合"),
      Description("動作 = 開啟查詢條件畫面 時，多個條件預設要「全部符合」（AND）還是「任一符合」（OR）；使用者在條件畫面上也可以切換")]

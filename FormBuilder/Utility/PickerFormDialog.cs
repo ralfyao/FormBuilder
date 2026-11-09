@@ -258,7 +258,8 @@ public class PickerFormDialog : Form
     }
 
     /// <summary>
-    /// 開窗畫面選一筆時帶得回來的欄位：有單頭資料表時是單頭清單的欄位與單頭欄位；只放 SQL 清單的畫面是 SQL 清單的欄位
+    /// 開窗畫面選一筆時帶得回來的欄位：有單頭資料表時是單頭清單的欄位、SQL 清單的欄位（在 SQL 清單上選的那列帶回）與單頭欄位；
+    /// 只放 SQL 清單的畫面是 SQL 清單的欄位
     /// </summary>
     internal static List<(string Column, string Header)> ReturnableColumns(FormDefinition target)
     {
@@ -271,6 +272,8 @@ public class PickerFormDialog : Form
         if (!string.IsNullOrWhiteSpace(target.TableName))
         {
             foreach (var c in target.Grids.Where(g => g.IsMasterList && !g.IsSqlList).SelectMany(g => g.Columns).Where(c => !c.ScreenOnly))
+                Add(c.Column, c.Header);
+            foreach (var c in target.Grids.Where(g => g.IsSqlList).SelectMany(g => g.Columns).Where(c => !c.IsCustom))
                 Add(c.Column, c.Header);
             foreach (var f in target.Fields.Where(f => !f.IsCalculated))
                 Add(f.Column, f.Label);

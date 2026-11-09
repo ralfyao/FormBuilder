@@ -21,6 +21,8 @@ public interface IRecordNavigator
     bool CanApprove { get; }
     /// <summary>使用者對這個畫面的權限（按鈕「需要的權限」用）</summary>
     FormPermission Permission { get; }
+    /// <summary>編輯視窗版面的預覽（不寫入資料庫）</summary>
+    bool IsPreview => false;
     void MoveTo(int index);
     /// <summary>重讀目前這筆；已被刪除時回傳 false</summary>
     bool Refresh();
@@ -328,7 +330,9 @@ public partial class RecordNavigatorDialog : Form
         {
             if (nav.Permission is { Modify: false })
             {
-                MessageBox.Show($"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
+                MessageBox.Show(nav.IsPreview
+                    ? $"按鈕「{b.Text}」有「執行後動作」的 SQL（會寫入資料庫），預覽不會執行。\n執行前檢查已經通過；要實際測試請發布後從主畫面開啟這筆資料。"
+                    : $"你沒有這個畫面的編修權限，不能執行按鈕「{b.Text}」。", "提醒");
                 return;
             }
             var preValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
