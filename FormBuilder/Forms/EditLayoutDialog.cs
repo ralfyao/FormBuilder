@@ -35,6 +35,8 @@ public partial class EditLayoutDialog : Form, IPickerHost
     private readonly List<EditListBox> listBoxes = new();
     /// <summary>版面上的文字標籤（編輯的是複本，確定時才寫回）</summary>
     private readonly List<FieldBox> labelBoxes = new();
+    /// <summary>版面上欄位的同步複本（Field.Column = 原本的欄位名稱；執行時兩邊的值同步，存檔只存一份）</summary>
+    private readonly List<FieldBox> copyBoxes = new();
     private readonly List<DesignBox> selection = new();
     /// <summary>「資料表」頁籤要用的連線字串；沒有連線時不能加明細清單</summary>
     private readonly string connectionString;
@@ -232,6 +234,20 @@ public partial class EditLayoutDialog : Form, IPickerHost
         {
             ToolTipText = "用目前的版面開編輯視窗，資料是資料表的前 50 筆；可以按新增、修改試著輸入，按確定不會存進資料庫",
         });
+        // ---- 工具列「列印」的列印樣板：設計好後，執行時編輯視窗工具列的「列印」就照樣板印（不用另外放按鈕）----
+        editPrint = grid.EditPrint?.Clone();
+        editPrintMenu = grid.EditPrintMenu?.Clone();
+        if (!grid.IsSqlList)
+        {
+            effectBar.Items.Insert(effectBar.Items.IndexOf(sepMenus), new ToolStripButton("列印樣板…", null, (s, e) => DesignToolbarPrint())
+            {
+                ToolTipText = "設計編輯視窗工具列「列印」要印的格式；沒設計時「列印」印簡易格式（每個欄位印「標籤：值」）",
+            });
+            effectBar.Items.Insert(effectBar.Items.IndexOf(sepMenus), new ToolStripButton("列印選單…", null, (s, e) => DesignPrintMenu())
+            {
+                ToolTipText = "工具列「列印」先開一個列印視窗：上面是參數（使用者輸入或帶資料庫的值），下面每個按鈕印一個不同的樣板",
+            });
+        }
 
         // ---- 編輯選單：復原、刪除、排列，以及水平 / 垂直 / 大小的對齊 ----
         miUndo.Click += (s, e) => history.Undo();
@@ -280,10 +296,12 @@ public partial class EditLayoutDialog : Form, IPickerHost
         backColor = grid.EditBackColor;
         canvas.BackColor = ColorText.BackOrDefault(backColor);                 // 先設底色，欄位標籤才會依底色決定文字顏色
         grid.EnsureEditLayout();
-        foreach (var c in grid.EditColumns) PlaceColumn(c, new Point(c.EditX, c.EditY), select: false);
+        foreach (var c in grid.EditColumns) PlaceColumn(c, new Point(c.EditX, c.EditY), select: false, fresh: false);
         foreach (var b in grid.EditButtons) AddButtonBox(b.Clone(), select: false);
         foreach (var l in grid.EditLists) AddListBox(l.Clone(), select: false);
         foreach (var f in grid.EditTextLabels) AddLabelBox(f.Clone(), select: false);
+        foreach (var (c, box) in placed.ToList())
+            foreach (var copy in c.EditCopies ?? new List<EditFieldCopy>()) AddCopyBox(box.Field.ForCopy(copy), select: false);
         // 設計過大小就用設計的，沒有就依欄位自動決定
         formSize = grid.EditFormSize ?? InputHelper.ContentSize(placed.Values.Select(b => b.Field), 500);
         RefreshAvailable();
@@ -332,6 +350,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
         public List<ButtonDefinition> Buttons { get; set; } = new();
         public List<EditListDefinition> Lists { get; set; } = new();
         public List<FieldDefinition> Labels { get; set; } = new();
+        public List<FieldDefinition> Copies { get; set; } = new();
         public int Width { get; set; }
         public int Height { get; set; }
         public string EffectiveColumn { get; set; }
@@ -350,6 +369,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
         Buttons = buttonBoxes.Select(b => b.ButtonDef).ToList(),
         Lists = listBoxes.Select(b => b.ListDef).ToList(),
         Labels = labelBoxes.Select(b => b.Field).ToList(),
+        Copies = copyBoxes.Select(b => b.Field).ToList(),
         Width = formSize.Width,
         Height = formSize.Height,
         EffectiveColumn = effectiveColumn,
@@ -365,6 +385,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
         buttonBoxes.Clear();
         listBoxes.Clear();
         labelBoxes.Clear();
+        copyBoxes.Clear();
         foreach (var p in state.Fields)
         {
             var column = columns.FirstOrDefault(c => c.Column == p.Column);
@@ -376,6 +397,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
         foreach (var b in state.Buttons) AddButtonBox(b, select: false);
         foreach (var l in state.Lists ?? new List<EditListDefinition>()) AddListBox(l, select: false);
         foreach (var f in state.Labels ?? new List<FieldDefinition>()) AddLabelBox(f, select: false);
+        foreach (var f in state.Copies ?? new List<FieldDefinition>())
+        {
+            f.IsSyncCopy = true;                           // 不存進快照，還原時補上
+            AddCopyBox(f, select: false);
+        }
         formSize = new Size(state.Width, state.Height);
         effectiveColumn = state.EffectiveColumn;
         UpdateEffectiveButton();
@@ -653,28 +679,46 @@ public partial class EditLayoutDialog : Form, IPickerHost
     private void CopySelection()
     {
         var labels = selection.OfType<FieldBox>().Where(labelBoxes.Contains).Select(b => b.Field).ToList();
+        // 欄位（和它的同步複本）：貼上時變成同一個欄位的同步複本
+        var syncFields = selection.OfType<FieldBox>().Where(b => placed.ContainsValue(b) || copyBoxes.Contains(b)).Select(b => b.Field).ToList();
         var buttons = selection.OfType<ButtonBox>().Select(b => b.ButtonDef).ToList();
         var lists = selection.OfType<EditListBox>().Select(b => b.ListDef).Where(l => l.IsSqlList).ToList();
-        int copied = labels.Count + buttons.Count + lists.Count;
+        int copied = labels.Count + syncFields.Count + buttons.Count + lists.Count;
         if (copied == 0)
         {
-            lblHint.Text = "  選取的是欄位或資料表的明細清單：同一個只能放一次，不能複製（按鈕、文字標籤、SQL 清單可以複製）";
+            const string reason = "選取的是資料表的明細清單：同一個只能放一次，不能複製（欄位、按鈕、文字標籤、SQL 清單可以複製）";
+            DesignClipboard.Clear(reason);              // 不要讓 Ctrl+V 貼出上一次複製的東西
+            lblHint.Text = "  " + reason;
             return;
         }
-        DesignClipboard.Copy(labels, buttons, Enumerable.Empty<GridDefinition>(), lists);
-        lblHint.Text = $"  已複製 {copied} 個元件，按 Ctrl+V 貼上" + (copied < selection.Count ? $"（{selection.Count - copied} 個欄位 / 明細清單不能複製，略過）" : "");
+        DesignClipboard.Copy(labels, buttons, Enumerable.Empty<GridDefinition>(), lists, syncFields);
+        lblHint.Text = $"  已複製 {copied} 個元件，按 Ctrl+V 貼上" + (syncFields.Count > 0 ? "（欄位貼上後是同步複本：兩邊的值會同步，存檔只存一份）" : "")
+                     + (copied < selection.Count ? $"（{selection.Count - copied} 個明細清單不能複製，略過）" : "");
     }
 
     /// <summary>Ctrl+V：貼上複製的元件（新的一份，位置往右下錯開）；文字標籤、SQL 清單取新的名稱</summary>
     private void PasteClipboard()
     {
-        var (fields, buttons, _, lists) = DesignClipboard.Paste();
+        var (fields, buttons, _, lists, syncFields) = DesignClipboard.Paste();
         var labels = fields.Where(f => f.IsTextLabel).ToList();         // 計算欄位只能放在主畫面
-        if (labels.Count + buttons.Count + lists.Count == 0)
+        // 欄位 → 同步複本：原本的欄位要在這個版面上（別的 Grid 複製來的、或原本的欄位已經拿掉的略過）
+        var copies = syncFields
+            .Select(s => (Source: placed.FirstOrDefault(p => p.Key.Column.Equals(s.Column, StringComparison.OrdinalIgnoreCase)).Value, Copy: s))
+            .Where(x => x.Source != null)
+            .Select(x => x.Source.Field.ForCopy(new EditFieldCopy
+            {
+                X = x.Copy.X, Y = x.Copy.Y, Width = x.Copy.Width, Height = x.Copy.Height, LabelWidth = x.Copy.LabelWidth, Label = x.Copy.Label,
+                BackColorHtml = x.Copy.BackColorHtml, LabelColorHtml = x.Copy.LabelColorHtml,
+            }))
+            .ToList();
+        if (labels.Count + buttons.Count + lists.Count + copies.Count == 0)
         {
-            lblHint.Text = "  複製的元件不能貼在編輯視窗（計算欄位、主畫面的 SQL 清單只能貼在畫面設計）";
+            lblHint.Text = syncFields.Count > 0
+                ? "  複製的欄位不在這個版面上，不能貼成同步複本"
+                : "  複製的元件不能貼在編輯視窗（計算欄位、主畫面的 SQL 清單只能貼在畫面設計）";
             return;
         }
+        foreach (var f in copies) AddCopyBox(f, select: false);
         var usedNames = new HashSet<string>(columns.Select(c => c.Column).Concat(labelBoxes.Select(b => b.Field.Column)), StringComparer.OrdinalIgnoreCase);
         var usedLists = new HashSet<string>(listBoxes.Select(b => b.ListDef.TableName), StringComparer.OrdinalIgnoreCase);
         foreach (var f in labels)
@@ -689,9 +733,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
             AddListBox(l, select: false);
         }
         SetSelection(labelBoxes.Where(b => labels.Contains(b.Field)).Cast<DesignBox>()
+            .Concat(copyBoxes.Where(b => copies.Contains(b.Field)))
             .Concat(buttonBoxes.Where(b => buttons.Contains(b.ButtonDef)))
             .Concat(listBoxes.Where(b => lists.Contains(b.ListDef))));
-        lblHint.Text = $"  已貼上 {labels.Count + buttons.Count + lists.Count} 個元件（已選取，可以直接拖曳到要放的位置）";
+        lblHint.Text = $"  已貼上 {labels.Count + copies.Count + buttons.Count + lists.Count} 個元件（已選取，可以直接拖曳到要放的位置）"
+                     + (copies.Count > 0 ? "；欄位是同步複本 [同步]：執行時跟原本的欄位互相同步，存檔只存一份" : "");
     }
 
     /// <summary>Delete：刪除選取的欄位；Ctrl+A：全選</summary>
@@ -701,6 +747,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
         if (!typing && keyData == Keys.Delete && selection.Count > 0) { RemoveSelected(); return true; }
         if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.C) && selection.Count > 0) { CopySelection(); return true; }
         if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.V) && !DesignClipboard.IsEmpty) { PasteClipboard(); return true; }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.V) && DesignClipboard.EmptyReason != null)
+        {
+            MessageBox.Show(this, "沒有東西可以貼上。\r\n\r\n" + DesignClipboard.EmptyReason, "貼上", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
+        }
         if (!UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.Z)) { history.Undo(); return true; }
         if (!UndoHistory.IsEditingText() && (keyData == (Keys.Control | Keys.Y) || keyData == (Keys.Control | Keys.Shift | Keys.Z))) { history.Redo(); return true; }
         if (!typing && keyData == (Keys.Control | Keys.A)) { SetSelection(canvas.Controls.OfType<DesignBox>()); return true; }
@@ -742,7 +793,8 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
     // ================= 放置 / 刪除欄位 =================
 
-    private void PlaceColumn(GridColumnDefinition c, Point location, bool select = true)
+    /// <param name="fresh">true = 這次才放上版面（沒設過的標籤寬度貼齊文字、高度用新欄位預設）；false = 載入已存的版面</param>
+    private void PlaceColumn(GridColumnDefinition c, Point location, bool select = true, bool fresh = true)
     {
         if (placed.TryGetValue(c, out var existing))
         {
@@ -758,6 +810,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
             LabelFontSize = c.EditLabelFontSize,
             FontName = c.EditFontName,
             BackColorHtml = c.EditBackColorHtml,
+            LabelColorHtml = c.EditLabelColorHtml,
             LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
             InputType = c.EditInputType,
             Items = c.EditItems,
@@ -784,11 +837,12 @@ public partial class EditLayoutDialog : Form, IPickerHost
             X = location.X,
             Y = location.Y,
             Width = c.EditWidth > 0 ? c.EditWidth : Math.Clamp(c.Width, 120, 400),
-            Height = c.EditHeight > 0 ? c.EditHeight : FieldDefinition.DefaultHeight,
+            Height = c.EditHeight > 0 ? c.EditHeight : fresh ? FieldDefinition.NewFieldHeight : FieldDefinition.DefaultHeight,
         };
         var box = new FieldBox(field);
         placed[c] = box;
         AttachBox(box);
+        if (fresh && c.EditLabelWidth <= 0) box.FitLabelWidth();     // 加進版面後才知道字型
         RefreshAvailable();
         UpdateCanvasSize();
         if (select) SetSelection(new[] { box });
@@ -824,6 +878,29 @@ public partial class EditLayoutDialog : Form, IPickerHost
                                               grid.KeyColumns.Select(c => c.Column), recordColumns, listBoxes.Select(x => x.ListDef)))
                     propertyGrid.Refresh();
             };
+    }
+
+    /// <summary>編輯視窗工具列「列印」的列印樣板（不放在版面上的「列印報表」按鈕）</summary>
+    private ButtonDefinition editPrint;
+
+    /// <summary>開啟列印樣板設計：資料表、主鍵用這個 Grid 的；存檔後工具列「列印」就照這個樣板印（按確定或儲存才寫回）</summary>
+    private void DesignToolbarPrint()
+    {
+        editPrint ??= new ButtonDefinition { Text = "列印", Action = ButtonAction.列印報表 };
+        DesignTemplate(editPrint);
+    }
+
+    private bool DesignTemplate(ButtonDefinition b) =>
+        PrintDesignerForm.OpenFor(b, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                  grid.KeyColumns.Select(c => c.Column), null, listBoxes.Select(x => x.ListDef));
+
+    /// <summary>工具列「列印」的列印選單（參數 + 各自印不同樣板的按鈕；按確定或儲存才寫回）</summary>
+    private PrintMenuDefinition editPrintMenu;
+
+    private void DesignPrintMenu()
+    {
+        using var dlg = new PrintMenuDesignDialog(editPrintMenu, DesignTemplate);
+        if (dlg.ShowDialog(this) == DialogResult.OK) editPrintMenu = dlg.Result;
     }
 
     // ================= 工具箱 =================
@@ -869,6 +946,16 @@ public partial class EditLayoutDialog : Form, IPickerHost
     {
         var box = new FieldBox(field);
         labelBoxes.Add(box);
+        AttachBox(box);
+        UpdateCanvasSize();
+        if (select) SetSelection(new[] { box });
+    }
+
+    /// <summary>加一個欄位的同步複本（field 由原本的欄位 ForCopy 產生）</summary>
+    private void AddCopyBox(FieldDefinition field, bool select = true)
+    {
+        var box = new FieldBox(field);
+        copyBoxes.Add(box);
         AttachBox(box);
         UpdateCanvasSize();
         if (select) SetSelection(new[] { box });
@@ -1119,9 +1206,14 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
     private void RemoveSelected()
     {
-        foreach (var box in selection.ToList())
+        // 拿掉欄位時，它的同步複本也一起拿掉（沒有原本的欄位，複本就沒有東西可以同步）
+        var removing = selection.ToList();
+        var columnsRemoved = removing.OfType<FieldBox>().Where(placed.ContainsValue).Select(b => b.Field.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        removing.AddRange(copyBoxes.Where(b => columnsRemoved.Contains(b.Field.Column) && !removing.Contains(b)));
+        foreach (var box in removing)
         {
-            if (box is FieldBox fb && !labelBoxes.Remove(fb)) placed.Remove(placed.First(p => p.Value == fb).Key);   // 文字標籤不在 placed 裡
+            if (box is FieldBox fb && !labelBoxes.Remove(fb) && !copyBoxes.Remove(fb))
+                placed.Remove(placed.First(p => p.Value == fb).Key);                 // 文字標籤、同步複本不在 placed 裡
             if (box is ButtonBox bb) buttonBoxes.Remove(bb);
             if (box is EditListBox lb) listBoxes.Remove(lb);
             canvas.Controls.Remove(box);
@@ -1211,6 +1303,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
             boxes.Add(box);
             y += Math.Max(32, box.Field.Height + 6);
         }
+        FieldBox.FitLabelWidths(boxes);                    // 一起放的標籤寬度一樣，輸入框才對齊
         if (boxes.Count > 0) SetSelection(boxes);
     }
 
@@ -1301,7 +1394,9 @@ public partial class EditLayoutDialog : Form, IPickerHost
             .ToDictionary(g => g.Key, g => g.First().Columns.Where(c => !c.IsJoin && !c.IsCustom && !c.IsIdentity).Select(c => c.Column).ToList(),
                           StringComparer.OrdinalIgnoreCase);
         // 文字標籤用畫面設計的屬性（標籤、變數名稱、字型、底色）
-        propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox { Field.IsTextLabel: false } fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
+        // 同步複本只有自己的位置、大小、標籤，其他設定在原本的欄位上改
+        propertyGrid.SelectedObjects = selection.Select(b => b is FieldBox { Field.IsSyncCopy: true } cb ? new SyncCopyView(cb.Field)
+                                                           : b is FieldBox { Field.IsTextLabel: false } fb ? new EditFieldView(fb.Field) : b.Model).ToArray();
     }
 
     private void OnCanvasMouseDown(MouseEventArgs e)
@@ -1441,10 +1536,26 @@ public partial class EditLayoutDialog : Form, IPickerHost
                 c.EditLabelFontSize = box.Field.LabelFontSize;
                 c.EditFontName = string.IsNullOrWhiteSpace(box.Field.FontName) ? null : box.Field.FontName.Trim();
                 c.EditBackColorHtml = box.Field.BackColorHtml;
+                c.EditLabelColorHtml = string.IsNullOrEmpty(box.Field.LabelColorHtml) ? null : box.Field.LabelColorHtml;
+                var copies = copyBoxes.Where(b => b.Field.Column.Equals(c.Column, StringComparison.OrdinalIgnoreCase))
+                    .Select(b => new EditFieldCopy
+                    {
+                        X = b.Field.X,
+                        Y = b.Field.Y,
+                        Width = b.Field.Width,
+                        Height = b.Field.Height,
+                        LabelWidth = b.Field.LabelWidth,
+                        Label = b.Field.Label == box.Field.Label ? null : b.Field.Label,     // 跟原本的標籤一樣就不另存，之後跟著變
+                        // 顏色跟原本的一樣就不另存（之後跟著原本的變）；"" = 複本特別設回預設（原本的有設顏色時）
+                        BackColorHtml = (b.Field.BackColorHtml ?? "") == (box.Field.BackColorHtml ?? "") ? null : b.Field.BackColorHtml ?? "",
+                        LabelColorHtml = (b.Field.LabelColorHtml ?? "") == (box.Field.LabelColorHtml ?? "") ? null : b.Field.LabelColorHtml ?? "",
+                    }).ToList();
+                c.EditCopies = copies.Count > 0 ? copies : null;
             }
             else
             {
                 c.EditVisible = false;
+                c.EditCopies = null;
             }
         }
         // 移除的 JOIN 欄位從 Grid 拿掉；寫回 Grid 本身（儲存後還要繼續編輯）時 columns 也拿掉，順序才繼續對得上
@@ -1456,6 +1567,8 @@ public partial class EditLayoutDialog : Form, IPickerHost
             removedColumns.Clear();
         }
         target.EditButtons = buttonBoxes.Select(b => b.ButtonDef).ToList();
+        target.EditPrint = string.IsNullOrWhiteSpace(editPrint?.PrintTemplate) ? null : editPrint;
+        target.EditPrintMenu = editPrintMenu?.Clone();
         target.EditLists = listBoxes.Select(b => b.ListDef).ToList();
         target.EditTextLabels = labelBoxes.Select(b => b.Field).ToList();
         target.HasEditLayout = true;
@@ -1517,7 +1630,11 @@ public partial class EditLayoutDialog : Form, IPickerHost
                                                    : string.IsNullOrWhiteSpace(connectionString) ? copy.TableName : copy.FullTableName(DbDialect.Of(connectionString)));
         using var dlg = new RecordNavigatorDialog(navigator, "預覽：" + (copy.Title ?? copy.TableName), fields, copy.EditFormSize, connectionString,
                                                   copy.EditButtons, FormDefinition.DefaultFolder, copy.EffectiveColumn, copy.EditLists,
-                                                  copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels, saveLists: false);
+                                                  copy.EditBackColor, copy.EditFont(screenFont), copy.EditTextLabels, saveLists: false)
+        {
+            ToolbarPrint = copy.EditPrint,
+            ToolbarPrintMenu = copy.EditPrintMenu,
+        };
         dlg.ShowDialog(this);
     }
 
@@ -1566,6 +1683,38 @@ public partial class EditLayoutDialog : Form, IPickerHost
 }
 
 /// <summary>版面設計器屬性面板顯示的內容：只開放跟編輯視窗版面有關的屬性</summary>
+/// <summary>屬性面板顯示的同步複本：只有自己的標籤、位置、大小；輸入方式、唯讀等設定跟原本的欄位一樣</summary>
+public class SyncCopyView
+{
+    private readonly FieldDefinition field;
+    public SyncCopyView(FieldDefinition f) => field = f;
+
+    [DisplayName("欄位名稱"), ReadOnly(true),
+     Description("同步複本：同一個欄位再放一個，執行時兩邊的值互相同步（任一邊改了另一邊跟著變），存檔只存一份。輸入方式、唯讀、執行後動作等設定在原本的欄位上改")]
+    public string Column => field.Column + "（同步複本）";
+
+    [DisplayName("標籤"), Description("這個複本顯示的欄位名稱；跟原本的欄位一樣時，原本的標籤改了這裡也跟著變")]
+    public string Label { get => field.Label; set => field.Label = value; }
+
+    [DisplayName("標籤寬度"), Description("輸入框左邊標籤區的寬度；拖欄位的左邊緣也可以調整")]
+    public int LabelWidth { get => field.LabelWidth; set => field.LabelWidth = Math.Clamp(value, 0, 400); }
+
+    [DisplayName("輸入框寬度")]
+    public int Width { get => field.Width; set => field.Width = Math.Max(30, value); }
+
+    [DisplayName("輸入框高度"), Description("最低 26；拉高（超過 32）後文字框會變成多行輸入")]
+    public int Height { get => field.Height; set => field.Height = Math.Max(FieldDefinition.DefaultHeight, value); }
+
+    [DisplayName("底色"), DefaultValue(typeof(Color), ""), Description("這個複本輸入框的底色；跟原本的欄位一樣時，原本的底色改了這裡也跟著變。在屬性上按右鍵選「重設」= 預設的白底")]
+    public Color BackColor { get => field.BackColor; set => field.BackColor = value; }
+
+    [DisplayName("標籤字體顏色"), DefaultValue(typeof(Color), ""), Description("這個複本標籤文字的顏色；沒設定（Empty）= 自動（底色淺用黑字、深用白字）")]
+    public Color LabelForeColor { get => field.LabelForeColor; set => field.LabelForeColor = value; }
+
+    public int X { get => field.X; set => field.X = Math.Max(0, value); }
+    public int Y { get => field.Y; set => field.Y = Math.Max(0, value); }
+}
+
 public class EditFieldView : IPickerField
 {
     private readonly FieldDefinition field;
@@ -1586,7 +1735,7 @@ public class EditFieldView : IPickerField
     [DisplayName("輸入框寬度")]
     public int Width { get => field.Width; set => field.Width = Math.Max(30, value); }
 
-    [DisplayName("輸入框高度"), Description("預設 26；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。拖欄位的下邊緣也可以調整")]
+    [DisplayName("輸入框高度"), Description("新放上版面的欄位預設 30（最低 26）；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。拖欄位的下邊緣也可以調整")]
     public int Height { get => field.Height; set => field.Height = Math.Max(FieldDefinition.DefaultHeight, value); }
 
     [DisplayName("輸入方式"), Description("自動：依資料型別用文字框、勾選框或日期；下拉選單、選項按鈕：從選項中挑選；日期選擇：日期挑選器；勾選框：打勾 / 不打勾")]
@@ -1676,6 +1825,10 @@ public class EditFieldView : IPickerField
 
     [DisplayName("底色"), DefaultValue(typeof(Color), ""), Description("輸入框的底色；沒設定（Empty）就是預設的白底。在屬性上按右鍵選「重設」可以還原")]
     public Color BackColor { get => field.BackColor; set => field.BackColor = value; }
+
+    [DisplayName("標籤字體顏色"), DefaultValue(typeof(Color), ""),
+     Description("輸入框左邊標籤文字的顏色；沒設定（Empty）= 自動（底色淺用黑字、深用白字）。在屬性上按右鍵選「重設」可以還原")]
+    public Color LabelForeColor { get => field.LabelForeColor; set => field.LabelForeColor = value; }
 
     [DisplayName("X")]
     public int X { get => field.X; set => field.X = Math.Max(0, value); }

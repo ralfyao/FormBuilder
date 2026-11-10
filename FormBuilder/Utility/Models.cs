@@ -188,7 +188,9 @@ public class FormDefinition
     private void MakePathsRelative(string oldFolder, string newFolder)
     {
         string Fix(string file) => ButtonRunner.RelativePath(ButtonRunner.ResolvePath(file?.Trim(), oldFolder), newFolder) ?? file;
-        foreach (var b in Buttons.Concat(Grids.SelectMany(g => g.EditButtons)).Concat(ColumnButtons()))
+        foreach (var b in Buttons.Concat(Grids.SelectMany(g => g.EditButtons)).Concat(ColumnButtons())
+                                 .Concat(Grids.Where(g => g.EditPrint != null).Select(g => g.EditPrint))
+                                 .Concat(Grids.SelectMany(g => g.EditPrintMenu?.Buttons ?? new List<ButtonDefinition>())))
         {
             b.TargetForm = Fix(b.TargetForm);
             if (!string.IsNullOrWhiteSpace(b.TargetFormCases))
@@ -224,6 +226,13 @@ public class FontNameConverter : StringConverter
 public static class LabelGeometry
 {
     public static int Height(Font font) => Math.Max(FieldDefinition.DefaultHeight, font.Height + 8);
+
+    /// <summary>標籤高度跟著輸入框（多行輸入框太高時標籤留在上面，不跟著往下置中）</summary>
+    public static int Height(Font font, int inputHeight) => Math.Max(Height(font), Math.Min(inputHeight, RoundedStyle.TallThreshold));
+
+    /// <summary>剛好放得下標籤文字的寬度（新放上畫面的欄位標籤不留多餘的空白）</summary>
+    public static int FitWidth(string text, Font font) =>
+        string.IsNullOrEmpty(text) ? 0 : TextRenderer.MeasureText(text, font).Width + 2;
 
     /// <summary>標籤的字型：欄位有設「字型」「標籤字體大小」就用它們，沒有就跟畫面字型一樣</summary>
     public static Font Font(FieldDefinition f, Font baseFont) => FontPick.With(baseFont, f.FontName, f.LabelFontSize);
@@ -393,10 +402,14 @@ public class FieldDefinition : IPickerField
     public int Width { get; set; } = 160;
 
     [Category("畫面"), DisplayName("輸入框高度"),
-     Description("預設 26；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。設計畫面上拖欄位的下邊緣也可以調整")]
+     Description("新放上畫面的欄位預設 30（最低 26）；拉高（超過 32）後文字框會變成多行輸入，適合備註；下拉選單、日期的高度固定。設計畫面上拖欄位的下邊緣也可以調整")]
     public int Height { get; set; } = DefaultHeight;
 
+    /// <summary>輸入框最低高度（舊版面沒存高度時也用這個）</summary>
     public const int DefaultHeight = 26;
+
+    /// <summary>新放上畫面的欄位的輸入框高度</summary>
+    public const int NewFieldHeight = 30;
 
     [Category("畫面"), DisplayName("標籤寬度"), Description("輸入框左邊標籤區的寬度；設計畫面上拖欄位的左邊緣也可以調整")]
     public int LabelWidth { get; set; } = FieldBox.DefaultLabelWidth;
@@ -515,6 +528,34 @@ public class FieldDefinition : IPickerField
     /// <summary>複製一份（同一個欄位再放一個當查詢條件用）</summary>
     public FieldDefinition Clone() => (FieldDefinition)MemberwiseClone();
 
+    /// <summary>
+    /// 編輯視窗上這個欄位的同步複本（同一個欄位再放幾個，位置、大小、標籤各自設定）：
+    /// 執行時每個複本一個輸入框，跟原本的輸入框互相同步，存檔只存一份（GridColumnDefinition.EditCopies 帶過來）
+    /// </summary>
+    [Browsable(false), JsonIgnore]
+    public List<EditFieldCopy> Copies { get; set; }
+
+    /// <summary>編輯視窗版面設計器上的同步複本（欄位方塊標 [同步]）</summary>
+    [Browsable(false), JsonIgnore]
+    public bool IsSyncCopy { get; set; }
+
+    /// <summary>照複本的位置、大小、標籤做一份欄位定義（其他設定跟原本的欄位一樣）</summary>
+    public FieldDefinition ForCopy(EditFieldCopy copy)
+    {
+        var f = Clone();
+        f.Copies = null;
+        f.IsSyncCopy = true;
+        f.X = copy.X;
+        f.Y = copy.Y;
+        f.Width = copy.Width > 0 ? copy.Width : Width;
+        f.Height = copy.Height > 0 ? copy.Height : Height;
+        f.LabelWidth = copy.LabelWidth;
+        f.Label = copy.Label ?? Label;
+        f.BackColorHtml = copy.BackColorHtml ?? BackColorHtml;
+        f.LabelColorHtml = copy.LabelColorHtml ?? LabelColorHtml;
+        return f;
+    }
+
     [Category("外觀"), DisplayName("字體大小"), DefaultValue(0f),
      Description("輸入框文字的大小（點），0 = 預設（9）。字放大時請一起把「輸入框高度」拉高，文字才不會被切掉")]
     public float FontSize { get; set; }
@@ -538,6 +579,20 @@ public class FieldDefinition : IPickerField
         get => ColorText.Parse(BackColorHtml);
         set => BackColorHtml = ColorText.Format(value);
     }
+
+    [Browsable(false)]
+    public string LabelColorHtml { get; set; }
+
+    [JsonIgnore, Category("外觀"), DisplayName("標籤字體顏色"), DefaultValue(typeof(Color), ""),
+     Description("輸入框左邊標籤文字的顏色（文字標籤就是文字本身的顏色）；沒設定（Empty）= 自動（底色淺用黑字、深用白字）。在屬性上按右鍵選「重設」可以還原")]
+    public Color LabelForeColor
+    {
+        get => ColorText.Parse(LabelColorHtml);
+        set => LabelColorHtml = ColorText.Format(value);
+    }
+
+    /// <summary>標籤實際用的文字顏色：有設定就用設定的，沒有就用 auto（依畫面底色決定的黑字 / 白字）</summary>
+    public Color LabelColorOr(Color auto) => LabelForeColor.IsEmpty ? auto : LabelForeColor;
 }
 
 /// <summary>
@@ -570,9 +625,15 @@ public class GridDefinition
     public bool IsSqlList => !string.IsNullOrWhiteSpace(Sql);
 
     [Category("雙擊開啟畫面"), DisplayName("畫面定義檔"),
-     Description("SQL 清單才有作用：在清單上雙擊一列就開啟這個畫面，並把「傳入參數」帶過去（選取視窗模式時雙擊仍是選取帶回）。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Description("單頭清單、SQL 清單用：在清單上雙擊一列就開啟這個畫面，並把「傳入參數」帶過去（選取視窗模式時雙擊仍是選取帶回）。"
+               + "單頭清單設了這個，雙擊就不開本畫面的編輯視窗，改開這個畫面。只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
      Editor("System.Windows.Forms.Design.FileNameEditor, System.Design", "System.Drawing.Design.UITypeEditor, System.Drawing")]
     public string OpenForm { get; set; }
+
+    [Category("雙擊開啟畫面"), DisplayName("直接開編輯視窗"), DefaultValue(false),
+     Description("True = 不打開整個畫面，用「傳入參數」查到的那一筆直接開對方畫面的編輯視窗（對方畫面要有單頭清單），"
+               + "例如帳款清單雙擊開收款畫面那張單的編輯視窗；關閉後這邊的清單重新查詢。False = 打開整個畫面")]
+    public bool OpenAsEditWindow { get; set; }
 
     [Category("雙擊開啟畫面"), DisplayName("傳入參數"),
      Description("雙擊一列時帶給對方畫面的值，用逗號或換行分隔「對方欄位=值」：@清單欄位（雙擊那一列的值，清單上沒有的取視窗上的欄位），"
@@ -667,6 +728,20 @@ public class GridDefinition
     /// <summary>編輯視窗上的按鈕（版面設計器從工具箱拖進來的）</summary>
     [Browsable(false)]
     public List<ButtonDefinition> EditButtons { get; set; } = new();
+
+    /// <summary>
+    /// 編輯視窗工具列「列印」用的列印樣板（版面設計器的「列印樣板…」設計，存成動作 = 列印報表的按鈕，不放在版面上）；
+    /// null 或沒有樣板檔 = 工具列「列印」印簡易格式（標籤：值）
+    /// </summary>
+    [Browsable(false)]
+    public ButtonDefinition EditPrint { get; set; }
+
+    /// <summary>
+    /// 編輯視窗工具列「列印」的列印選單：有按鈕時按「列印」先開列印視窗（上面是參數，下面是各自列印不同樣板的按鈕）；
+    /// null 或沒有按鈕 = 照 EditPrint 印
+    /// </summary>
+    [Browsable(false)]
+    public PrintMenuDefinition EditPrintMenu { get; set; }
 
     /// <summary>編輯視窗的底色（版面設計器的「背景色」）；空白 = 預設的灰色</summary>
     [Browsable(false)]
@@ -764,6 +839,41 @@ public class GridDefinition
             .Where(p => p.Length == 2 && p[0] != "" && p[1] != "")
             .Select(p => (p[0], p[1]))
             .ToList();
+}
+
+/// <summary>編輯視窗的列印選單：按工具列「列印」開的視窗，上面是參數（使用者輸入或帶資料庫的值），下面每個按鈕印一個樣板</summary>
+public class PrintMenuDefinition
+{
+    /// <summary>視窗標題；空白 = 「列印」</summary>
+    public string Title { get; set; }
+    public List<PrintMenuParam> Params { get; set; } = new();
+    /// <summary>每個按鈕：Text = 按鈕文字，PrintTemplate = 要印的樣板（Action 一律是列印報表）</summary>
+    public List<ButtonDefinition> Buttons { get; set; } = new();
+
+    [JsonIgnore]
+    public bool HasButtons => Buttons.Any(b => !string.IsNullOrWhiteSpace(b.Text));
+
+    public PrintMenuDefinition Clone() => new()
+    {
+        Title = Title,
+        Params = Params.Select(p => p.Clone()).ToList(),
+        Buttons = Buttons.Select(b => b.Clone()).ToList(),
+    };
+}
+
+/// <summary>列印選單的一個參數</summary>
+public class PrintMenuParam
+{
+    /// <summary>參數名稱（樣板「列印參數」用同樣的名稱）</summary>
+    public string Name { get; set; }
+    /// <summary>視窗上顯示的標籤；空白 = 名稱</summary>
+    public string Label { get; set; }
+    /// <summary>預設值：固定文字、@欄位（目前這筆的值）、或 SELECT（@欄位 取目前這筆；查第一筆第一個欄位）；空白 = 空的</summary>
+    public string Value { get; set; }
+    /// <summary>true = 只顯示，使用者不能改</summary>
+    public bool ReadOnly { get; set; }
+
+    public PrintMenuParam Clone() => (PrintMenuParam)MemberwiseClone();
 }
 
 /// <summary>Grid 的一個 JOIN：用本身資料表的欄位對應關聯資料表的欄位（LEFT JOIN，沒對到的列照樣顯示，欄位空白）</summary>
@@ -1169,6 +1279,10 @@ public class ButtonDefinition
                + "對方畫面沒有新增權限時照一般方式打開。有回傳對應（選取視窗）時沒有作用")]
     public bool OpenAsInsert { get; set; }
 
+    /// <summary>清單「雙擊開啟畫面」設了「直接開編輯視窗」：對方畫面不顯示，用傳入參數查到的第一筆直接開它的編輯視窗</summary>
+    [Browsable(false), JsonIgnore]
+    public bool OpenAsEditWindow { get; set; }
+
     [Category("開啟畫面"), DisplayName("開新視窗"),
      Description("False = ERP 系統裡開在外框的分頁（設計工具、預覽沒有外框，一律開新視窗）；True = 一律開成獨立的新視窗。"
                + "有回傳對應（選取視窗）或「存檔後關閉並重新整理」時本來就是獨立視窗")]
@@ -1328,6 +1442,13 @@ public class GridColumnDefinition
     /// <summary>公式結果的小數位數（四捨五入）；-1 = 自動（最多 4 位，去掉尾端的 0）。整數欄位一律取到整數</summary>
     public int Decimals { get; set; } = -1;
 
+    /// <summary>Grid 上顯示千分號；null = 自動（decimal、numeric、money、float 加，整數不加）</summary>
+    public bool? Thousands { get; set; }
+
+    /// <summary>這個欄位實際上要不要加千分號（只有數字欄位才會加）</summary>
+    [JsonIgnore]
+    public bool ShowsThousands => Thousands ?? TypeHelper.UsesThousands(DataType, IsKey);
+
     [JsonIgnore]
     public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
 
@@ -1390,10 +1511,34 @@ public class GridColumnDefinition
     /// <summary>編輯視窗輸入框的字體大小、底色（同 FieldDefinition.FontSize / BackColorHtml）</summary>
     public float EditFontSize { get; set; }
     public string EditBackColorHtml { get; set; }
+    /// <summary>編輯視窗標籤的字體顏色（同 FieldDefinition.LabelColorHtml）；null = 自動</summary>
+    public string EditLabelColorHtml { get; set; }
     /// <summary>編輯視窗標籤的字體大小（同 FieldDefinition.LabelFontSize）</summary>
     public float EditLabelFontSize { get; set; }
     /// <summary>編輯視窗欄位（標籤與輸入框）的字型（同 FieldDefinition.FontName）</summary>
     public string EditFontName { get; set; }
+
+    /// <summary>
+    /// 編輯視窗上同一個欄位再放的同步複本（版面設計器 Ctrl+C / Ctrl+V）：執行時兩邊的值互相同步，存檔只存一份；
+    /// null = 沒有複本
+    /// </summary>
+    public List<EditFieldCopy> EditCopies { get; set; }
+}
+
+/// <summary>編輯視窗上一個欄位的同步複本：只有自己的位置、大小、標籤，其他設定（輸入方式、唯讀…）跟原本的欄位一樣</summary>
+public class EditFieldCopy
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+    /// <summary>輸入框寬度、高度；0 = 跟原本的欄位一樣</summary>
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int LabelWidth { get; set; }
+    /// <summary>標籤；null = 跟原本的欄位一樣</summary>
+    public string Label { get; set; }
+    /// <summary>輸入框底色、標籤字體顏色；null = 跟原本的欄位一樣</summary>
+    public string BackColorHtml { get; set; }
+    public string LabelColorHtml { get; set; }
 }
 
 /// <summary>從樹狀清單拖曳整個資料表時帶的資料</summary>
@@ -1468,6 +1613,7 @@ public static class TypeHelper
     {
         decimal d => d.ToString("N" + ((decimal.GetBits(d)[3] >> 16) & 0xFF), CultureInfo.CurrentCulture),
         double or float => Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("#,##0.##########", CultureInfo.CurrentCulture),
+        int or long or short or byte => Convert.ToInt64(value, CultureInfo.InvariantCulture).ToString("N0", CultureInfo.CurrentCulture),
         null or DBNull => "",
         _ => Convert.ToString(value, CultureInfo.CurrentCulture),
     };

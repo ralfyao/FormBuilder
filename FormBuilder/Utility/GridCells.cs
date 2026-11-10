@@ -271,7 +271,7 @@ public static class GridCells
 
     /// <summary>
     /// Grid 的「執行後動作」：一行一組「畫面欄位=公式」，公式可以用 SUM(欄位) 等彙總函數（aggregateOf）和畫面上的欄位（valueOf）。
-    /// 文字標籤、只當查詢條件的欄位一直顯示計算結果；資料表的欄位只在 fillData（新增、修改）時填，瀏覽時顯示資料庫裡存的值
+    /// 文字標籤、只當查詢條件的欄位一直顯示計算結果（文字標籤算數字時結果接在標籤文字後面）；資料表的欄位只在 fillData（新增、修改）時填，瀏覽時顯示資料庫裡存的值
     /// </summary>
     public static void RunAfterChange(string text, IDictionary<FieldDefinition, Control> inputs, bool fillData,
                                       Func<string, object> valueOf, Func<string, string, decimal> aggregateOf)
@@ -295,8 +295,12 @@ public static class GridCells
                 continue;
             }
             decimal? value = Formula.Evaluate(formula, valueOf, aggregateOf);
-            InputHelper.SetValue(inputs[f], value == null ? (display ? "" : null)
-                                          : Formula.Display(value.Value, integer ? 0 : f.Decimals));
+            string shown = value == null ? (display ? "" : null) : Formula.Display(value.Value, integer ? 0 : f.Decimals);
+            // 文字標籤算數字：保留標籤原本的文字，結果接在後面（例如 Total Amount 12,345.00）；
+            // 用 & 串接的文字公式照公式顯示，不另外接
+            if (f.IsTextLabel && !string.IsNullOrWhiteSpace(f.Label))
+                shown = string.IsNullOrEmpty(shown) ? f.Label : f.Label.TrimEnd() + " " + shown;
+            InputHelper.SetValue(inputs[f], shown);
         }
     }
 
@@ -385,15 +389,15 @@ public static class GridCells
     }
 
     /// <summary>
-    /// 金額欄位（decimal、numeric、money、float，主鍵除外）顯示千分號；輸入時打不打千分號都可以。每個 Grid 呼叫一次
+    /// 金額欄位（decimal、numeric、money、float，主鍵除外；單身欄位設定勾了「千分位」的整數欄位也算）顯示千分號；輸入時打不打千分號都可以。每個 Grid 呼叫一次
     /// </summary>
     public static void HookThousands(DataGridView grid)
     {
         static bool Uses(DataGridViewColumn col) =>
-            col?.Tag is GridColumnDefinition c && TypeHelper.UsesThousands(c.DataType, c.IsKey) && col is DataGridViewTextBoxColumn;
+            col?.Tag is GridColumnDefinition c && c.ShowsThousands && col is DataGridViewTextBoxColumn;
         grid.CellFormatting += (s, e) =>
         {
-            if (e.ColumnIndex < 0 || e.Value is not (decimal or double or float) || !Uses(grid.Columns[e.ColumnIndex])) return;
+            if (e.ColumnIndex < 0 || e.Value is not (decimal or double or float or int or long or short or byte) || !Uses(grid.Columns[e.ColumnIndex])) return;
             e.Value = TypeHelper.Thousands(e.Value);
             e.FormattingApplied = true;
         };

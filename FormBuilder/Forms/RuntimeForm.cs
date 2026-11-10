@@ -67,6 +67,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     public bool CloseAfterSave { get; set; }
     /// <summary>打開後直接新增（不先用傳入參數查詢）；傳入參數照樣帶進欄位（別的畫面的「開啟畫面」按鈕設了「開啟後直接新增」）</summary>
     public bool StartInsert { get; set; }
+    /// <summary>
+    /// 只開編輯視窗（別的畫面清單的「雙擊開啟畫面」設了「直接開編輯視窗」）：這個畫面本身不顯示，
+    /// 用傳入參數查到第一筆就開它的編輯視窗，編輯視窗關了這個畫面也關
+    /// </summary>
+    public bool EditWindowOnly { get; set; }
     /// <summary>這個視窗開著的期間有沒有存檔成功過（開啟它的畫面據此重新整理）</summary>
     public bool Saved { get; private set; }
     /// <summary>最後存檔那筆的主鍵（刪除時是 null）</summary>
@@ -140,12 +145,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Text = f.Label,
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
-                ForeColor = labelColor,
+                ForeColor = f.LabelColorOr(labelColor),       // 標籤字體顏色
                 Font = LabelGeometry.Font(f, body.Font),                                              // 標籤字體大小
-                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font), f.Height)),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f);
-            if (input is RadioGroup || f.IsTextLabel) input.ForeColor = labelColor;
+            if (input is RadioGroup) input.ForeColor = labelColor;
+            if (f.IsTextLabel) input.ForeColor = f.LabelColorOr(labelColor);
             InputHelper.ApplyLook(f, input, body.Font);      // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
@@ -230,11 +236,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (hit.Type == DataGridViewHitTestType.None) EditMasterRow(-1);
             };
             // 有單頭清單時，新增、修改、刪除、首筆～末筆都移到雙擊後的編輯視窗
-            foreach (ToolStripItem item in new ToolStripItem[] { btnInsert, btnModify, btnDelete, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast })
+            foreach (ToolStripItem item in new ToolStripItem[] 
+            { btnInsert, btnModify, btnDelete, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast })
+            {
                 item.Visible = false;
+            }
         }
         // Grid 的執行後動作：資料有變動就重算（例如 AMOUNT=SUM(金額)、標籤8=SUM(金額)）
-        foreach (var (g, grid) in AllGrids()) GridCells.HookDataChanged(grid, () => RunGridAfterChange(g, grid));
+        foreach (var (g, grid) in AllGrids()) 
+        { 
+            GridCells.HookDataChanged(grid, () => RunGridAfterChange(g, grid)); 
+        }
         // 執行後動作的欄位名稱寫錯會一直算不出來：打開時檢查一次，有錯就提醒
         var afterChangeProblems = def.Grids.Where(g => !string.IsNullOrWhiteSpace(g.AfterChange))
             .SelectMany(g => GridCells.CheckAfterChange(g.AfterChange, inputs.Keys.Select(f => f.Column), def.Grids.SelectMany(x => x.Columns).Select(c => c.Column))
@@ -285,9 +297,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 // 畫面上沒有同名的單頭欄位，但單頭清單有同名的欄位：用清單欄位當條件查詢
                 else if (HasMasterTable && ListParams().Count > 0)
                     RunQuery(ListParamCondition);
-                // 只放單頭清單、沒有可以輸入查詢條件的單頭欄位：打開就列出資料
-                else if (HasMasterTable && listDef != null && def.Fields.All(f => f.IsCalculated))
+                // 只開編輯視窗卻沒有條件可查：不要查全部（會開到不相干的那筆）
+                else if (EditWindowOnly)
+                {
+                    EndEditWindowOnly("傳入參數裡沒有這個畫面的欄位，找不到要開的那一筆。請檢查「雙擊開啟畫面」的「傳入參數」"
+                                      + "（左邊要寫對方畫面的欄位名稱，例如 單號=@連結單號）。");
+                    return;
+                }
+                // 沒有其他條件：打開就查全部（跟按「查詢」不輸入條件直接「確定」一樣，最多 5000 筆）
+                else if (HasMasterTable)
                     RunQuery();
+                if (EditWindowOnly) OpenEditWindowOnly();
             };
     }
 
@@ -589,7 +609,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsGridPicker(b) ? mode == Mode.Detail || InlineDetail
-                    : ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(b.Action));
+                    : ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(ActionOf(b)));
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         foreach (var (g, grid) in AllGrids()) RunGridAfterChange(g, grid);   // 進入新增、修改時把 Grid 的加總填進資料表欄位
         if (mode == Mode.Detail) details[0].Grid.Focus();
@@ -997,12 +1017,18 @@ public partial class RuntimeForm : Form, IRecordNavigator
         _ => mode == Mode.Browse,
     };
 
+    /// <summary>動作設成「查詢」但有寫 SELECT 的按鈕：當成「自訂查詢」（不然寫的 SQL 不會用到）</summary>
+    private static ButtonAction ActionOf(ButtonDefinition b) =>
+        b.Action == ButtonAction.查詢 && b.Sql?.TrimStart() is { } sql
+        && (sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("WITH", StringComparison.OrdinalIgnoreCase))
+            ? ButtonAction.自訂查詢 : b.Action;
+
     private void RunButton(ButtonDefinition b)
     {
         if (!ButtonRunner.CheckAllowed(b, perm)) return;
         // 自訂查詢的第一下只是進入輸入條件，不用確認；SQL 沒用到畫面上的欄位時沒有條件可輸入，按一下就查
-        bool oneStep = b.Action == ButtonAction.自訂查詢 && !UsesScreenFields(b.Sql);
-        bool startingQuery = b.Action == ButtonAction.自訂查詢 && !oneStep && !(mode == Mode.Query && customQuery == b);
+        bool oneStep = ActionOf(b) == ButtonAction.自訂查詢 && !UsesScreenFields(b.Sql);
+        bool startingQuery = ActionOf(b) == ButtonAction.自訂查詢 && !oneStep && !(mode == Mode.Query && customQuery == b);
         if (!startingQuery && !PassesPreCheck(b)) return;
         if (!startingQuery && !ButtonRunner.Confirm(b)) return;
         // 「執行後動作」：先對選取的資料執行 SQL，成功了才做後續的動作（例如開啟畫面）
@@ -1016,7 +1042,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
             if (!RunSqlOnSelection(b, b.PreActionSql, quiet: true, values => preResult = values)) return;
         }
-        switch (b.Action)
+        switch (ActionOf(b))
         {
             case ButtonAction.查詢: BeginQuery(); break;
             case ButtonAction.自訂查詢:
@@ -1196,8 +1222,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// </summary>
     private void HookSqlListOpen(GridDefinition g, DataGridView grid)
     {
-        var button = ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams);
-        bool editable = g.HasEditLayout;                   // 設計過編輯視窗版面：雙擊開編輯視窗（優先於雙擊開啟畫面）
+        var button = ButtonRunner.ListOpenButton(g.Title, g.OpenForm, g.OpenParams, g.OpenAsEditWindow);
+        bool editable = g.HasEditLayout;                  // 設計過編輯視窗版面：雙擊開編輯視窗（優先於雙擊開啟畫面）
         if (button == null && !editable) return;
         grid.CellDoubleClick += (s, e) =>
         {
@@ -1216,7 +1242,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 if (field != null) return GetValue(field);
                 if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
                 return openParams.TryGetValue(name, out var v) ? v : null;
-            }, connectionString: def.ConnectionString);
+            }, onSaved: _ => LoadSqlLists(), connectionString: def.ConnectionString);
         };
     }
 
@@ -2330,6 +2356,21 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         // 直接新增的空白列、還沒存的列：在清單上輸入，不開編輯視窗
         if (listDef.AllowInsert && index >= 0 && (index >= results.Rows.Count ? index < listGrid.Rows.Count : IsPendingRow(results.Rows[index]))) return;
+        // 設了「雙擊開啟畫面」：開別的畫面（或它的編輯視窗），不開本畫面的編輯視窗；空白處雙擊照樣開空白的編輯視窗新增
+        if (index >= 0 && index < results.Rows.Count
+            && ButtonRunner.ListOpenButton(listDef.Title ?? def.Title, listDef.OpenForm, listDef.OpenParams, listDef.OpenAsEditWindow) is { } open)
+        {
+            if (index != current) MoveTo(index);
+            var row = results.Rows[index];
+            ButtonRunner.OpenForm(open, def.SourcePath, this, name =>
+            {
+                if (row.Table.Columns.Contains(name)) return row[name];
+                var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (field != null) return GetValue(field);
+                return openParams.TryGetValue(name, out var v) ? v : null;
+            }, onSaved: RefreshResults, connectionString: def.ConnectionString);
+            return;
+        }
         // 清單選了多筆、雙擊（或 Enter）的是其中一筆：每筆各開一個編輯視窗
         var rows = SelectedRowIndexes();
         if (index >= 0 && rows.Count > 1 && rows.Contains(index))
@@ -2339,6 +2380,38 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         if (index >= 0 && index < results.Rows.Count && index != current) MoveTo(index);
         OpenEditWindow(index >= 0 && index < results.Rows.Count ? results.Rows[index] : null);
+    }
+
+    /// <summary>只開編輯視窗：查到的第一筆開編輯視窗，關了就關掉這個（看不到的）畫面；查不到或沒有單頭清單時提醒後關閉</summary>
+    private void OpenEditWindowOnly()
+    {
+        if (listDef == null)
+        {
+            EndEditWindowOnly($"「{def.Title}」沒有單頭清單，沒有編輯視窗可以開。請把「直接開編輯視窗」改成 False，改成打開整個畫面。");
+            return;
+        }
+        if (!HasCurrent)
+        {
+            EndEditWindowOnly($"在「{def.Title}」找不到這筆資料。");
+            return;
+        }
+        OpenEditWindow(results.Rows[current]);
+        var dlg = editWindows.LastOrDefault().Dialog;
+        if (dlg == null)
+        {
+            Close();
+            return;
+        }
+        dlg.StartPosition = FormStartPosition.Manual;
+        var area = Screen.FromPoint(MousePosition).WorkingArea;           // 這個畫面在看不到的地方：編輯視窗放在滑鼠所在螢幕的中間
+        dlg.Location = new Point(area.Left + Math.Max(0, (area.Width - dlg.Width) / 2), area.Top + Math.Max(0, (area.Height - dlg.Height) / 2));
+        dlg.FormClosed += (s, e) => BeginInvoke(Close);
+    }
+
+    private void EndEditWindowOnly(string message)
+    {
+        MessageBox.Show(message, def.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        BeginInvoke(Close);
     }
 
     /// <summary>開著的編輯視窗（主畫面關閉時一起關；同一筆不重複開）</summary>
@@ -2374,7 +2447,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var cursor = new RecordCursor(this, row);
         var dlg = new RecordNavigatorDialog(cursor, def.Title, fields, listDef.EditFormSize, def.ConnectionString, listDef.EditButtons, def.SourcePath,
                                             listDef.EffectiveColumn, listDef.EditLists, listDef.EditBackColor, listDef.EditFont(body.Font),
-                                            listDef.EditTextLabels.Select(f => f.Clone()).ToList());
+                                            listDef.EditTextLabels.Select(f => f.Clone()).ToList())
+        {
+            ToolbarPrint = listDef.EditPrint,             // 工具列「列印」照編輯視窗版面設計的列印樣板印
+            ToolbarPrintMenu = listDef.EditPrintMenu,     // 有列印選單時先開列印視窗（參數 + 各樣板的按鈕）
+        };
         // 多個視窗錯開排列，才看得到後面的
         var owner = (TopLevelControl as Form) ?? this;
         int open = editWindows.Count(w => !w.Dialog.IsDisposed);

@@ -608,13 +608,14 @@ public static class ButtonRunner
     }
 
     /// <summary>清單的「雙擊開啟畫面」轉成「開啟畫面」按鈕；沒設定回傳 null</summary>
-    public static ButtonDefinition ListOpenButton(string title, string openForm, string openParams) =>
+    public static ButtonDefinition ListOpenButton(string title, string openForm, string openParams, bool editWindow = false) =>
         string.IsNullOrWhiteSpace(openForm) ? null : new ButtonDefinition
         {
             Text = title,
             Action = ButtonAction.開啟畫面,
             TargetForm = openForm.Trim(),
             OpenParams = openParams,
+            OpenAsEditWindow = editWindow,
         };
 
     /// <summary>
@@ -780,6 +781,20 @@ public static class ButtonRunner
                 return;
             }
             var returns = ParsePairs(b.ReturnMap).ToList();
+            if (returns.Count == 0 && b.OpenAsEditWindow)
+            {
+                // 只開編輯視窗：對方畫面放在看不到的地方，查到資料後開編輯視窗，編輯視窗關了就跟著關
+                var hidden = new RuntimeForm(target, parameters, pickMode: false)
+                {
+                    EditWindowOnly = true,
+                    ShowInTaskbar = false,
+                    StartPosition = FormStartPosition.Manual,
+                    Location = new Point(-32000, -32000),
+                };
+                hidden.FormClosed += (s, e) => { if (hidden.Saved) onSaved?.Invoke(hidden.SavedKey ?? new Dictionary<string, object>()); };
+                hidden.Show((owner as Control)?.TopLevelControl ?? owner);
+                return;
+            }
             if (returns.Count == 0 && b.RefreshAfterSave)
             {
                 // 等使用者存檔（存檔成功會自動關閉）或關閉視窗，再讓原畫面重新整理
@@ -965,10 +980,55 @@ public static class ButtonRunner
             MessageBox.Show(ex.Message + Environment.NewLine + "請先在設計畫面雙擊這個按鈕，設計並儲存列印樣板。", "列印");
             return;
         }
+        // 樣板有好幾個語系：先選這次要印哪個語系
+        if (template.Languages.Count > 0)
+        {
+            string language = ChooseLanguage(template, b.PrintTemplate, owner);
+            if (language == null) return;
+            template = template.ForLanguage(language);
+        }
         // 選取的資料是單身那個資料表的才拿來過濾單身
         if (selected != null && template.Detail != null && selected.Count > 0
             && !selected[0].Table.TableName.Equals(template.Detail.TableName, StringComparison.OrdinalIgnoreCase)) selected = null;
         PrintRunner.Preview(template, Path.GetFileNameWithoutExtension(b.PrintTemplate).Replace(".print", ""), connectionString, records, owner, selected);
+    }
+
+    /// <summary>每個樣板上次選的語系（同一次執行中，下次列印預設選它）</summary>
+    private static readonly Dictionary<string, string> lastLanguages = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>列印前選語系：小視窗列出樣板的語系（雙擊或按「確定」）；取消回傳 null</summary>
+    private static string ChooseLanguage(PrintTemplate template, string key, IWin32Window owner)
+    {
+        var names = template.LanguageNames;
+        using var form = new Form
+        {
+            Text = "選擇列印語系",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(300, Math.Min(400, 90 + names.Count * 22)),
+            Font = new Font("Microsoft JhengHei UI", 10f),
+        };
+        var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+        list.Items.AddRange(names.ToArray());
+        lastLanguages.TryGetValue(key ?? "", out var last);
+        int index = last == null ? 0 : names.FindIndex(n => n.Equals(last, StringComparison.OrdinalIgnoreCase));
+        list.SelectedIndex = Math.Max(0, index);
+        var ok = new Button { Text = "確定", DialogResult = DialogResult.OK, Width = 80, Height = 30 };
+        var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 80, Height = 30 };
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 42, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
+        bottom.Controls.AddRange(new Control[] { cancel, ok });
+        form.Controls.Add(list);
+        form.Controls.Add(bottom);
+        form.Controls.Add(new Label { Text = "這個樣板有好幾個語系，要印哪一個？", Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft });
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        list.DoubleClick += (s, e) => { if (list.SelectedIndex >= 0) form.DialogResult = DialogResult.OK; };
+        if (form.ShowDialog(owner) != DialogResult.OK || list.SelectedItem is not string chosen) return null;
+        lastLanguages[key ?? ""] = chosen;
+        return chosen;
     }
 
     /// <summary>

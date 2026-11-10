@@ -263,6 +263,11 @@ public partial class DesignerForm : Form, IPickerHost
             PasteClipboard();
             return true;
         }
+        if (!typing && !UndoHistory.IsEditingText() && keyData == (Keys.Control | Keys.V) && DesignClipboard.EmptyReason != null)
+        {
+            MessageBox.Show(this, "沒有東西可以貼上。\r\n\r\n" + DesignClipboard.EmptyReason, "貼上", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
+        }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -372,7 +377,9 @@ public partial class DesignerForm : Form, IPickerHost
         int copied = fields.Count + buttons.Count + grids.Count;
         if (copied == 0)
         {
-            UpdateStatus("選取的是資料表的欄位或 Grid：同一個欄位只能放一次，不能複製（按鈕、文字標籤、計算欄位、SQL 清單可以複製）");
+            const string reason = "選取的是資料表的欄位或 Grid：同一個欄位只能放一次，不能複製（按鈕、文字標籤、計算欄位、SQL 清單可以複製）";
+            DesignClipboard.Clear(reason);              // 不要讓 Ctrl+V 貼出上一次複製的東西
+            UpdateStatus(reason);
             return;
         }
         DesignClipboard.Copy(fields, buttons, grids, Enumerable.Empty<EditListDefinition>());
@@ -382,7 +389,7 @@ public partial class DesignerForm : Form, IPickerHost
     /// <summary>Ctrl+V：貼上複製的元件（新的一份，位置往右下錯開）；文字標籤、計算欄位取新的名稱</summary>
     private void PasteClipboard()
     {
-        var (fields, buttons, grids, _) = DesignClipboard.Paste();
+        var (fields, buttons, grids, _, _) = DesignClipboard.Paste();
         if (fields.Count + buttons.Count + grids.Count == 0)
         {
             UpdateStatus("複製的元件不能貼在這裡（編輯視窗的 SQL 清單只能貼在編輯視窗版面）");
@@ -568,13 +575,26 @@ public partial class DesignerForm : Form, IPickerHost
     private void AddFields(IEnumerable<ColumnDragData> columns, Point location)
     {
         int y = location.Y;
+        var added = new HashSet<FieldDefinition>();
         foreach (var data in columns)
         {
             int before = def.Fields.Count;
             AddField(data, new Point(location.X, y));
             if (def.Fields.Count == before) continue;               // 已經在畫面上了（沒有新增）
+            added.Add(def.Fields[^1]);
             y += Math.Max(32, def.Fields[^1].Height + 6);
         }
+        // 一起放的標籤寬度一樣（用最長的那個），輸入框才對齊
+        FieldBox.FitLabelWidths(canvas.Controls.OfType<FieldBox>().Where(b => added.Contains(b.Field)).ToList());
+    }
+
+    /// <summary>新放上畫面的欄位：高度用新欄位預設、標籤寬度貼齊文字（左邊不留空白）</summary>
+    private FieldBox AddNewFieldBox(FieldDefinition field)
+    {
+        field.Height = FieldDefinition.NewFieldHeight;
+        var box = AddBox(field);
+        box.FitLabelWidth();
+        return box;
     }
 
     private void AddField(ColumnDragData data, Point location)
@@ -612,7 +632,7 @@ public partial class DesignerForm : Form, IPickerHost
             Width = TypeHelper.SuggestWidth(c),
         };
         def.Fields.Add(field);
-        SelectBox(AddBox(field));
+        SelectBox(AddNewFieldBox(field));
         ApplyCanvasSize();
         UpdateStatus();
     }
@@ -748,7 +768,7 @@ public partial class DesignerForm : Form, IPickerHost
             list.Columns.Add(column);
             canvas.Controls.OfType<GridBox>().FirstOrDefault(b => b.GridDef == list)?.RefreshFromModel();
         }
-        SelectBox(AddBox(field));
+        SelectBox(AddNewFieldBox(field));
         ApplyCanvasSize();
     }
 
@@ -937,7 +957,7 @@ public partial class DesignerForm : Form, IPickerHost
             Width = 120,
         };
         def.Fields.Add(field);
-        SelectBox(AddBox(field));
+        SelectBox(AddNewFieldBox(field));
         ApplyCanvasSize();
         UpdateStatus("已加入計算欄位：在屬性面板改「標籤」；要改公式按「公式」右邊的「…」");
     }
@@ -1649,6 +1669,8 @@ public partial class DesignerForm : Form, IPickerHost
     /// <summary>畫面上所有的按鈕（主畫面 + 編輯視窗），欄位的開窗選取也當成「開啟畫面」按鈕</summary>
     internal static List<ButtonDefinition> AllButtons(FormDefinition form) =>
         form.Buttons.Concat(form.Grids.SelectMany(g => g.EditButtons))
+            .Concat(form.Grids.Where(g => g.EditPrint != null).Select(g => g.EditPrint))                                   // 編輯視窗工具列「列印」的樣板（發布、匯出時一起帶）
+            .Concat(form.Grids.SelectMany(g => g.EditPrintMenu?.Buttons ?? new List<ButtonDefinition>()))                  // 列印選單上各按鈕的樣板
             .Concat(form.ColumnButtons())                                                                                  // Grid 上的自訂按鈕欄位
             .Concat(form.Fields.Select(ButtonRunner.PickerButton))
             .Concat(form.Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))

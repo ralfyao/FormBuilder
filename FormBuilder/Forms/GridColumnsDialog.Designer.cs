@@ -43,6 +43,7 @@ namespace FormBuilder
             this.colCellOptions = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colFormula = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colDecimals = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colThousands = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.colAfterSelect = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ctxJoin = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.miRemoveJoin = new System.Windows.Forms.ToolStripMenuItem();
@@ -96,6 +97,7 @@ namespace FormBuilder
             this.colCellOptions,
             this.colFormula,
             this.colDecimals,
+            this.colThousands,
             this.colAfterSelect,
             this.colSource});
             this.dgvColumns.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -195,6 +197,14 @@ namespace FormBuilder
             this.colDecimals.Name = "colDecimals";
             this.colDecimals.ToolTipText = "公式結果的小數位數（四捨五入）；空白 = 自動（最多 4 位）。整數欄位一律取到整數";
             this.colDecimals.Width = 50;
+            //
+            // colThousands
+            //
+            this.colThousands.DataPropertyName = "Thousands";
+            this.colThousands.HeaderText = "千分位";
+            this.colThousands.Name = "colThousands";
+            this.colThousands.ToolTipText = "數字欄位在 Grid 上顯示千分號（例如 60,030）。金額類（decimal、money…）預設勾，整數預設不勾";
+            this.colThousands.Width = 55;
             //
             // colAfterSelect
             //
@@ -399,6 +409,7 @@ namespace FormBuilder
         private System.Windows.Forms.DataGridViewTextBoxColumn colCellOptions;
         private System.Windows.Forms.DataGridViewTextBoxColumn colFormula;
         private System.Windows.Forms.DataGridViewTextBoxColumn colDecimals;
+        private System.Windows.Forms.DataGridViewCheckBoxColumn colThousands;
         private System.Windows.Forms.DataGridViewTextBoxColumn colAfterSelect;
         private System.Windows.Forms.ContextMenuStrip ctxJoin;
         private System.Windows.Forms.ToolStripMenuItem miRemoveJoin;

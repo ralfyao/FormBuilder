@@ -34,6 +34,44 @@ public class SysConfig
     /// <summary>上次從系統資料庫讀到的登入畫面企業識別（JSON），登入畫面先用它馬上顯示，不用等資料庫</summary>
     public string LoginBrandingCache { get; set; }
 
+    /// <summary>
+    /// 連線設定檔：這台電腦沒有自己的系統資料庫連線時，從這個檔案（例如 \\server\ERPStudio\config.json）讀連線與更新來源。
+    /// 那個檔案要用明碼的 SystemConnection（加密的只有建立它的那台電腦解得開）
+    /// </summary>
+    public string ConnectionFile { get; set; }
+
+    /// <summary>目前的連線是從連線設定檔讀來的（存檔時不把它寫進本機設定）</summary>
+    private bool linkedConnection, linkedUpdateSource;
+
+    /// <summary>
+    /// 從連線設定檔讀系統資料庫連線與更新來源（本機自己有連線時不讀）；讀不到時回傳原因，成功回傳 null
+    /// </summary>
+    public string ApplyConnectionFile()
+    {
+        if (GetConnection() != null || string.IsNullOrWhiteSpace(ConnectionFile)) return null;
+        try
+        {
+            if (!File.Exists(ConnectionFile)) return $"找不到連線設定檔：{ConnectionFile}";
+            var shared = JsonSerializer.Deserialize<SysConfig>(File.ReadAllText(ConnectionFile), JsonOptions);
+            string cs = shared?.GetConnection();
+            if (cs == null)
+                return $"連線設定檔裡沒有可以用的系統連線：{ConnectionFile}" + Environment.NewLine
+                       + "（要寫明碼的 SystemConnection；加密的 SystemConnectionProtected 只有建立它的那台電腦解得開）";
+            SystemConnection = cs;
+            linkedConnection = true;
+            if (string.IsNullOrWhiteSpace(UpdateSource) && !string.IsNullOrWhiteSpace(shared.UpdateSource))
+            {
+                UpdateSource = shared.UpdateSource;
+                linkedUpdateSource = true;
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"讀不到連線設定檔 {ConnectionFile}：{ex.Message}";
+        }
+    }
+
     public string GetConnection()
     {
         if (!string.IsNullOrWhiteSpace(SystemConnection)) return SystemConnection;
@@ -48,6 +86,7 @@ public class SysConfig
 
     public void SetConnection(string connectionString)
     {
+        linkedConnection = false;                // 自己設了連線：之後用本機的
         SystemConnection = null;
         SystemConnectionProtected = Convert.ToBase64String(
             ProtectedData.Protect(Encoding.UTF8.GetBytes(connectionString), null, DataProtectionScope.LocalMachine));
@@ -59,7 +98,12 @@ public class SysConfig
         {
             try
             {
-                if (File.Exists(path)) return JsonSerializer.Deserialize<SysConfig>(File.ReadAllText(path), JsonOptions) ?? new SysConfig();
+                if (File.Exists(path))
+                {
+                    var config = JsonSerializer.Deserialize<SysConfig>(File.ReadAllText(path), JsonOptions) ?? new SysConfig();
+                    config.ApplyConnectionFile();        // 沒有自己的連線時，用設定的連線設定檔
+                    return config;
+                }
             }
             catch (Exception) { }
         }
@@ -69,7 +113,19 @@ public class SysConfig
     public void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(MachinePath));
-        File.WriteAllText(MachinePath, JsonSerializer.Serialize(this, JsonOptions));
+        // 從連線設定檔讀來的連線、更新來源不寫進本機設定：連線設定檔改了，下次啟動就用新的
+        string connection = SystemConnection, update = UpdateSource;
+        if (linkedConnection) SystemConnection = null;
+        if (linkedUpdateSource) UpdateSource = null;
+        try
+        {
+            File.WriteAllText(MachinePath, JsonSerializer.Serialize(this, JsonOptions));
+        }
+        finally
+        {
+            SystemConnection = connection;
+            UpdateSource = update;
+        }
     }
 }
 

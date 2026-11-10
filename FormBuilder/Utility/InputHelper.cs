@@ -15,10 +15,14 @@ public class RadioGroup : FlowLayoutPanel
         foreach (var item in items)
         {
             var radio = new RadioButton { Text = item.Text, AutoSize = true, Margin = new Padding(0, 3, 14, 3) };
+            radio.CheckedChanged += (s, e) => { if (radio.Checked || SelectedValue == null) SelectedValueChanged?.Invoke(this, EventArgs.Empty); };
             options.Add((radio, item.Value.Trim()));
             Controls.Add(radio);
         }
     }
+
+    /// <summary>選的選項改了（使用者點選或程式設定）</summary>
+    public event EventHandler SelectedValueChanged;
 
     /// <summary>目前選的選項的值；沒選 = null。設定時找不到對應的值就全部不選</summary>
     public string SelectedValue
@@ -384,6 +388,7 @@ public static class InputHelper
         LabelFontSize = c.EditLabelFontSize,
         FontName = c.EditFontName,
         BackColorHtml = c.EditBackColorHtml,
+        LabelColorHtml = c.EditLabelColorHtml,
         LabelWidth = c.EditLabelWidth > 0 ? c.EditLabelWidth : FieldBox.DefaultLabelWidth,
         InputType = c.EditInputType,
         Items = c.EditItems,
@@ -411,6 +416,7 @@ public static class InputHelper
         Height = c.EditHeight > 0 ? c.EditHeight : FieldDefinition.DefaultHeight,
         NoEntry = readOnly && !c.ScreenOnly,           // 畫面欄位不存檔，一直可以輸入
         QueryOnly = c.ScreenOnly,                      // 編輯視窗：不從資料帶值、不寫回資料庫
+        Copies = c.EditCopies is { Count: > 0 } ? c.EditCopies : null,     // 同步複本（LayoutFields 一起放）
     };
 
     /// <summary>
@@ -423,23 +429,41 @@ public static class InputHelper
         Color labelColor = ColorText.LabelColor(body.BackColor);       // 底色深時標籤用白字
         foreach (var f in fields)
         {
+            var input = PlaceField(body, f, connectionString, labelColor);
+            inputs[f] = input;
+            // 同步複本：另外放一個輸入框，值、唯讀、停用都跟原本的輸入框同步；
+            // 不放進回傳的清單，讀值、存檔、執行後動作都只看原本那一個，所以只存一份
+            foreach (var copy in f.Copies ?? Enumerable.Empty<EditFieldCopy>())
+            {
+                var copyInput = PlaceField(body, f.ForCopy(copy), connectionString, labelColor);
+                copyInput.TabStop = false;                   // Tab / Enter 照原本的欄位順序跳，不經過複本
+                InputSync.Link(input, copyInput);
+            }
+        }
+        return inputs;
+    }
+
+    /// <summary>放一個欄位的標籤和輸入框，回傳輸入框</summary>
+    private static Control PlaceField(Control body, FieldDefinition f, string connectionString, Color labelColor)
+    {
+        {
             if (!f.IsTextLabel)                              // 文字標籤本身就是文字，不另外放標籤
             body.Controls.Add(new Label
             {
                 Text = f.Label,
                 TextAlign = ContentAlignment.MiddleRight,
                 AutoEllipsis = true,
-                ForeColor = labelColor,
+                ForeColor = f.LabelColorOr(labelColor),       // 標籤字體顏色
                 Font = LabelGeometry.Font(f, body.Font),                                              // 標籤字體大小
-                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font))),   // 字放大時標籤跟著變高
+                Bounds = new Rectangle(f.X, f.Y, f.LabelWidth, LabelGeometry.Height(LabelGeometry.Font(f, body.Font), f.Height)),   // 字放大時標籤跟著變高
             });
             Control input = CreateInput(f, connectionString);
-            if (input is RadioGroup || f.IsTextLabel) input.ForeColor = labelColor;
+            if (input is RadioGroup) input.ForeColor = labelColor;
+            if (f.IsTextLabel) input.ForeColor = f.LabelColorOr(labelColor);
             ApplyLook(f, input, body.Font);                  // 字體大小、底色
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
-            inputs[f] = input;
+            return input;
         }
-        return inputs;
     }
 
     /// <summary>
@@ -497,7 +521,7 @@ public static class InputHelper
     public static Size ContentSize(IEnumerable<FieldDefinition> fields, int minWidth)
     {
         int w = minWidth, h = 60;
-        foreach (var f in fields)
+        foreach (var f in fields.SelectMany(f => (f.Copies ?? new List<EditFieldCopy>()).Select(f.ForCopy).Prepend(f)))     // 同步複本也算
         {
             w = Math.Max(w, f.X + f.LabelWidth + 4 + Math.Max(f.Width, 30) + 30);
             h = Math.Max(h, f.Y + Math.Max(f.Height, FieldDefinition.DefaultHeight) + 20);

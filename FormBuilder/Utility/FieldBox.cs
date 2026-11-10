@@ -52,9 +52,9 @@ public class FieldBox : DesignBox
         input.Plain = Field.IsTextLabel;
         input.PlainAlign = Field.TextAlignment;
         caption.Text = Field.Label;
-        caption.ForeColor = ColorText.LabelColor(Parent?.BackColor ?? Color.Empty);     // 畫面底色深時標籤改白字
+        caption.ForeColor = Field.LabelColorOr(ColorText.LabelColor(Parent?.BackColor ?? Color.Empty));     // 有設標籤字體顏色就用它；沒有時畫面底色深改白字
         caption.Font = FontPick.IsSet(Field.FontName, Field.LabelFontSize) ? LabelGeometry.Font(Field, Font) : null;   // null = 跟畫面字型一樣
-        caption.SetBounds(0, 0, labelWidth, LabelGeometry.Height(caption.Font));   // 跟執行時一樣：字放大時標籤跟著變高
+        caption.SetBounds(0, 0, labelWidth, LabelGeometry.Height(caption.Font, InputHeight));   // 跟執行時一樣：字放大時標籤跟著變高，文字對齊輸入框中間
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
         // 計算欄位顯示公式（沒有欄位名稱可以看）；資料表欄位設了公式就標 [公式]
         // 文字標籤靠右時變數名稱放前面，標籤文字才會貼著右緣（跟執行時的位置一樣）
@@ -63,6 +63,7 @@ public class FieldBox : DesignBox
                    + (Field.HasFormula && !Field.IsCalculated ? " [公式]" : "")
                    + (Field.IsKey ? " [鍵]" : "") + (Field.IsJoin ? " [JOIN]" : Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")
                    + (Field.QueryOnly ? " [查詢條件]" : "")
+                   + (Field.IsSyncCopy ? " [同步]" : "")
                    + Field.InputType switch
                    {
                        InputKind.下拉選單 => "  ▼",
@@ -82,6 +83,27 @@ public class FieldBox : DesignBox
     }
 
     private int InputHeight => Math.Max(Field.Height, FieldDefinition.DefaultHeight);
+
+    /// <summary>標籤寬度改成剛好放得下標籤文字（新放上畫面的欄位用，左邊不留空白）；文字標籤沒有另外的標籤，不動</summary>
+    public void FitLabelWidth()
+    {
+        if (Field.IsTextLabel) return;
+        Field.LabelWidth = Math.Clamp(LabelGeometry.FitWidth(Field.Label, caption.Font), 0, MaxLabelWidth);
+        RefreshFromModel();
+    }
+
+    /// <summary>
+    /// 一次放好幾個欄位：每個標籤都貼齊自己的文字（不留空白），
+    /// 標籤短的欄位整個往右移，輸入框左緣才會對齊
+    /// </summary>
+    public static void FitLabelWidths(IReadOnlyCollection<FieldBox> boxes)
+    {
+        var fields = boxes.Where(b => !b.Field.IsTextLabel).ToList();
+        foreach (var b in fields) b.FitLabelWidth();
+        if (fields.Count < 2) return;
+        int inputLeft = fields.Max(b => b.Field.X + b.Field.LabelWidth);
+        foreach (var b in fields) b.SetModelLocation(inputLeft - b.Field.LabelWidth, b.Field.Y);
+    }
 
     protected override Size ResizableSize
     {

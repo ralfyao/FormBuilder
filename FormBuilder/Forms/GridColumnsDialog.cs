@@ -75,6 +75,7 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("CellOptions", typeof(string));
         columnTable.Columns.Add("Formula", typeof(string));
         columnTable.Columns.Add("Decimals", typeof(string));
+        columnTable.Columns.Add("Thousands", typeof(bool));
         columnTable.Columns.Add("AfterSelect", typeof(string));          // 執行後動作的 SQL 摘要（顯示用）
         columnTable.Columns.Add("AfterSql", typeof(string));
         columnTable.Columns.Add("AfterParams", typeof(string));
@@ -396,7 +397,7 @@ public partial class GridColumnsDialog : Form
             source = join == null ? $"單頭 JOIN {c.JoinAlias}：{c.SourceColumn}" : $"{c.JoinAlias}：{join.TableName}.{c.SourceColumn}";   // 單頭清單上的是單頭 JOIN 的欄位
         }
         columnTable.Rows.Add(c.Visible, c.Column, type, c.Header, c.Width, c.IsKey, c.NoEntry, source, c.CellType.ToString(), c.CellOptions,
-                             c.Formula, c.Decimals >= 0 ? c.Decimals.ToString() : null,
+                             c.Formula, c.Decimals >= 0 ? c.Decimals.ToString() : null, c.ShowsThousands,
                              AfterSelectSummary(c.EditAfterSelectSql), c.EditAfterSelectSql, c.EditAfterSelectParams, c.EditAfterSelectReturn,
                              c.EditPickerForm, c.EditPickerParams, c.EditPickerReturn);
         var added = columnTable.Rows[columnTable.Rows.Count - 1];
@@ -511,6 +512,9 @@ public partial class GridColumnsDialog : Form
             c.EditAfterSelectParams = Convert.ToString(row["AfterParams"]) is { Length: > 0 } ps ? ps : null;
             c.EditAfterSelectReturn = Convert.ToString(row["AfterReturn"]) is { Length: > 0 } ret ? ret : null;
             c.Decimals = int.TryParse(Convert.ToString(row["Decimals"]), out int decimals) && decimals >= 0 ? Math.Min(decimals, 10) : -1;
+            // 千分位：跟自動判斷一樣就存 null（之後改型別還是跟著自動）
+            bool thousands = row["Thousands"] is true;
+            c.Thousands = thousands == TypeHelper.UsesThousands(c.DataType, c.IsKey) ? null : thousands;
             if (c.IsCustom && c.Button != null) c.Button.Text = GridCells.ButtonText(c);     // 確認訊息、錯誤提醒的標題用按鈕文字
         }
         // 已經設計過編輯視窗版面時，新帶進來的欄位預設不放進編輯視窗（不然會全部疊在左上角），要用的話到版面設計器拖進去

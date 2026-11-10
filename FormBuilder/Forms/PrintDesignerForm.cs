@@ -7,7 +7,12 @@ namespace FormBuilder;
 /// </summary>
 public partial class PrintDesignerForm : Form
 {
+    /// <summary>正在編輯的版面（主要語系時就是 root；其他語系時是 root 的複本，版面換成那個語系的）</summary>
     private PrintTemplate template;
+    /// <summary>樣板檔本身（主要版面 + 各語系版面），存檔存它</summary>
+    private PrintTemplate root;
+    /// <summary>正在編輯的語系；null = 主要版面</summary>
+    private string editingLanguage;
     private readonly string connectionString;
     /// <summary>樣板檔的完整路徑；null = 還沒存過</summary>
     private string templatePath;
@@ -62,6 +67,7 @@ public partial class PrintDesignerForm : Form
         {
             template = new PrintTemplate();
         }
+        root = template;                                   // 一開始編輯主要語系的版面
         // 資料表與主鍵以目前畫面為準（畫面換了資料表時樣板跟著換）
         var keys = keyColumns.ToList();
         bool tableChanged = templatePath != null && !string.IsNullOrWhiteSpace(template.TableName)
@@ -90,18 +96,34 @@ public partial class PrintDesignerForm : Form
         UpdateTitle();
 
         // ---- 左邊「欄位」頁籤 ----
+        // 可以多選（Ctrl、Shift 點選），選好的一起拖到紙張（由上往下排；單身欄位加進明細表格），或雙擊一起加入
+        lstColumns.SelectionMode = SelectionMode.MultiExtended;
+        static PrintDragData[] ToDragData(IEnumerable<object> items) => items.OfType<ColumnItem>()
+            .Select(c => new PrintDragData { Kind = PrintItemKind.欄位, Column = c.Name, Header = c.Header, IsDetail = c.IsDetail }).ToArray();
+        // 在已經選好的多個欄位上按下去：先不改選取，有拖曳就整批拖，沒拖只是點一下才改成只選這一個
+        new MultiDragGuard(lstColumns, items => lstColumns.DoDragDrop(ToDragData(items), DragDropEffects.Copy),
+                           items => AddColumns(ToDragData(items), NextFreePoint()));
+        PrintDragData[] dragItems = null;
+        Point dragStart = Point.Empty;
         lstColumns.MouseDown += (s, e) =>
         {
+            dragItems = null;
             int i = lstColumns.IndexFromPoint(e.Location);
-            if (e.Button == MouseButtons.Left && e.Clicks == 1 && i >= 0 && lstColumns.Items[i] is ColumnItem c)
-                lstColumns.DoDragDrop(new PrintDragData { Kind = PrintItemKind.欄位, Column = c.Name, Header = c.Header, IsDetail = c.IsDetail }, DragDropEffects.Copy);
+            if (e.Button != MouseButtons.Left || e.Clicks != 1 || i < 0 || ModifierKeys != Keys.None) return;
+            dragItems = ToDragData(lstColumns.SelectedItems.Cast<object>());
+            dragStart = e.Location;
         };
-        lstColumns.DoubleClick += (s, e) =>
+        lstColumns.MouseMove += (s, e) =>
         {
-            if (lstColumns.SelectedItem is not ColumnItem c) return;
-            if (c.IsDetail) AddDetailColumn(null, NextFreePoint(), c.Name, c.Header);
-            else AddItem(PrintItemKind.欄位, NextFreePoint(), c.Name, c.Header);
+            if (dragItems == null || dragItems.Length == 0 || e.Button != MouseButtons.Left) return;
+            var size = SystemInformation.DragSize;
+            if (Math.Abs(e.X - dragStart.X) < size.Width && Math.Abs(e.Y - dragStart.Y) < size.Height) return;
+            var items = dragItems;
+            dragItems = null;
+            lstColumns.DoDragDrop(items, DragDropEffects.Copy);
         };
+        lstColumns.MouseUp += (s, e) => dragItems = null;
+        lstColumns.DoubleClick += (s, e) => AddColumns(ToDragData(lstColumns.SelectedItems.Cast<object>()), NextFreePoint());
         btnJoin.Click += (s, e) => AddJoin();
         btnDetail.Click += (s, e) => ChooseDetail();
         var columnMenu = new ContextMenuStrip();
@@ -111,7 +133,11 @@ public partial class PrintDesignerForm : Form
         columnMenu.Opening += (s, e) =>
         {
             int i = lstColumns.IndexFromPoint(lstColumns.PointToClient(MousePosition));
-            if (i >= 0) lstColumns.SelectedIndex = i;
+            if (i >= 0)
+            {
+                lstColumns.ClearSelected();                // 多選時右鍵只對按到的那一個
+                lstColumns.SelectedIndex = i;
+            }
             var c = lstColumns.SelectedItem as ColumnItem;
             miRemoveJoin.Visible = c is { IsDetail: false, JoinAlias: not null };
             miRemoveDetail.Visible = c is { IsDetail: true };
@@ -135,7 +161,8 @@ public partial class PrintDesignerForm : Form
         };
 
         // ---- 中間：紙張 ----
-        canvas.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) ? DragDropEffects.Copy : DragDropEffects.None;
+        canvas.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) || e.Data.GetDataPresent(typeof(PrintDragData[]))
+            ? DragDropEffects.Copy : DragDropEffects.None;
         canvas.DragDrop += (s, e) => OnDrop(e);
         canvas.MouseDown += (s, e) =>
         {
@@ -159,7 +186,11 @@ public partial class PrintDesignerForm : Form
         propertyGrid.PropertyValueChanged += (s, e) =>
         {
             foreach (var b in selection) b.RefreshFromModel();
-            if (selection.Count == 0) ApplyPageSize();     // 紙張大小、方向
+            if (selection.Count == 0)
+            {
+                ApplyPageSize();                            // 紙張大小、方向
+                FillColumnList();                           // 列印參數改了：左邊清單跟著變
+            }
             UpdateStatus();
             MarkMissingColumns();                           // 改了欄位：重新檢查找不到資料來源的欄位
         };
@@ -191,19 +222,29 @@ public partial class PrintDesignerForm : Form
         btnEditMenu.DropDownItems.Insert(btnEditMenu.DropDownItems.IndexOf(sepEditAlign), miBack);
         AlignHelper.AddAlignMenu(btnEditMenu.DropDownItems, () => selection.ToList(), () => propertyGrid.Refresh());
         btnPreview.Click += (s, e) => PreviewSample();
+        // 語系：每個語系各自一份版面（資料來源共用），列印時選語系
+        btnLanguage = new ToolStripDropDownButton { DisplayStyle = ToolStripItemDisplayStyle.Text, ToolTipText = "切換、新增、重新命名、刪除語系；每個語系各自一份版面，列印時選要印哪個語系" };
+        btnLanguage.DropDownOpening += (s, e) => FillLanguageMenu();
+        toolStrip.Items.Insert(toolStrip.Items.IndexOf(btnPreview) + 1, btnLanguage);
+        FillLanguageMenu();
 
         // 目前的樣板
+        root = template;
         foreach (var item in template.Items) AttachBox(new PrintItemBox(item));
         SyncZOrder();
         ApplyPageSize();
         SetSelection(Array.Empty<DesignBox>());
-        Load += (s, e) => LoadColumns();
+        Load += (s, e) =>
+        {
+            LoadColumns();
+            if (template.Detail != null) AddDetailTableIfMissing();   // 有單身但明細表格不在紙張上（以前被放到紙張外面）：放進來
+        };
         history = new UndoHistory(this, () => template.ToJson(), RestoreSnapshot);
         savedJson = template.ToJson();
         // 關閉前：有沒存的修改就問「儲存 / 不儲存 / 取消」（列印樣板跟著畫面一起發布）
         FormClosing += (s, e) =>
         {
-            if (e.Cancel || template.ToJson() == savedJson) return;
+            if (e.Cancel || ComposedJson() == savedJson) return;
             var save = new TaskDialogButton("儲存");
             var discard = new TaskDialogButton("不儲存");
             var answer = TaskDialog.ShowDialog(this, new TaskDialogPage
@@ -246,6 +287,7 @@ public partial class PrintDesignerForm : Form
     private sealed record ColumnItem(string Name, string Header, string Type, string JoinAlias, bool IsDetail = false, bool IsRecord = false)
     {
         public override string ToString() => IsDetail ? $"{Header}（單身，{Type}）"
+                                           : IsRecord && Type == "參數" ? $"{Header}（參數）"
                                            : IsRecord ? $"{Header}（選取資料，{Type}）"
                                            : JoinAlias == null ? $"{Header}（{Type}）" : $"{Header}（{JoinAlias}，{Type}）";
     }
@@ -290,12 +332,16 @@ public partial class PrintDesignerForm : Form
             var c = sourceColumns?.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             lstColumns.Items.Add(new ColumnItem(name, string.IsNullOrWhiteSpace(c?.Description) ? name : c.Description, c?.DataType, null, IsRecord: true));
         }
+        // 列印參數（列印選單傳進來的值）
+        foreach (string name in template.Params)
+            lstColumns.Items.Add(new ColumnItem(name, name, "參數", null, IsRecord: true));
         // 單身的欄位排在最後（拖到明細表格）
         foreach (var c in template.DetailColumns)
             lstColumns.Items.Add(new ColumnItem(c.Column, c.Header ?? c.Column, c.DataType, null, IsDetail: true));
         lstColumns.EndUpdate();
         // 屬性面板「欄位」的下拉清單
-        PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).Concat(template.RecordColumns).ToList();
+        PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).Concat(template.RecordColumns)
+                                         .Concat(template.Params).ToList();
         PrintDetailColumnConverter.Available = template.DetailColumns.Select(c => c.Column).ToList();
         btnDetail.Text = template.Detail == null ? "設定單身（單頭與單身的對應）…" : $"單身：{template.Detail.TableName}（重新設定…）";
         MarkMissingColumns();
@@ -385,7 +431,7 @@ public partial class PrintDesignerForm : Form
         template.DetailColumns = copy.Columns.Where(c => c.Visible).ToList();
         template.DetailKeyColumns = copy.Columns.Where(c => c.IsKey && !c.IsJoin).Select(c => c.Column).ToList();
         FillColumnList();
-        if (!template.Items.Any(i => i.Kind == PrintItemKind.明細表格)) AddItem(PrintItemKind.明細表格, NextFreePoint());
+        AddDetailTableIfMissing();
         propertyGrid.Refresh();
         UpdateStatus($"單身用明細清單 {copy.TableName}（對應：{copy.LinkText}，{template.DetailColumns.Count} 個欄位）");
         MessageBox.Show($"已帶入明細清單「{list.Title ?? list.TableName}」的 {template.DetailColumns.Count} 個欄位，對應：{copy.LinkText}。{Environment.NewLine}{Environment.NewLine}"
@@ -410,7 +456,7 @@ public partial class PrintDesignerForm : Form
             { Column = c.SourceColumn, Header = c.Header, DataType = c.DataType, MaxLength = c.MaxLength, Width = c.Width }).ToList();
         FillColumnList();
         // 還沒有明細表格就放一個，欄位先全部放進去
-        if (!template.Items.Any(i => i.Kind == PrintItemKind.明細表格)) AddItem(PrintItemKind.明細表格, NextFreePoint());
+        AddDetailTableIfMissing();
         propertyGrid.Refresh();
         UpdateStatus($"已設定單身 {dlg.Join.TableName}（對應：{dlg.Join.LinkText}，{dlg.NewColumns.Count} 個欄位）");
     }
@@ -444,8 +490,17 @@ public partial class PrintDesignerForm : Form
         int n = 1;
         while (template.Joins.Any(j => j.Alias == $"J{n}")) n++;
         var existing = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column));
-        using var dlg = new JoinDialog(connectionString, $"J{n}", tableColumns, existing);
+        // 關聯條件左邊：主資料表的欄位，也可以是別的 JOIN 帶進來的欄位（例如用 J1 帶出的 COMPANY 再 JOIN 客戶連絡人）
+        var tableNames = tableColumns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var joinColumns = template.JoinColumns.Where(c => !tableNames.Contains(c.Column))
+            .GroupBy(c => c.Column, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
+        var linkColumns = tableColumns.Concat(joinColumns.Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, MaxLength = c.MaxLength })).ToList();
+        using var dlg = new JoinDialog(connectionString, $"J{n}", linkColumns, existing);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        // JOIN 帶進來的欄位存成「別名.原始欄位」，列印時那個 JOIN 會一起加、排在前面
+        dlg.Join.LinkText = string.Join(", ", dlg.Join.Links.Select(l =>
+            joinColumns.FirstOrDefault(c => c.Column.Equals(l.Master, StringComparison.OrdinalIgnoreCase)) is { } jc
+                ? $"{jc.JoinAlias}.{jc.SourceColumn}={l.Detail}" : $"{l.Master}={l.Detail}"));
         template.Joins.Add(dlg.Join);
         template.JoinColumns.AddRange(dlg.NewColumns);
         FillColumnList();
@@ -454,6 +509,14 @@ public partial class PrintDesignerForm : Form
 
     private void RemoveJoin(string alias)
     {
+        // 別的 JOIN 的關聯條件用到這個 JOIN 的欄位：要先移除那個
+        var dependents = template.Joins.Where(j => j.Alias != alias && j.Links.Any(l => l.Master.StartsWith(alias + ".", StringComparison.OrdinalIgnoreCase)))
+                                       .Select(j => $"{j.Alias}（{j.TableName}）").ToList();
+        if (dependents.Count > 0)
+        {
+            MessageBox.Show($"JOIN {string.Join("、", dependents)} 的關聯條件用到 {alias} 帶進來的欄位，請先移除它。", "提醒");
+            return;
+        }
         var columns = template.JoinColumns.Where(c => c.JoinAlias == alias).Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
         int used = template.Items.Count(i => i.Kind == PrintItemKind.欄位 && columns.Contains(i.Column ?? ""));
         string note = used > 0 ? $"樣板上有 {used} 個元件用到這些欄位，移除後會印成空白。" : "";
@@ -512,8 +575,15 @@ public partial class PrintDesignerForm : Form
     /// <summary>拖放到紙張或元件上：單身的欄位放進明細表格，其他照種類新增元件</summary>
     private void OnDrop(DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(PrintDragData)) is not PrintDragData data) return;
         Point p = canvas.PointToClient(new Point(e.X, e.Y));
+        // 欄位清單多選拖過來的一批
+        if (e.Data.GetData(typeof(PrintDragData[])) is PrintDragData[] many)
+        {
+            var table = canvas.Controls.OfType<PrintItemBox>().LastOrDefault(b => b.Item.Kind == PrintItemKind.明細表格 && b.Bounds.Contains(p));
+            AddColumns(many, new Point(Snap(p.X), Snap(p.Y)), table);
+            return;
+        }
+        if (e.Data.GetData(typeof(PrintDragData)) is not PrintDragData data) return;
         if (data.IsDetail)
         {
             var target = canvas.Controls.OfType<PrintItemBox>().LastOrDefault(b => b.Item.Kind == PrintItemKind.明細表格 && b.Bounds.Contains(p));
@@ -521,6 +591,28 @@ public partial class PrintDesignerForm : Form
             return;
         }
         AddItem(data.Kind, new Point(Snap(p.X), Snap(p.Y)), data.Column, data.Header);
+    }
+
+    /// <summary>
+    /// 一次加好幾個欄位：單頭欄位從 location 由上往下排（每個一列），單身欄位加進明細表格（table 空白 = 第一個明細表格，沒有就新增）；
+    /// 加完選取全部新加的單頭欄位
+    /// </summary>
+    private void AddColumns(IReadOnlyList<PrintDragData> columns, Point location, PrintItemBox table = null)
+    {
+        if (columns.Count == 0) return;
+        var added = new List<DesignBox>();
+        int y = location.Y;
+        foreach (var c in columns.Where(c => !c.IsDetail))
+        {
+            AddItem(PrintItemKind.欄位, new Point(location.X, y), c.Column, c.Header);
+            added.AddRange(selection);                     // AddItem 會選取剛加的那個
+            y += Snap(32);
+        }
+        var details = columns.Where(c => c.IsDetail).ToList();
+        foreach (var c in details) AddDetailColumn(table, location, c.Column, c.Header);
+        if (added.Count > 0 && details.Count == 0) SetSelection(added);
+        if (columns.Count > 1)
+            UpdateStatus($"已加入 {columns.Count - details.Count} 個欄位" + (details.Count > 0 ? $"、{details.Count} 個明細表格欄位" : ""));
     }
 
     /// <summary>單身的欄位加到明細表格：target 空白時用樣板上第一個明細表格，沒有就在 location 新增一個</summary>
@@ -544,6 +636,30 @@ public partial class PrintDesignerForm : Form
         UpdateStatus($"已把「{header ?? column}」加到明細表格");
     }
 
+    /// <summary>明細表格標題列上的哪一欄（p = 表格元件內的位置）；不在標題列上回傳 null</summary>
+    private static PrintTableColumn HeaderColumnAt(PrintItemBox box, Point p)
+    {
+        if (p.Y < 0 || p.Y > Math.Max(box.Item.RowHeight, 20) + 2) return null;
+        var (columns, xs) = PrintRenderer.TableColumnsOf(box.Item, new RectangleF(0, 0, box.Width - 1, box.Height - 1));
+        for (int i = 0; i < columns.Count; i++)
+            if (p.X >= xs[i] && p.X < xs[i + 1]) return columns[i];
+        return null;
+    }
+
+    /// <summary>改明細表格某一欄印出來的標題（空白 = 用欄位名稱）；每個語系的版面各自一份，可以印成不同語言</summary>
+    private void EditTableHeader(PrintItemBox box, PrintTableColumn column)
+    {
+        var values = PromptDialog.Ask(this, $"表格標題（欄位 {column.Column}）", null,
+                                      new PromptDialog.Field("標題", string.IsNullOrWhiteSpace(column.Header) ? column.Column : column.Header));
+        if (values == null) return;
+        column.Header = values[0] == "" ? null : values[0];
+        box.RefreshFromModel();
+        box.Invalidate();
+        SetSelection(new[] { box });
+        propertyGrid.Refresh();
+        UpdateStatus($"已把「{column.Column}」的標題改成「{column}」");
+    }
+
     /// <summary>明細表格要印哪些單身欄位、順序（勾選清單）</summary>
     private void ChooseTableColumns(PrintItemBox box)
     {
@@ -565,14 +681,32 @@ public partial class PrintDesignerForm : Form
     {
         // 單身的欄位可以直接拖到明細表格上
         box.AllowDrop = true;
-        box.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) ? DragDropEffects.Copy : DragDropEffects.None;
+        box.DragEnter += (s, e) => e.Effect = e.Data.GetDataPresent(typeof(PrintDragData)) || e.Data.GetDataPresent(typeof(PrintDragData[]))
+            ? DragDropEffects.Copy : DragDropEffects.None;
         box.DragDrop += (s, e) => OnDrop(e);
-        // 明細表格：雙擊或右鍵挑要印的單身欄位
+        // 明細表格：標題列上雙擊 = 改那一欄的標題；其他地方雙擊或右鍵 = 挑要印的單身欄位
         if (box.Item.Kind == PrintItemKind.明細表格)
         {
-            box.DoubleClick += (s, e) => ChooseTableColumns(box);
+            box.DoubleClick += (s, e) =>
+            {
+                if (HeaderColumnAt(box, box.PointToClient(MousePosition)) is { } column) EditTableHeader(box, column);
+                else ChooseTableColumns(box);
+            };
             var menu = new ContextMenuStrip();
+            PrintTableColumn menuColumn = null;
+            var miHeader = new ToolStripMenuItem("修改標題…", null, (s, e) => { if (menuColumn != null) EditTableHeader(box, menuColumn); });
+            menu.Items.Add(miHeader);
             menu.Items.Add("選擇表格欄位…", null, (s, e) => ChooseTableColumns(box));
+            menu.Opening += (s, e) =>
+            {
+                // 右鍵按在哪一欄就改哪一欄的標題
+                var p = box.PointToClient(MousePosition);
+                var (columns, xs) = PrintRenderer.TableColumnsOf(box.Item, new RectangleF(0, 0, box.Width - 1, box.Height - 1));
+                int i = Enumerable.Range(0, columns.Count).FirstOrDefault(k => p.X >= xs[k] && p.X < xs[k + 1], -1);
+                menuColumn = i >= 0 ? columns[i] : null;
+                miHeader.Text = menuColumn == null ? "修改標題…" : $"修改「{menuColumn}」的標題…";
+                miHeader.Enabled = menuColumn != null;
+            };
             box.ContextMenuStrip = menu;
         }
         box.Pressed += (s, e) => OnBoxPressed(box);
@@ -601,6 +735,39 @@ public partial class PrintDesignerForm : Form
         if (toFront) template.Items.AddRange(items);
         else template.Items.InsertRange(0, items);
         SyncZOrder();
+    }
+
+    /// <summary>
+    /// 設定單身後還沒有明細表格：放一個在紙張上空著的地方（上下沒有其他元件、高度至少 120 的空檔），
+    /// 表格高度填滿那個空檔；找不到空檔就放在紙張下方還在紙內的位置。放好後選取它並捲到看得見
+    /// </summary>
+    private void AddDetailTableIfMissing()
+    {
+        int pageHeight = template.PageSize.Height;
+        // 已經有明細表格：在紙張裡就不動；之前被放到紙張外面（看不到）的，搬進來
+        var existing = canvas.Controls.OfType<PrintItemBox>().FirstOrDefault(b => b.Item.Kind == PrintItemKind.明細表格 && b.Item.Y + 20 > pageHeight);
+        if (existing == null && template.Items.Any(i => i.Kind == PrintItemKind.明細表格)) return;
+        var spans = canvas.Controls.OfType<PrintItemBox>().Where(b => b != existing).Select(b => (Top: b.Top, Bottom: b.Bottom)).OrderBy(s => s.Top).ToList();
+        int top = 40, gapTop = -1, gapHeight = 0;
+        foreach (var (t, b) in spans.Append((pageHeight - 40, pageHeight)))
+        {
+            if (t - top >= 120) { gapTop = top; gapHeight = t - top; break; }
+            top = Math.Max(top, b + 10);
+        }
+        Point at = gapTop >= 0 ? new Point(25, Snap(gapTop)) : new Point(25, Math.Max(40, pageHeight - 340));
+        var box = existing;
+        if (box == null)
+        {
+            AddItem(PrintItemKind.明細表格, at);
+            box = canvas.Controls.OfType<PrintItemBox>().First(b => b.Item.Kind == PrintItemKind.明細表格);
+        }
+        else box.SetModelLocation(at.X, at.Y);
+        box.Item.Height = gapTop >= 0 ? Math.Max(100, gapHeight - 20) : 300;
+        box.RefreshFromModel();
+        SetSelection(new[] { box });
+        if (canvas.Parent is ScrollableControl scroll) scroll.ScrollControlIntoView(box);
+        UpdateStatus((existing == null ? "已在紙張上放一個明細表格" : "明細表格原本在紙張外面，已經搬進紙張")
+                     + "（選取中），可以拖動、拉大小；雙擊表格選要印的單身欄位");
     }
 
     private Point NextFreePoint()
@@ -719,8 +886,15 @@ public partial class PrintDesignerForm : Form
     /// <summary>復原 / 取消復原：換成快照的樣板，重建紙張上的元件</summary>
     private void RestoreSnapshot(string json)
     {
-        foreach (var box in canvas.Controls.OfType<PrintItemBox>().ToList()) box.Dispose();
         template = PrintTemplate.FromJson(json);
+        if (editingLanguage == null) root = template;
+        RebuildCanvas();
+    }
+
+    /// <summary>紙張上的元件照 template 重建</summary>
+    private void RebuildCanvas()
+    {
+        foreach (var box in canvas.Controls.OfType<PrintItemBox>().ToList()) box.Dispose();
         foreach (var item in template.Items) AttachBox(new PrintItemBox(item));
         SyncZOrder();
         ApplyPageSize();
@@ -747,8 +921,10 @@ public partial class PrintDesignerForm : Form
         }
         try
         {
-            template.Save(templatePath);
-            savedJson = template.ToJson();
+            Commit();
+            root.UpdateSqlColumns(SqlAvailableColumns());
+            root.Save(templatePath);
+            savedJson = root.ToJson();
             SavedPath = templatePath;
             UpdateTitle();
             UpdateStatus("已儲存 " + Path.GetFileName(templatePath));
@@ -761,6 +937,9 @@ public partial class PrintDesignerForm : Form
         }
     }
 
+    /// <summary>欄位 SQL 的 @名稱 可以用的資料欄位：主資料表、JOIN 帶進來的欄位</summary>
+    private IEnumerable<string> SqlAvailableColumns() => tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column));
+
     /// <summary>用主資料表的第一筆資料預覽列印（看排版用）</summary>
     private void PreviewSample()
     {
@@ -771,6 +950,7 @@ public partial class PrintDesignerForm : Form
         }
         try
         {
+            template.UpdateSqlColumns(SqlAvailableColumns());
             var sheet = PrintRunner.LoadSample(template, connectionString);
             if (sheet == null)
             {
@@ -786,8 +966,162 @@ public partial class PrintDesignerForm : Form
         }
     }
 
-    private void UpdateTitle() =>
-        Text = $"列印樣板設計：{template.TableName}　{(templatePath == null ? "（尚未儲存）" : Path.GetFileName(templatePath))}";
+    private void UpdateTitle()
+    {
+        Text = $"列印樣板設計：{template.TableName}　{(templatePath == null ? "（尚未儲存）" : Path.GetFileName(templatePath))}"
+             + (root.Languages.Count > 0 ? $"　語系：{CurrentLanguage}" : "");
+        if (btnLanguage != null) btnLanguage.Text = $"語系：{CurrentLanguage}";
+    }
+
+    // ================= 語系 =================
+
+    private ToolStripDropDownButton btnLanguage;
+
+    private string CurrentLanguage => editingLanguage ?? root.LanguageName;
+
+    /// <summary>正在編輯的語系版面寫回 root（其他語系時，資料來源的修改也寫回 root）</summary>
+    private void Commit()
+    {
+        if (editingLanguage == null)
+        {
+            root = template;
+            return;
+        }
+        var lang = root.Languages.FirstOrDefault(l => l.Name == editingLanguage);
+        if (lang != null)
+        {
+            lang.Paper = template.Paper;
+            lang.Landscape = template.Landscape;
+            lang.Items = template.Items;
+        }
+        root.TableSchema = template.TableSchema;
+        root.TableName = template.TableName;
+        root.KeyColumns = template.KeyColumns;
+        root.Joins = template.Joins;
+        root.JoinColumns = template.JoinColumns;
+        root.Detail = template.Detail;
+        root.DetailColumns = template.DetailColumns;
+        root.DetailJoins = template.DetailJoins;
+        root.RecordColumns = template.RecordColumns;
+        root.DetailKeyColumns = template.DetailKeyColumns;
+        root.DetailSelectedOnly = template.DetailSelectedOnly;
+        root.DetailOrderBy = template.DetailOrderBy;
+        root.Params = template.Params;
+    }
+
+    /// <summary>整個樣板檔（各語系都寫回後）的 JSON：比對有沒有沒存的修改</summary>
+    private string ComposedJson()
+    {
+        Commit();
+        return root.ToJson();
+    }
+
+    /// <summary>換成編輯另一個語系的版面（復原記錄重新開始）</summary>
+    private void SwitchLanguage(string name)
+    {
+        Commit();
+        var lang = root.Languages.FirstOrDefault(l => l.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (lang == null)
+        {
+            editingLanguage = null;
+            template = root;
+        }
+        else
+        {
+            var copy = PrintTemplate.FromJson(root.ToJson());
+            copy.Languages = new();
+            copy.Language = lang.Name;
+            copy.Paper = lang.Paper;
+            copy.Landscape = lang.Landscape;
+            copy.Items = lang.Items;
+            editingLanguage = lang.Name;
+            template = copy;
+        }
+        RebuildCanvas();
+        history.Reset();
+        UpdateTitle();
+        UpdateStatus($"正在編輯「{CurrentLanguage}」的版面");
+    }
+
+    private void FillLanguageMenu()
+    {
+        btnLanguage.DropDownItems.Clear();
+        foreach (string name in root.LanguageNames)
+        {
+            var mi = new ToolStripMenuItem(name + (name == root.LanguageName ? "（主要）" : "")) { Checked = name == CurrentLanguage };
+            string target = name;
+            mi.Click += (s, e) => { if (target != CurrentLanguage) SwitchLanguage(target); };
+            btnLanguage.DropDownItems.Add(mi);
+        }
+        btnLanguage.DropDownItems.Add(new ToolStripSeparator());
+        btnLanguage.DropDownItems.Add("新增語系…", null, (s, e) => AddLanguage());
+        btnLanguage.DropDownItems.Add("重新命名目前語系…", null, (s, e) => RenameLanguage());
+        var miRemove = new ToolStripMenuItem("刪除目前語系", null, (s, e) => RemoveLanguage()) { Enabled = editingLanguage != null };
+        if (editingLanguage == null) miRemove.ToolTipText = "主要語系不能刪除";
+        btnLanguage.DropDownItems.Add(miRemove);
+        UpdateTitle();
+    }
+
+    private string AskLanguageName(string title, string value, string except)
+    {
+        var values = PromptDialog.Ask(this, title, v =>
+        {
+            string name = v[0];
+            if (name == "") return "請輸入語系名稱，例如 English、日本語。";
+            if (!name.Equals(except ?? "", StringComparison.OrdinalIgnoreCase)
+                && root.LanguageNames.Any(n => n.Equals(name, StringComparison.OrdinalIgnoreCase))) return $"已經有「{name}」這個語系。";
+            return null;
+        }, new PromptDialog.Field("語系名稱", value));
+        return values?[0];
+    }
+
+    /// <summary>新增語系：先複製目前語系的版面，再切過去編輯（例如把標籤文字改成英文）</summary>
+    private void AddLanguage()
+    {
+        string name = AskLanguageName("新增語系（複製目前的版面）", "English", null);
+        if (name == null) return;
+        Commit();
+        root.Languages.Add(new PrintLanguage
+        {
+            Name = name,
+            Paper = template.Paper,
+            Landscape = template.Landscape,
+            Items = template.Items.Select(i => i.Clone()).ToList(),
+        });
+        SwitchLanguage(name);
+    }
+
+    private void RenameLanguage()
+    {
+        string old = CurrentLanguage;
+        string name = AskLanguageName("重新命名語系", old, old);
+        if (name == null || name == old) return;
+        Commit();
+        if (editingLanguage == null) root.Language = name;
+        else
+        {
+            root.Languages.First(l => l.Name == editingLanguage).Name = name;
+            editingLanguage = name;
+            template.Language = name;
+        }
+        UpdateTitle();
+    }
+
+    private void RemoveLanguage()
+    {
+        if (editingLanguage == null) return;
+        if (MessageBox.Show($"確定要刪除「{editingLanguage}」這個語系的版面嗎？（存檔後才會真的刪除）", "列印樣板",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        Commit();
+        root.Languages.RemoveAll(l => l.Name == editingLanguage);
+        // 回到主要語系（刪掉的語系不用再寫回）
+        editingLanguage = null;
+        template = root;
+        RebuildCanvas();
+        history.Reset();
+        UpdateTitle();
+        UpdateStatus($"正在編輯「{CurrentLanguage}」的版面");
+    }
 
     private void UpdateStatus(string message = null)
     {

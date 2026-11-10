@@ -372,17 +372,7 @@ public partial class RecordNavigatorDialog : Form
                 if (result != null) ButtonRunner.FillFields(result, inputs, reportMissing: !string.IsNullOrWhiteSpace(b.SqlReturn));
                 break;
             }
-            case ButtonAction.列印報表:
-            {
-                // 欄位值先找目前這筆資料，沒有就用視窗上的欄位
-                DataRow current = nav.CurrentRow;
-                Func<string, object> currentValue = name => current != null && current.Table.Columns.Contains(name) ? current[name]
-                    : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null;
-                // 有設定「列印來源清單」：依下方清單選取的資料列印
-                if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, currentValue, this)) break;
-                ButtonRunner.Print(b, sourcePath, connectionString, new[] { currentValue }, this);
-                break;
-            }
+            case ButtonAction.列印報表: PrintWithTemplate(b); break;
             case ButtonAction.開啟畫面:
             {
                 // 傳入參數的 @欄位：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；選取視窗帶回的值填進欄位
@@ -447,11 +437,41 @@ public partial class RecordNavigatorDialog : Form
         }
     }
 
-    /// <summary>列印目前這筆：視窗上每個欄位印成「標籤：值」</summary>
+    /// <summary>工具列「列印」用的列印樣板（編輯視窗版面設計的「列印樣板…」）；null = 印簡易格式</summary>
+    public ButtonDefinition ToolbarPrint { get; set; }
+
+    /// <summary>工具列「列印」的列印選單（編輯視窗版面的「列印選單…」）；有按鈕時先開列印視窗</summary>
+    public PrintMenuDefinition ToolbarPrintMenu { get; set; }
+
+    /// <summary>依列印樣板印目前這筆（欄位值先找目前這筆資料，沒有就用視窗上的欄位；有設定「列印來源清單」時依清單選取的資料）</summary>
+    private void PrintWithTemplate(ButtonDefinition b)
+    {
+        DataRow current = nav.CurrentRow;
+        Func<string, object> currentValue = name => current != null && current.Table.Columns.Contains(name) ? current[name]
+            : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null;
+        if (ButtonRunner.PrintFromList(b, listViews, sourcePath, connectionString, currentValue, this)) return;
+        ButtonRunner.Print(b, sourcePath, connectionString, new[] { currentValue }, this);
+    }
+
+    /// <summary>工具列「列印」：有設計列印樣板就照樣板印，沒有就把視窗上每個欄位印成「標籤：值」</summary>
     private void PrintRecord()
     {
         DataRow row = nav.CurrentRow;
         if (row == null) return;
+        // 有列印選單：開列印視窗（上面參數、下面各樣板的按鈕），欄位值先找目前這筆資料，沒有就用視窗上的欄位
+        if (ToolbarPrintMenu is { HasButtons: true } menu)
+        {
+            Func<string, object> currentValue = name => row.Table.Columns.Contains(name) ? row[name]
+                : fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f ? InputHelper.GetValue(f, inputs[f]) : null;
+            using var dlg = new PrintMenuRunDialog(menu, baseTitle, sourcePath, connectionString, currentValue);
+            dlg.ShowDialog(this);
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(ToolbarPrint?.PrintTemplate))
+        {
+            PrintWithTemplate(ToolbarPrint);
+            return;
+        }
         var lines = fields.Select(f => (f.Label, Value: inputs[f] switch
         {
             CheckBox cb => cb.Checked ? "是" : "否",

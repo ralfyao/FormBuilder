@@ -96,6 +96,37 @@ public class PrintTemplate
     [Browsable(false)]
     public List<string> RecordColumns { get; set; } = new();
 
+    /// <summary>
+    /// 列印參數：由編輯視窗的「列印選單」傳進來（使用者輸入，或預設帶資料庫的值），不從資料庫讀。
+    /// 可以當欄位拖到紙張上印出來，欄位的 SQL 也可以用 @參數
+    /// </summary>
+    [Browsable(false)]
+    public List<string> Params { get; set; } = new();
+
+    [Category("資料"), DisplayName("列印參數"), JsonIgnore,
+     Description("列印選單傳進來的參數名稱，多個用逗號分隔，例如：年度, 折扣率, 備註說明。設定後左邊欄位清單會出現「（參數）」可以拖到紙張上；"
+               + "欄位的 SQL 也可以用 @參數名稱。參數的值在編輯視窗版面「列印選單…」設定（使用者輸入或帶資料庫的值）")]
+    public string ParamsText
+    {
+        get => string.Join(", ", Params);
+        set => Params = (value ?? "").Split(new[] { ',', '，', ';', '、' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                     .Select(p => p.TrimStart('@')).Where(p => p != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>欄位元件的 SQL 用到的 @欄位（主資料表或 JOIN 的欄位）：沒放在樣板上也要讀出來；樣板設計器存檔時算</summary>
+    [Browsable(false)]
+    public List<string> SqlColumns { get; set; } = new();
+
+    /// <summary>各語系版面上欄位 SQL 的 @名稱，留下 available（主資料表、JOIN 的欄位）裡有的</summary>
+    public void UpdateSqlColumns(IEnumerable<string> available)
+    {
+        var known = available.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        SqlColumns = Items.Concat(Languages.SelectMany(l => l.Items))
+            .Where(i => i.Kind == PrintItemKind.欄位 && i.HasSql)
+            .SelectMany(i => System.Text.RegularExpressions.Regex.Matches(i.Sql, @"@([\p{L}\p{N}_]+)").Select(m => m.Groups[1].Value))
+            .Where(known.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     /// <summary>單身資料表的主鍵（「只印清單上選取的資料」用來比對是哪幾筆）</summary>
     [Browsable(false)]
     public List<string> DetailKeyColumns { get; set; } = new();
@@ -109,6 +140,42 @@ public class PrintTemplate
 
     [Browsable(false)]
     public List<PrintItem> Items { get; set; } = new();
+
+    /// <summary>這個樣板本身（主要版面）的語系名稱；空白 = 「中文」</summary>
+    [Browsable(false)]
+    public string Language { get; set; }
+
+    /// <summary>
+    /// 其他語系的版面：每個語系各自一份紙張設定與元件，資料來源（資料表、JOIN、單身）共用。
+    /// 有其他語系時，列印前先選語系
+    /// </summary>
+    [Browsable(false)]
+    public List<PrintLanguage> Languages { get; set; } = new();
+
+    public const string DefaultLanguage = "中文";
+
+    [Browsable(false), JsonIgnore]
+    public string LanguageName => string.IsNullOrWhiteSpace(Language) ? DefaultLanguage : Language.Trim();
+
+    /// <summary>全部的語系名稱（主要版面的語系排第一）</summary>
+    [Browsable(false), JsonIgnore]
+    public List<string> LanguageNames => new[] { LanguageName }.Concat(Languages.Select(l => l.Name)).ToList();
+
+    /// <summary>
+    /// 某個語系要印的樣板：主要版面的語系就是自己；其他語系 = 資料來源一樣、版面換成那個語系的複本（找不到就用主要版面）
+    /// </summary>
+    public PrintTemplate ForLanguage(string name)
+    {
+        var lang = Languages.FirstOrDefault(l => l.Name.Equals(name ?? "", StringComparison.OrdinalIgnoreCase));
+        if (lang == null) return this;
+        var copy = FromJson(ToJson());
+        copy.Languages = new();
+        copy.Language = lang.Name;
+        copy.Paper = lang.Paper;
+        copy.Landscape = lang.Landscape;
+        copy.Items = lang.Items.Select(i => i.Clone()).ToList();
+        return copy;
+    }
 
     /// <summary>紙張大小（1/96 吋）</summary>
     [Browsable(false), JsonIgnore]
@@ -200,14 +267,25 @@ public class PrintTemplate
     /// </summary>
     public List<GridColumnDefinition> UsedColumns()
     {
-        var record = RecordColumns.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var record = RecordColumns.Concat(Params).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var names = Items.Where(i => i.Kind == PrintItemKind.欄位 && !string.IsNullOrWhiteSpace(i.Column)).Select(i => i.Column)
                          .Concat(Detail?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
+                         .Concat(SqlColumns)
                          .Where(n => !record.Contains(n)).Concat(KeyColumns)
                          .Distinct(StringComparer.OrdinalIgnoreCase);
         return names.Select(n => JoinColumns.FirstOrDefault(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase))
                                  ?? new GridColumnDefinition { Column = n }).ToList();
     }
+}
+
+/// <summary>列印樣板的一個語系版面（資料來源跟主要版面共用）</summary>
+public class PrintLanguage
+{
+    public string Name { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public PrintPaper Paper { get; set; } = PrintPaper.A4;
+    public bool Landscape { get; set; }
+    public List<PrintItem> Items { get; set; } = new();
 }
 
 /// <summary>屬性面板上把字串清單顯示成「A, B」</summary>
@@ -241,6 +319,18 @@ public class PrintItem
 
     [Category("內容"), DisplayName("格式"), Description("數字、日期的顯示格式，例如 #,##0.00、yyyy/MM/dd；空白 = 預設")]
     public string Format { get; set; }
+
+    [Category("內容"), DisplayName("SQL"), Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor)),
+     Description("種類 = 欄位 時：有寫就印這個 SELECT 查出來的第一筆第一個欄位（取代欄位本身的值）。@名稱 帶入要印的這筆資料的欄位（含 JOIN 的欄位），"
+               + "例如 SELECT 條文名稱 FROM dbo_付款方式 WHERE 條文編號 = @價格條件；查不到印空白")]
+    public string Sql { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool HasSql => !string.IsNullOrWhiteSpace(Sql);
+
+    /// <summary>SQL 查出來的值放在單頭資料的這個欄位（同一段 SQL 只查一次）</summary>
+    [Browsable(false), JsonIgnore]
+    public string SqlValueColumn => "\u0001SQL:" + Sql?.Trim();
 
     /// <summary>圖片內容（PNG / JPG 的 Base64），存在樣板檔裡，搬到別台電腦也印得出來</summary>
     [Browsable(false)]
@@ -419,9 +509,11 @@ public static class PrintRenderer
             }
         }
 
+        // 有寫 SQL 的欄位印 SQL 查出來的值（讀資料時已經查好放在 SqlValueColumn）；設計畫面顯示 {SQL}
+        string valueColumn = item.HasSql ? item.SqlValueColumn : item.Column ?? "";
         string text = item.Kind == PrintItemKind.文字 ? item.Text ?? ""
-                    : (item.Text ?? "") + (row == null ? "{" + (item.Column ?? "未選欄位") + "}"
-                                         : row.Table.Columns.Contains(item.Column ?? "") ? FormatValue(row[item.Column], item.Format) : "");
+                    : (item.Text ?? "") + (row == null ? "{" + (item.HasSql ? "SQL" + (string.IsNullOrWhiteSpace(item.Column) ? "" : "：" + item.Column) : item.Column ?? "未選欄位") + "}"
+                                         : row.Table.Columns.Contains(valueColumn) ? FormatValue(row[valueColumn], item.Format) : "");
         using var font = CreateFont(item);
         using var format = new StringFormat
         {
@@ -449,7 +541,7 @@ public static class PrintRenderer
     private static readonly Graphics measure = Graphics.FromImage(new Bitmap(1, 1));
 
     /// <summary>明細表格的欄位、欄的左右位置</summary>
-    private static (List<PrintTableColumn> Columns, List<float> Xs) TableColumnsOf(PrintItem item, RectangleF rect)
+    public static (List<PrintTableColumn> Columns, List<float> Xs) TableColumnsOf(PrintItem item, RectangleF rect)
     {
         var columns = item.TableColumns.Where(c => !string.IsNullOrWhiteSpace(c.Column)).ToList();
         float total = columns.Sum(c => Math.Max(1, c.Width));
@@ -639,6 +731,15 @@ public static class PrintRunner
                 row.Table.Columns.Add(name, typeof(object));
                 row[name] = record(name) ?? DBNull.Value;
             }
+            // 列印參數（列印選單傳進來的值）：同名的資料欄位也以參數為準
+            foreach (string name in t.Params)
+            {
+                if (!row.Table.Columns.Contains(name)) row.Table.Columns.Add(name, typeof(object));
+                else row.Table.Columns[name].ReadOnly = false;
+                try { row[name] = record(name) ?? DBNull.Value; }
+                catch (ArgumentException) { row[name] = DBNull.Value; }     // 型別不合（例如資料欄位是數字、參數打了文字）：當空值
+            }
+            FillSqlValues(t, connectionString, row);
             headers.Add(row);
         }
         var links = t.Detail?.Links ?? new();
@@ -777,7 +878,43 @@ public static class PrintRunner
         using (var cmd = d.CreateCommand(conn, GridSql.Select(d, d.Table(t.TableSchema, t.TableName), t.UsedColumns(), t.Joins, 1) + d.Limit(1)))
             table = d.Fill(cmd);
         if (table.Rows.Count == 0) return null;
+        // 預覽時沒有列印選單：參數顯示「{參數名稱}」，SQL 的 @參數 當空值
+        var placeholders = t.Params.Where(n => !table.Columns.Contains(n)).ToList();
+        foreach (string name in placeholders) table.Columns.Add(name, typeof(object));
+        FillSqlValues(t, connectionString, table.Rows[0]);
+        foreach (string name in placeholders) table.Rows[0][name] = "{" + name + "}";
         return new PrintSheet(table.Rows[0], LoadDetail(t, connectionString, table.Rows[0], sample: true));
+    }
+
+    /// <summary>
+    /// 樣板上有寫 SQL 的欄位：執行 SELECT（@名稱 取這筆資料的欄位，沒有的當空值），第一筆第一個欄位放進這筆資料的 SqlValueColumn；
+    /// 查不到 = 空白，SQL 錯了印「（SQL 錯誤：…）」，不擋整張列印
+    /// </summary>
+    public static void FillSqlValues(PrintTemplate t, string connectionString, DataRow row)
+    {
+        var d = DbDialect.Of(connectionString);
+        foreach (var item in t.Items.Where(i => i.Kind == PrintItemKind.欄位 && i.HasSql).GroupBy(i => i.SqlValueColumn).Select(g => g.First()))
+        {
+            string column = item.SqlValueColumn;
+            if (!row.Table.Columns.Contains(column)) row.Table.Columns.Add(column, typeof(object));
+            try
+            {
+                var (sql, parameters) = d.PrepareUserSql(item.Sql);
+                using var conn = d.Open(connectionString);
+                using var cmd = d.CreateCommand(conn, sql);
+                foreach (var (name, parameter) in parameters)
+                {
+                    var value = row.Table.Columns.Contains(name) ? row[name] : DBNull.Value;
+                    d.AddParam(cmd, parameter, value is string s ? s.TrimEnd() : value ?? DBNull.Value);   // nchar 補的空白去掉，比對才對得上
+                }
+                var result = d.Fill(cmd);
+                row[column] = result.Rows.Count > 0 && result.Columns.Count > 0 ? result.Rows[0][0] : DBNull.Value;
+            }
+            catch (Exception ex)
+            {
+                row[column] = "（SQL 錯誤：" + ex.Message + "）";
+            }
+        }
     }
 
     /// <summary>建立列印文件：每張單據一頁（單身放不下時接著印下一頁）；紙張大小、方向照樣板</summary>
