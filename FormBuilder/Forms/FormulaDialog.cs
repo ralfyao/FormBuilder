@@ -23,8 +23,10 @@ public class FormulaDialog : Form
 
     /// <param name="fields">可以用的欄位名稱與標籤（例如 Grid 同一列的其他欄位）</param>
     /// <param name="masterFields">另外列出的畫面上的欄位（Grid 公式用到同一列沒有的欄位時取畫面上的值）；同名的以同一列為準</param>
+    /// <param name="detailFields">明細欄位（列印樣板用）：雙擊插入 SUM(欄位)，可以再改成 AVG、COUNT、MAX、MIN</param>
     public FormulaDialog(string formula, IEnumerable<(string Column, string Label)> fields, string fieldsTitle = "畫面上的欄位（雙擊插入）",
-                         IEnumerable<(string Column, string Label)> masterFields = null)
+                         IEnumerable<(string Column, string Label)> masterFields = null,
+                         IEnumerable<(string Column, string Label)> detailFields = null)
     {
         Text = "公式：欄位名稱和數字做 + - * /，可以用括號；& 接文字";
         Font = new Font("Microsoft JhengHei UI", 9F);
@@ -41,6 +43,12 @@ public class FormulaDialog : Form
         {
             lstFields.Items.Add("── 畫面上的欄位 ──");
             foreach (var (column, label) in masters) lstFields.Items.Add(new FieldItem(column, label));
+        }
+        var details = (detailFields ?? Enumerable.Empty<(string Column, string Label)>()).ToList();
+        if (details.Count > 0)
+        {
+            lstFields.Items.Add("── 明細欄位（雙擊插入 SUM 加總）──");
+            foreach (var (column, label) in details) lstFields.Items.Add(new FieldItem(column, label, Aggregate: true));
         }
         txtFormula.Text = formula ?? "";
 
@@ -90,7 +98,7 @@ public class FormulaDialog : Form
 
         lstFields.DoubleClick += (s, e) =>
         {
-            if (lstFields.SelectedItem is FieldItem item) Insert(NameText(item.Column));
+            if (lstFields.SelectedItem is FieldItem item) Insert(item.Aggregate ? $"SUM({item.Column})" : NameText(item.Column));
         };
         txtFormula.TextChanged += (s, e) => ShowCheck();
         btnOk.Click += (s, e) =>
@@ -119,9 +127,27 @@ public class FormulaDialog : Form
         lblCheck.Text = Formula.Length == 0 ? "還沒有輸入公式" : error ?? "公式格式正確";
     }
 
-    private sealed record FieldItem(string Column, string Label)
+    private sealed record FieldItem(string Column, string Label, bool Aggregate = false)
     {
-        public override string ToString() => string.IsNullOrWhiteSpace(Label) || Label == Column ? Column : $"{Label}（{Column}）";
+        public override string ToString() => (Aggregate ? "SUM：" : "") + (string.IsNullOrWhiteSpace(Label) || Label == Column ? Column : $"{Label}（{Column}）");
+    }
+}
+
+/// <summary>列印樣板元件「公式」的「…」：左邊列出單頭欄位、明細欄位（雙擊插入 SUM(…)），欄位由列印樣板設計器提供</summary>
+public class PrintFormulaEditor : UITypeEditor
+{
+    /// <summary>單頭可以用的欄位（列印樣板設計器開啟時設定）</summary>
+    public static Func<IEnumerable<(string Column, string Label)>> HeaderFields { get; set; } = () => Enumerable.Empty<(string, string)>();
+    /// <summary>明細欄位</summary>
+    public static Func<IEnumerable<(string Column, string Label)>> DetailFields { get; set; } = () => Enumerable.Empty<(string, string)>();
+
+    public override UITypeEditorEditStyle GetEditStyle(ITypeDescriptorContext context) => UITypeEditorEditStyle.Modal;
+
+    public override object EditValue(ITypeDescriptorContext context, IServiceProvider provider, object value)
+    {
+        using var dlg = new FormulaDialog(value as string, HeaderFields(), "單頭欄位（雙擊插入）", detailFields: DetailFields());
+        dlg.Text = "公式：單頭欄位做 + - * /，SUM(明細欄位) 加總明細；& 接文字";
+        return dlg.ShowDialog(Form.ActiveForm) == DialogResult.OK ? (dlg.Formula == "" ? null : dlg.Formula) : value;
     }
 }
 

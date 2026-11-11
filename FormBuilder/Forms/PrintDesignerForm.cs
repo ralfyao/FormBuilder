@@ -234,6 +234,11 @@ public partial class PrintDesignerForm : Form
         SyncZOrder();
         ApplyPageSize();
         SetSelection(Array.Empty<DesignBox>());
+        // 元件「公式」的「…」：列出單頭欄位（含列印參數）與明細欄位
+        PrintFormulaEditor.HeaderFields = () => HeaderColumns().Select(c => (c.Name, c.Description))
+            .Concat(template.Params.Select(p => (p, (string)null)))
+            .DistinctBy(c => c.Item1, StringComparer.OrdinalIgnoreCase).ToList();
+        PrintFormulaEditor.DetailFields = () => template.DetailColumns.Select(c => (c.Column, c.Header)).ToList();
         Load += (s, e) =>
         {
             LoadColumns();

@@ -354,11 +354,16 @@ public class PrintItem
     [Category("內容"), DisplayName("公式"),
      Description("文字、欄位都可以用：印「文字」後面接公式算出來的值（取代欄位本身的值）。可以用單頭欄位做 + - * / 運算，"
                + "也可以加總明細：SUM(明細欄位)、AVG、COUNT、MAX、MIN，例如 SUM(金額1)、SUM(金額1) * 1.05、數量 * 單價；"
-               + "用 & 串接文字，例如 幣別 & \" \" & SUM(金額1)。數字的顯示格式看「格式」，例如 #,##0.00")]
+               + "用 & 串接文字，例如 幣別 & \" \" & SUM(金額1)。數字的顯示格式看「格式」，例如 #,##0.00。按「…」用視窗設定"),
+     Editor("FormBuilder.PrintFormulaEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing")]  // 用名稱：ERPClient 沒有公式視窗
     public string Formula { get; set; }
 
     [Browsable(false), JsonIgnore]
     public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
+
+    [Category("內容"), DisplayName("標籤寬度"),
+     Description("有公式時，文字和算出來的值分開印：文字放在左邊這個寬度內（照「對齊」），值靠右對齊印在後面。0 = 依文字長度自動")]
+    public int LabelWidth { get; set; }
 
     /// <summary>SQL 查出來的值放在單頭資料的這個欄位（同一段 SQL 只查一次）</summary>
     [Browsable(false), JsonIgnore]
@@ -561,7 +566,22 @@ public static class PrintRenderer
         // 框的高度放得下兩行以上才換行，否則單行
         if (rect.Height < font.GetHeight(g) * 1.8f) format.FormatFlags |= StringFormatFlags.NoWrap;
         var textRect = RectangleF.Inflate(rect, -3, 0);
-        g.DrawString(text, font, row == null && item.Kind == PrintItemKind.欄位 ? Brushes.DarkBlue : Brushes.Black, textRect, format);
+        if (item.HasFormula && label.Length > 0)
+        {
+            // 有公式又有文字：文字和算出來的值分開印，文字在左邊（標籤寬度內，照「對齊」），值靠右，
+            // 幾個合計（金額總計、稅額、總金額）上下排時文字、數字各自對齊
+            string value = text.Substring(label.Length);
+            float labelWidth = item.LabelWidth > 0 ? item.LabelWidth
+                : Math.Min(textRect.Width, g.MeasureString(label, font, new SizeF(textRect.Width, textRect.Height), format).Width + 4);
+            var labelRect = new RectangleF(textRect.X, textRect.Y, Math.Min(labelWidth, textRect.Width), textRect.Height);
+            var valueRect = new RectangleF(labelRect.Right, textRect.Y, Math.Max(1, textRect.Right - labelRect.Right), textRect.Height);
+            g.DrawString(label, font, Brushes.Black, labelRect, format);
+            using var right = (StringFormat)format.Clone();
+            right.Alignment = StringAlignment.Far;
+            g.DrawString(value, font, row == null ? Brushes.DarkBlue : Brushes.Black, valueRect, right);
+        }
+        else
+            g.DrawString(text, font, row == null && item.Kind == PrintItemKind.欄位 ? Brushes.DarkBlue : Brushes.Black, textRect, format);
         if (item.Border) g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
     }
 
