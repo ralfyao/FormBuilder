@@ -1,0 +1,26 @@
+name: macOS Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:        # 允許在 GitHub 網頁上手動按「Run workflow」
+
+jobs:
+  build:
+    runs-on: macos-latest   # 指定用 macOS runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 看一下環境
+        run: |
+          sw_vers
+          xcodebuild -version
+          uname -m
+
+      - name: 編譯
+        run: |
+          xcodebuild -project MyApp.xcodeproj \
+                     -scheme MyApp \
+                     -configuration Release \
+                     -destination 'generic/platform=macOS' \
+                     build
