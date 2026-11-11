@@ -1646,10 +1646,54 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (!SaveDetail(doneMessage)) SetMode(Mode.Detail);
     }
 
+    // ================= 建檔 / 修改 / 核准 人與日期 =================
+
+    /// <summary>單頭資料表實際有的欄位（讀一次資料庫結構後快取）；讀不到時 = 空的（不自動填）</summary>
+    private HashSet<string> tableColumns;
+
+    private bool TableHas(string column)
+    {
+        if (tableColumns == null)
+        {
+            try
+            {
+                tableColumns = SchemaReader.GetColumns(def.ConnectionString, def.TableSchema, def.TableName)
+                                           .Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                tableColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        return tableColumns.Contains(column);
+    }
+
+    /// <summary>欄位自己有設「預設值」（新增）或「修改時的值」（修改）時，照那個設定，不自動蓋掉</summary>
+    private bool HasOwnSetting(string column, bool update)
+    {
+        bool Match(string c) => column.Equals(c, StringComparison.OrdinalIgnoreCase);
+        return def.Fields.Any(f => Match(f.Column) && !string.IsNullOrWhiteSpace(update ? f.UpdateValue : f.DefaultValue))
+            || def.Grids.Where(g => g.IsMasterList).SelectMany(g => g.Columns)
+                  .Any(c => Match(c.Column) && !string.IsNullOrWhiteSpace(update ? c.EditUpdateValue : c.EditDefaultValue));
+    }
+
+    /// <summary>
+    /// 資料表有「人」「人日」這組欄位時（建檔 / 建檔日、修改 / 修改日），自動填入登入帳號與現在時間；
+    /// 沒有這些欄位、或欄位自己有設預設值 / 修改時的值，就不動
+    /// </summary>
+    private void StampUser(Dictionary<string, object> values, string column, bool update)
+    {
+        string user = SysContext.User?.UserId ?? Environment.UserName;
+        if (TableHas(column) && !HasOwnSetting(column, update)) values[column] = user;
+        if (TableHas(column + "日") && !HasOwnSetting(column + "日", update)) values[column + "日"] = DateTime.Now;
+    }
+
     /// <summary>新增一筆單頭（key = 欄位名稱）；成功後讀回這筆、加到查詢結果並設為目前這筆</summary>
     /// <param name="notify">false = 不跳「新增完成」（清單直接新增，新的那筆出現在清單上就知道了）</param>
     private bool InsertValues(Dictionary<string, object> values, bool notify = true)
     {
+        values = new Dictionary<string, object>(values, StringComparer.OrdinalIgnoreCase);
+        StampUser(values, "建檔", update: false);                // 有建檔、建檔日欄位就自動填登入帳號、現在時間
         try
         {
             using var conn = Dialect.Open(def.ConnectionString);
@@ -1697,8 +1741,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
         if (values == null) return;
         var pending = PendingDetail();                     // 跟單頭一起改的單身
         if (pending == null) return;
-        // 修改模式不改主鍵
-        if (UpdateValues(values.Where(v => !v.Key.IsKey).ToDictionary(v => v.Key.Column, v => v.Value), notify: pending.Count == 0) && pending.Count > 0)
+        // 修改模式不改主鍵；有修改、修改日欄位就自動填登入帳號、現在時間
+        var changes = values.Where(v => !v.Key.IsKey).ToDictionary(v => v.Key.Column, v => v.Value, StringComparer.OrdinalIgnoreCase);
+        StampUser(changes, "修改", update: true);
+        if (UpdateValues(changes, notify: pending.Count == 0) && pending.Count > 0)
             SaveInlineDetail(pending, "修改完成");
     }
 
@@ -2575,9 +2621,20 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return false;
     }
     bool IRecordNavigator.Insert(Dictionary<string, object> values) => InsertValues(values);
-    bool IRecordNavigator.Update(Dictionary<string, object> values) => UpdateValues(values);
-    bool IRecordNavigator.UpdateColumn(string column, object value, string doneMessage) =>
-        UpdateValues(new Dictionary<string, object> { [column] = value }, doneMessage);
+    bool IRecordNavigator.Update(Dictionary<string, object> values)
+    {
+        values = new Dictionary<string, object>(values, StringComparer.OrdinalIgnoreCase);
+        StampUser(values, "修改", update: true);
+        return UpdateValues(values);
+    }
+    bool IRecordNavigator.UpdateColumn(string column, object value, string doneMessage)
+    {
+        var values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase) { [column] = value };
+        // 生效 / 取消生效：有「生效欄位 + 日」（例如核准日）就一起寫入現在時間 / 清空
+        if (column.Equals(listDef?.EffectiveColumn ?? "", StringComparison.OrdinalIgnoreCase) && TableHas(column + "日"))
+            values[column + "日"] = GridDefinition.IsEffectiveValue(value) ? DateTime.Now : DBNull.Value;
+        return UpdateValues(values, doneMessage);
+    }
     bool IRecordNavigator.Delete() => DeleteRecord();
 
     /// <summary>
@@ -2971,12 +3028,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
             && results.Columns.Contains(column) && GridDefinition.IsEffectiveValue(results.Rows[row][column]);
     }
 
-    /// <summary>清單上選取的資料一起生效（生效欄位改成 1）或取消生效（改成 0）</summary>
+    /// <summary>清單上選取的資料一起生效（寫入核准人帳號 / 1，有核准日就寫入現在時間）或取消生效（清空 / 0）</summary>
     private void SetEffectiveSelected(bool effective)
     {
         var rows = SelectedRowIndexes();
         string column = listDef.EffectiveColumn;
         if (rows.Count == 0 || !HasKey || string.IsNullOrWhiteSpace(column)) return;
+        bool withDate = TableHas(column + "日");                 // 有「核准日」之類的欄位就一起寫入現在時間 / 清空
         try
         {
             using var conn = Dialect.Open(def.ConnectionString);
@@ -2988,7 +3046,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 cmd.Parameters.Clear();
                 Dialect.AddParam(cmd, "v", GridDefinition.EffectiveValueFor(
                     results.Columns.Contains(column) ? results.Columns[column].DataType : typeof(int), effective));
-                cmd.CommandText = $"UPDATE {def.FullTableName} SET {Dialect.Quote(column)} = {Dialect.Param("v")} WHERE " + AddKeyCondition(cmd, KeyOf(row));
+                string set = $"{Dialect.Quote(column)} = {Dialect.Param("v")}";
+                if (withDate)
+                {
+                    Dialect.AddParam(cmd, "d", effective ? DateTime.Now : DBNull.Value);
+                    set += $", {Dialect.Quote(column + "日")} = {Dialect.Param("d")}";
+                }
+                cmd.CommandText = $"UPDATE {def.FullTableName} SET {set} WHERE " + AddKeyCondition(cmd, KeyOf(row));
                 cmd.ExecuteNonQuery();
             }
             tran.Commit();
