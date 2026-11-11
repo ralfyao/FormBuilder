@@ -67,15 +67,15 @@ public class PrintMenuDesignDialog : Form
 
         layout.Controls.Add(new Label
         {
-            Text = "按鈕（每個按鈕印一個樣板；按「設計…」開列印樣板設計器，存檔後樣板檔自動填進來）",
+            Text = "按鈕（每個按鈕印一個樣板，或開啟一個自訂畫面；按「設計…」開列印樣板設計器，「選檔…」可以選列印樣板或畫面定義檔）",
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft,
         }, 0, 3);
         dgvButtons.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "按鈕文字", Width = 200 });
-        dgvButtons.Columns.Add(new DataGridViewTextBoxColumn { Name = "Template", HeaderText = "列印樣板", ReadOnly = true, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+        dgvButtons.Columns.Add(new DataGridViewTextBoxColumn { Name = "Template", HeaderText = "列印樣板 / 畫面", ReadOnly = true, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
         dgvButtons.Columns.Add(new DataGridViewButtonColumn { Name = "Design", HeaderText = "", Text = "設計…", UseColumnTextForButtonValue = true, Width = 70 });
         dgvButtons.Columns.Add(new DataGridViewButtonColumn { Name = "Pick", HeaderText = "", Text = "選檔…", UseColumnTextForButtonValue = true, Width = 70 });
         dgvButtons.AllowUserToAddRows = true;
-        foreach (var b in menu.Buttons) dgvButtons.Rows.Add(b.Text, b.PrintTemplate);
+        foreach (var b in menu.Buttons) dgvButtons.Rows.Add(b.Text, b.Action == ButtonAction.開啟畫面 ? b.TargetForm : b.PrintTemplate);
         dgvButtons.CellContentClick += (s, e) =>
         {
             if (e.RowIndex < 0) return;
@@ -115,6 +115,11 @@ public class PrintMenuDesignDialog : Form
             row = dgvButtons.Rows[rowIndex];
         }
         string text = Convert.ToString(row.Cells["Text"].Value);
+        if (IsFormFile(Convert.ToString(row.Cells["Template"].Value)))
+        {
+            MessageBox.Show("這一列選的是畫面定義檔（開啟自訂畫面），請到選單上「設計這個畫面」修改它；要改成列印樣板，請先按「選檔…」換成 .print.json。", Text);
+            return;
+        }
         var b = new ButtonDefinition
         {
             Text = string.IsNullOrWhiteSpace(text) ? "列印" : text.Trim(),
@@ -126,11 +131,20 @@ public class PrintMenuDesignDialog : Form
         row.Cells["Template"].Value = b.PrintTemplate;
     }
 
-    /// <summary>按鈕的樣板：選一個已經設計好的樣板檔</summary>
+    /// <summary>是畫面定義檔（.json，不是 .print.json）：按鈕開啟這個畫面，不是印樣板</summary>
+    internal static bool IsFormFile(string file) =>
+        !string.IsNullOrWhiteSpace(file) && file.Trim().EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+        && !file.Trim().EndsWith(".print.json", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>按鈕的樣板：選一個已經設計好的樣板檔，或一個畫面定義檔（按鈕改成開啟這個自訂畫面）</summary>
     private void PickRow(int rowIndex)
     {
         dgvButtons.EndEdit();
-        using var dlg = new OpenFileDialog { Filter = "列印樣板 (*.print.json)|*.print.json", InitialDirectory = FormDefinition.DefaultFolder };
+        using var dlg = new OpenFileDialog
+        {
+            Filter = "列印樣板或畫面 (*.json)|*.json|列印樣板 (*.print.json)|*.print.json",
+            InitialDirectory = FormDefinition.DefaultFolder,
+        };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var row = dgvButtons.Rows[rowIndex];
         if (row.IsNewRow)
@@ -176,6 +190,18 @@ public class PrintMenuDesignDialog : Form
             {
                 MessageBox.Show($"按鈕「{text}」還沒有列印樣板，請按「設計…」或「選檔…」。", Text);
                 return;
+            }
+            if (IsFormFile(template))
+            {
+                // 畫面定義檔：按鈕開啟這個自訂畫面，列印視窗的參數（例如單號）照同名傳過去
+                result.Buttons.Add(new ButtonDefinition
+                {
+                    Text = string.IsNullOrEmpty(text) ? Path.GetFileNameWithoutExtension(template) : text,
+                    Action = ButtonAction.開啟畫面,
+                    TargetForm = template,
+                    OpenParams = result.Params.Count == 0 ? null : string.Join(", ", result.Params.Select(p => $"{p.Name}=@{p.Name}")),
+                });
+                continue;
             }
             result.Buttons.Add(new ButtonDefinition { Text = string.IsNullOrEmpty(text) ? "列印" : text, Action = ButtonAction.列印報表, PrintTemplate = template });
         }
@@ -224,7 +250,13 @@ public class PrintMenuRunDialog : Form
         {
             var button = new Button { Text = b.Text, AutoSize = true, MinimumSize = new Size(110, 34), Margin = new Padding(3) };
             ButtonRunner.ApplyFont(b, button);
-            button.Click += (s, e) => ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => ValueOf(name, current) }, this);
+            button.Click += (s, e) =>
+            {
+                if (b.Action == ButtonAction.開啟畫面)    // 選的是畫面定義檔：開啟自訂畫面，@名稱 取視窗上的參數，沒有再取目前這筆
+                    ButtonRunner.OpenForm(b, sourcePath, this, name => ValueOf(name, current), connectionString: connectionString);
+                else
+                    ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => ValueOf(name, current) }, this);
+            };
             buttons.Controls.Add(button);
         }
         var close = new Button { Text = "關閉", AutoSize = true, MinimumSize = new Size(90, 34), Margin = new Padding(3), DialogResult = DialogResult.Cancel };
