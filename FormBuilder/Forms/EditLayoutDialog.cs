@@ -899,7 +899,7 @@ public partial class EditLayoutDialog : Form, IPickerHost
 
     private void DesignPrintMenu()
     {
-        using var dlg = new PrintMenuDesignDialog(editPrintMenu, DesignTemplate);
+        using var dlg = new PrintMenuDesignDialog(editPrintMenu, DesignTemplate, ((IPickerHost)this).PickerLocalColumns);
         if (dlg.ShowDialog(this) == DialogResult.OK) editPrintMenu = dlg.Result;
     }
 

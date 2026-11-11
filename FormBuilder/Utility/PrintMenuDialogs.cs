@@ -19,7 +19,8 @@ public class PrintMenuDesignDialog : Form
     public PrintMenuDefinition Result { get; private set; }
 
     /// <param name="designTemplate">開列印樣板設計器設計按鈕的樣板；回傳 true = 樣板檔有改</param>
-    public PrintMenuDesignDialog(PrintMenuDefinition current, Func<ButtonDefinition, bool> designTemplate)
+    /// <param name="localColumns">畫面（編輯視窗）上的欄位：「參數名稱」可以從這裡選，選了預設值自動帶 @欄位</param>
+    public PrintMenuDesignDialog(PrintMenuDefinition current, Func<ButtonDefinition, bool> designTemplate, IEnumerable<string> localColumns = null)
     {
         menu = current?.Clone() ?? new PrintMenuDefinition();
         this.designTemplate = designTemplate;
@@ -54,10 +55,43 @@ public class PrintMenuDesignDialog : Form
 
         layout.Controls.Add(new Label
         {
-            Text = "參數（樣板的「列印參數」寫同樣的名稱；預設值：固定文字、@欄位 = 目前這筆的值、SELECT … = 查詢結果，{今天}、{使用者名稱} 也可以）",
+            Text = "參數（名稱可選畫面欄位，預設值空白 = 帶這個欄位目前的值；預設值也可以寫固定文字、@欄位、SELECT …、{今天}）",
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft,
         }, 0, 1);
-        dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "參數名稱", Width = 130 });
+        var locals = localColumns?.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? new List<string>();
+        if (locals.Count > 0)
+        {
+            // 參數名稱：下拉選畫面上的欄位，也可以自己打（不在清單裡的名稱）
+            var nameColumn = new DataGridViewComboBoxColumn { Name = "Name", HeaderText = "參數名稱（畫面欄位）", Width = 170, FlatStyle = FlatStyle.Flat };
+            nameColumn.Items.AddRange(locals.Concat(menu.Params.Select(p => p.Name))
+                .Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).Cast<object>().ToArray());
+            dgvParams.Columns.Add(nameColumn);
+            dgvParams.EditingControlShowing += (s, e) =>
+            {
+                if (dgvParams.CurrentCell?.OwningColumn.Name == "Name" && e.Control is ComboBox box) box.DropDownStyle = ComboBoxStyle.DropDown;
+            };
+            dgvParams.CellValidating += (s, e) =>
+            {
+                if (dgvParams.Columns[e.ColumnIndex].Name != "Name") return;
+                string typed = Convert.ToString(e.FormattedValue)?.Trim().TrimStart('@');
+                if (!string.IsNullOrEmpty(typed) && !nameColumn.Items.Cast<object>().Any(i => string.Equals(Convert.ToString(i), typed, StringComparison.OrdinalIgnoreCase)))
+                    nameColumn.Items.Add(typed);
+                if (!string.IsNullOrEmpty(typed)) dgvParams.Rows[e.RowIndex].Cells[e.ColumnIndex].Value = typed;
+            };
+            // 選了畫面上的欄位、預設值還空著：預設值自動帶 @欄位（目前這筆的值）
+            dgvParams.CellValueChanged += (s, e) =>
+            {
+                if (e.RowIndex < 0 || dgvParams.Columns[e.ColumnIndex].Name != "Name") return;
+                var row = dgvParams.Rows[e.RowIndex];
+                string name = Convert.ToString(row.Cells["Name"].Value)?.Trim();
+                if (!string.IsNullOrEmpty(name) && string.IsNullOrWhiteSpace(Convert.ToString(row.Cells["Value"].Value))
+                    && locals.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    row.Cells["Value"].Value = "@" + name;
+            };
+            dgvParams.DataError += (s, e) => e.ThrowException = false;
+        }
+        else
+            dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "參數名稱", Width = 130 });
         dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Label", HeaderText = "標籤（空白 = 名稱）", Width = 150 });
         dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "預設值", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
         dgvParams.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ReadOnly", HeaderText = "不能改", Width = 60 });
@@ -238,7 +272,8 @@ public class PrintMenuRunDialog : Form
         foreach (var p in menu.Params)
         {
             string text = "";
-            try { text = ToText(ResolveDefault(p.Value, connectionString, current)); }
+            // 預設值空白：參數名稱是畫面上的欄位時，帶目前這筆的值
+            try { text = ToText(string.IsNullOrWhiteSpace(p.Value) ? current(p.Name) : ResolveDefault(p.Value, connectionString, current)); }
             catch (Exception ex) { text = "（預設值錯誤：" + ex.Message + "）"; }
             var box = new TextBox { Text = text, ReadOnly = p.ReadOnly, Dock = DockStyle.Fill, Margin = new Padding(3, 4, 3, 4) };
             inputs[p.Name] = box;
