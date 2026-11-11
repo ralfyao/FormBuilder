@@ -788,22 +788,36 @@ public class GridDefinition
     public List<FieldDefinition> EditTextLabels { get; set; } = new();
 
     /// <summary>
-    /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」；
+    /// 生效欄位：編輯視窗的「生效」寫入核准人的帳號（數字、bit 欄位寫 1），「取消生效」清空（數字寫 0），生效的資料才能「列印」；
     /// 已生效的資料不能修改、刪除（要先取消生效）。
     /// 空白 = 不使用（不顯示生效 / 取消生效）
     /// </summary>
     [Browsable(false)]
     public string EffectiveColumn { get; set; }
 
-    /// <summary>欄位值算不算「生效」：1、True、Y</summary>
+    /// <summary>
+    /// 欄位值算不算「生效」：數字、bit 欄位是 1 / True；文字欄位有值就算（存的是核准人帳號），空白、0、N、False 不算
+    /// </summary>
     public static bool IsEffectiveValue(object value) => value switch
     {
         null or DBNull => false,
         bool b => b,
-        string s => s.Trim() is "1" or "Y" or "y" || s.Trim().Equals("true", StringComparison.OrdinalIgnoreCase),
+        string s => s.Trim() is { Length: > 0 } t && t is not ("0" or "N" or "n")
+                    && !t.Equals("false", StringComparison.OrdinalIgnoreCase),
         IConvertible c => c.ToDecimal(null) == 1,
         _ => false,
     };
+
+    /// <summary>
+    /// 生效 / 取消生效要寫進生效欄位的值：文字欄位生效時寫核准人的帳號（像建檔、修改人），取消生效清成 NULL；
+    /// 數字、bit 欄位照舊寫 1 / 0
+    /// </summary>
+    public static object EffectiveValueFor(Type columnType, bool effective)
+    {
+        if (columnType == typeof(string))
+            return effective ? SysContext.User?.UserId ?? Environment.UserName : DBNull.Value;
+        return effective ? 1 : 0;
+    }
 
     /// <summary>雙擊 Grid 開啟的編輯視窗要顯示的欄位</summary>
     [Browsable(false), JsonIgnore]

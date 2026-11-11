@@ -433,7 +433,8 @@ public partial class RecordNavigatorDialog : Form
     private void SetEffective(bool effective)
     {
         if (effectiveColumn == null || nav.CurrentRow == null) return;
-        if (nav.UpdateColumn(effectiveColumn, effective ? 1 : 0, effective ? "已生效。" : "已取消生效。"))
+        var type = nav.CurrentRow.Table.Columns.Contains(effectiveColumn) ? nav.CurrentRow.Table.Columns[effectiveColumn].DataType : typeof(int);
+        if (nav.UpdateColumn(effectiveColumn, GridDefinition.EffectiveValueFor(type, effective), effective ? "已生效。" : "已取消生效。"))
         {
             ShowRecord();
             SetMode(EditMode.Browse);

@@ -587,7 +587,7 @@ public static class GridCells
 
     /// <summary>
     /// 生效欄位：顯示成唯讀勾選框（只看不改，生效 / 取消生效要用按鈕）。
-    /// 欄位是文字或數字時，值是 1、Y、True 就打勾（跟生效按鈕的判斷一樣），要配合 HookEffectiveColumn
+    /// 欄位是文字或數字時，數字是 1、文字有值（核准人帳號、Y）就打勾（跟生效按鈕的判斷一樣），要配合 HookEffectiveColumn
     /// </summary>
     public static DataGridViewColumn CreateEffectiveColumn(GridColumnDefinition c) => new DataGridViewCheckBoxColumn
     {

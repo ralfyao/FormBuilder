@@ -233,7 +233,7 @@ namespace FormBuilder
             this.btnEffectiveColumn.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
             this.btnEffectiveColumn.Name = "btnEffectiveColumn";
             this.btnEffectiveColumn.Text = "（不使用）";
-            this.btnEffectiveColumn.ToolTipText = "指定哪個欄位是生效欄位：執行時「生效」改成 1、「取消生效」改成 0";
+            this.btnEffectiveColumn.ToolTipText = "指定哪個欄位是生效欄位：執行時「生效」寫入核准人的帳號（數字欄位寫 1），「取消生效」清空（數字欄位寫 0）";
             //
             // lblPrintHint
             //

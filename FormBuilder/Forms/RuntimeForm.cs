@@ -2986,7 +2986,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             foreach (int row in rows)
             {
                 cmd.Parameters.Clear();
-                Dialect.AddParam(cmd, "v", effective ? 1 : 0);
+                Dialect.AddParam(cmd, "v", GridDefinition.EffectiveValueFor(
+                    results.Columns.Contains(column) ? results.Columns[column].DataType : typeof(int), effective));
                 cmd.CommandText = $"UPDATE {def.FullTableName} SET {Dialect.Quote(column)} = {Dialect.Param("v")} WHERE " + AddKeyCondition(cmd, KeyOf(row));
                 cmd.ExecuteNonQuery();
             }
