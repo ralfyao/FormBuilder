@@ -343,6 +343,10 @@ public class PrintItem
     [Category("內容"), DisplayName("格式"), Description("數字、日期的顯示格式，例如 #,##0.00、yyyy/MM/dd；空白 = 預設")]
     public string Format { get; set; }
 
+    [Category("內容"), DisplayName("千分號"),
+     Description("True = 數字加千分號（例如 267,625.00），小數位數照原本的值；欄位值、公式算出來的值都適用。有設「格式」時以格式為準")]
+    public bool Thousands { get; set; }
+
     [Category("內容"), DisplayName("SQL"), Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor)),
      Description("種類 = 欄位 時：有寫就印這個 SELECT 查出來的第一筆第一個欄位（取代欄位本身的值）。@名稱 帶入要印的這筆資料的欄位（含 JOIN 的欄位），"
                + "例如 SELECT 條文名稱 FROM dbo_付款方式 WHERE 條文編號 = @價格條件；查不到印空白")]
@@ -495,9 +499,21 @@ public static class PrintRenderer
     }
 
     /// <summary>欄位值轉成要印的文字（有設格式用格式；日期沒設格式時只印日期）</summary>
-    public static string FormatValue(object value, string format)
+    public static string FormatValue(object value, string format, bool thousands = false)
     {
         if (value == null || value == DBNull.Value) return "";
+        // 千分號（沒設格式時）：數字加上千分號，小數位數照原本的值
+        if (thousands && string.IsNullOrWhiteSpace(format))
+        {
+            switch (value)
+            {
+                case decimal m: return m.ToString("N" + ((decimal.GetBits(m)[3] >> 16) & 0xFF), CultureInfo.CurrentCulture);
+                case double or float: return Convert.ToDouble(value).ToString("#,##0.##########", CultureInfo.CurrentCulture);
+                case byte or short or int or long: return Convert.ToInt64(value).ToString("#,##0", CultureInfo.CurrentCulture);
+                case string s when decimal.TryParse(s.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var n):
+                    return n.ToString("N" + ((decimal.GetBits(n)[3] >> 16) & 0xFF), CultureInfo.CurrentCulture);
+            }
+        }
         if (!string.IsNullOrWhiteSpace(format) && value is IFormattable f)
         {
             try { return f.ToString(format, CultureInfo.CurrentCulture); } catch (FormatException) { }
@@ -555,7 +571,7 @@ public static class PrintRenderer
         string text = item.HasFormula ? label + (row == null ? "{=" + item.Formula.Trim() + "}" : FormulaText(item, row, detail))
                     : item.Kind == PrintItemKind.文字 ? label
                     : label + (row == null ? "{" + (item.HasSql ? "SQL" + (string.IsNullOrWhiteSpace(item.Column) ? "" : "：" + item.Column) : item.Column ?? "未選欄位") + "}"
-                                         : row.Table.Columns.Contains(valueColumn) ? FormatValue(row[valueColumn], item.Format) : "");
+                                         : row.Table.Columns.Contains(valueColumn) ? FormatValue(row[valueColumn], item.Format, item.Thousands) : "");
         using var font = CreateFont(item);
         using var format = new StringFormat
         {
@@ -598,7 +614,7 @@ public static class PrintRenderer
         if (FormBuilder.Formula.IsText(item.Formula))
             return FormBuilder.Formula.EvaluateText(item.Formula, ValueOf, -1, AggregateOf) ?? "";
         var value = FormBuilder.Formula.Evaluate(item.Formula, ValueOf, AggregateOf);
-        return value == null ? "" : FormatValue(value.Value, item.Format);
+        return value == null ? "" : FormatValue(value.Value, item.Format, item.Thousands);
     }
 
     private static void DrawPlaceholder(Graphics g, RectangleF rect, string text)

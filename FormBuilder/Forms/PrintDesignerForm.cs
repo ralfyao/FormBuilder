@@ -198,6 +198,13 @@ public partial class PrintDesignerForm : Form
         // ---- 選單 ----
         miSave.Click += (s, e) => Save(false);
         miSaveAs.Click += (s, e) => Save(true);
+        // 匯入其他樣板：把別的 *.print.json 的版面帶進來當起點，存檔時存成這個按鈕自己的檔案（不改原本的樣板）
+        var miImport = new ToolStripMenuItem("匯入其他樣板…", null, (s, e) => ImportTemplate())
+        {
+            ToolTipText = "用現有的列印樣板（*.print.json）當起點：版面、JOIN、單身、語系都帶進來，存檔時存成這個按鈕自己的樣板檔，原本的樣板不會被改",
+        };
+        btnFileMenu.DropDownItems.Insert(0, miImport);
+        btnFileMenu.DropDownItems.Insert(1, new ToolStripSeparator());
         miUndo.Click += (s, e) => history.Undo();
         miRedo.Click += (s, e) => history.Redo();
         miRemove.Click += (s, e) => RemoveSelected();
@@ -908,6 +915,71 @@ public partial class PrintDesignerForm : Form
     }
 
     // ================= 檔案 / 預覽 =================
+
+    /// <summary>
+    /// 匯入其他樣板：讀另一個 *.print.json 取代目前的版面（含語系、JOIN、單身），資料表、主鍵維持這個畫面的；
+    /// 存檔位置不變（這個按鈕自己的檔案，還沒有檔案時存檔會問檔名），原本那個樣板不會被改到
+    /// </summary>
+    private void ImportTemplate()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Filter = "列印樣板 (*.print.json)|*.print.json",
+            InitialDirectory = templatePath != null ? Path.GetDirectoryName(templatePath) : defaultFolder,
+            Title = "匯入其他樣板（版面帶進來，存檔時存成這個按鈕自己的檔案）",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        ImportTemplateFrom(dlg.FileName);
+    }
+
+    /// <summary>匯入指定的樣板檔（見 ImportTemplate）</summary>
+    internal void ImportTemplateFrom(string file)
+    {
+        if (templatePath != null && string.Equals(Path.GetFullPath(file), Path.GetFullPath(templatePath), StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("選的就是目前這個樣板。", "匯入其他樣板");
+            return;
+        }
+        Commit();
+        if (root.Items.Count > 0 && MessageBox.Show("匯入後目前紙張上的版面會被取代（還沒存檔前可以按「取消」關掉不存）。要繼續嗎？",
+                                                    "匯入其他樣板", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+        PrintTemplate imported;
+        try { imported = PrintTemplate.Load(file); }
+        catch (Exception ex)
+        {
+            MessageBox.Show("讀不到這個樣板：" + ex.Message, "匯入其他樣板", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        // 資料表、主鍵以目前畫面為準；匯入的樣板是別的資料表時，能轉換就轉換（原本的資料表改用 JOIN 帶入）
+        string note = "";
+        if (!string.IsNullOrWhiteSpace(imported.TableName) && !string.IsNullOrWhiteSpace(root.TableName)
+            && !imported.TableName.Equals(root.TableName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (imported.HasJoinTo(root.TableName))
+            {
+                var notes = imported.RebaseTo(root.TableSchema, root.TableName, root.KeyColumns,
+                                              new HashSet<string>(tableColumns.Select(c => c.Name), StringComparer.OrdinalIgnoreCase));
+                note = $"{Environment.NewLine}{Environment.NewLine}匯入的樣板以「{imported.TableName}」為主，已轉換成以「{root.TableName}」為主。"
+                     + (notes.Count > 0 ? Environment.NewLine + string.Join(Environment.NewLine, notes) : "");
+            }
+            else
+                note = $"{Environment.NewLine}{Environment.NewLine}匯入的樣板原本是「{imported.TableName}」的資料，「{root.TableName}」沒有的欄位會標紅框、印成空白，請重新拖欄位或用 JOIN 帶入。";
+        }
+        imported.TableSchema = root.TableSchema;
+        imported.TableName = root.TableName;
+        imported.KeyColumns = root.KeyColumns.ToList();
+        template = root = imported;
+        editingLanguage = null;
+        RebuildCanvas();
+        FillLanguageMenu();
+        history.Reset();
+        UpdateTitle();
+        string target = templatePath != null ? Path.GetFileName(templatePath) : "新的檔案（存檔時會問檔名）";
+        UpdateStatus($"已匯入 {Path.GetFileName(file)}，存檔會存到 {target}");
+        MessageBox.Show($"已匯入「{Path.GetFileName(file)}」的版面。{Environment.NewLine}{Environment.NewLine}"
+                        + $"按「檔案 → 儲存」會存到 {target}，原本的樣板不會被改；要換檔名用「另存新檔…」。" + note, "匯入其他樣板");
+    }
 
     /// <summary>存檔；回傳 true = 存好了</summary>
     private bool Save(bool saveAs)
