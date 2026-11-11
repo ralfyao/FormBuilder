@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 
 namespace FormBuilder;
 
@@ -514,6 +514,7 @@ public partial class RecordNavigatorDialog : Form
         try
         {
             using var preview = new PrintPreviewDialog { Document = doc, Width = 900, Height = 700, Text = "列印：" + baseTitle };
+            PreviewPaging.Attach(preview, doc);                  // 上一頁 / 下一頁、滾輪換頁
             preview.ShowDialog(this);
         }
         catch (Exception ex)

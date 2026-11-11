@@ -862,21 +862,7 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
             bb.DoubleClick += (s, e) =>
             {
                 if (bb.ButtonDef.Action != ButtonAction.列印報表) return;
-                // 樣板一律以單頭（這個 Grid 的資料表）為主；有設定「列印來源清單」時，清單選取那筆的欄位（例如詢價日期）
-                // 也可以放到樣板上、拿來對應單身
-                string listTable = bb.ButtonDef.PrintListTable?.Trim();
-                var list = string.IsNullOrEmpty(listTable) ? null
-                    : listBoxes.Select(x => x.ListDef).FirstOrDefault(l => l.TableName.Equals(listTable, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrEmpty(listTable) && list == null)
-                {
-                    MessageBox.Show($"版面上沒有「{listTable}」這個明細清單，請檢查按鈕的「列印來源清單」。", "列印樣板");
-                    return;
-                }
-                var recordColumns = list?.Columns.Where(c => !c.IsJoin)
-                    .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, MaxLength = c.MaxLength, Description = c.Header }).ToList();
-                if (PrintDesignerForm.OpenFor(bb.ButtonDef, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
-                                              grid.KeyColumns.Select(c => c.Column), recordColumns, listBoxes.Select(x => x.ListDef)))
-                    propertyGrid.Refresh();
+                if (DesignTemplate(bb.ButtonDef)) propertyGrid.Refresh();
             };
     }
 
@@ -892,9 +878,25 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
 
     public bool DesignPrintTemplate(ButtonDefinition b) => DesignTemplate(b);
 
-    private bool DesignTemplate(ButtonDefinition b) =>
-        PrintDesignerForm.OpenFor(b, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
-                                  grid.KeyColumns.Select(c => c.Column), null, listBoxes.Select(x => x.ListDef));
+    /// <summary>
+    /// 開啟列印樣板設計（資料表、主鍵用這個 Grid 的）。樣板一律以單頭為主；按鈕有設定「列印來源清單」時，
+    /// 清單選取那筆的欄位（例如款項期別、詢價日期）也可以放到樣板上、拿來對應單身或帶入單身 SQL
+    /// </summary>
+    private bool DesignTemplate(ButtonDefinition b)
+    {
+        string listTable = b.PrintListTable?.Trim();
+        var list = string.IsNullOrEmpty(listTable) ? null
+            : listBoxes.Select(x => x.ListDef).FirstOrDefault(l => l.TableName.Equals(listTable, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(listTable) && list == null)
+        {
+            MessageBox.Show($"版面上沒有「{listTable}」這個明細清單，請檢查按鈕的「列印來源清單」。", "列印樣板");
+            return false;
+        }
+        var recordColumns = list?.Columns.Where(c => !c.IsJoin)
+            .Select(c => new ColumnInfo { Name = c.Column, DataType = c.DataType, MaxLength = c.MaxLength, Description = c.Header }).ToList();
+        return PrintDesignerForm.OpenFor(b, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                         grid.KeyColumns.Select(c => c.Column), recordColumns, listBoxes.Select(x => x.ListDef));
+    }
 
     /// <summary>工具列「列印」的列印選單（參數 + 各自印不同樣板的按鈕；按確定或儲存才寫回）</summary>
     private PrintMenuDefinition editPrintMenu;

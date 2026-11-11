@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Text.RegularExpressions;
 
 namespace FormBuilder;
@@ -13,7 +13,7 @@ public static class SqlList
     public static List<GridColumnDefinition> ReadColumns(string connectionString, string sql)
     {
         var d = DbDialect.Of(connectionString);
-        var (prepared, parameters) = d.PrepareUserSql(sql);
+        var (prepared, parameters) = d.PrepareUserSql(WithoutTestDeclares(sql));
         using var conn = d.Open(connectionString);
         using var cmd = d.CreateCommand(conn, prepared);
         foreach (var (_, parameter) in parameters) d.AddParam(cmd, parameter, DBNull.Value);
@@ -37,12 +37,20 @@ public static class SqlList
         return columns;
     }
 
+    /// <summary>
+    /// 拿掉在 SSMS 測試用的 DECLARE：一行一個「DECLARE @名稱 … [= 值]」的整行改成註解，@名稱 就變成參數，
+    /// 執行時帶入畫面（或上層清單選取那一列、列印的單頭）的值。一行宣告好幾個變數的 DECLARE、DECLARE @t TABLE 保留
+    /// </summary>
+    public static string WithoutTestDeclares(string sql) =>
+        Regex.Replace(sql ?? "", @"(?im)^[ \t]*DECLARE[ \t]+@([\p{L}\p{N}_]+)\b(?![ \t]+TABLE\b)(?![^\r\n]*,[ \t]*@)[^\r\n]*(?=\r?$)",
+            m => $"-- （執行時帶入 @{m.Groups[1].Value}）");
+
     /// <summary>執行 SQL 讀出資料；@參數的值由 valueOf 提供（沒有 = NULL）</summary>
     public static DataTable Load(string connectionString, string sql, Func<string, object> valueOf)
     {
         valueOf = SysParams.With(valueOf);                    // @登入帳號、@登入姓名
         var d = DbDialect.Of(connectionString);
-        var (prepared, parameters) = d.PrepareUserSql(sql);
+        var (prepared, parameters) = d.PrepareUserSql(WithoutTestDeclares(sql));
         using var conn = d.Open(connectionString);
         using var cmd = d.CreateCommand(conn, prepared);
         foreach (var (name, parameter) in parameters) d.AddParam(cmd, parameter, valueOf(name) ?? DBNull.Value);
@@ -56,6 +64,7 @@ public static class SqlList
     public static string Compose(string connectionString, string sql, IList<GridColumnDefinition> columns, IList<GridJoinDefinition> joins)
     {
         if (joins == null || joins.Count == 0 || !columns.Any(c => c.IsJoin)) return sql;
+        sql = WithoutTestDeclares(sql);                       // 要包成子查詢：DECLARE 不能留在裡面
         var d = DbDialect.Of(connectionString);
         var select = columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joins.Any(j => j.Alias == c.JoinAlias))).ToList();
         return GridSql.Select(d, Subquery(d, sql), select, joins);

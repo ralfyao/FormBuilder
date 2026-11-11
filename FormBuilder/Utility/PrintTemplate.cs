@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Data;
 using System.Drawing.Drawing2D;
 using System.Drawing.Printing;
@@ -13,6 +13,19 @@ namespace FormBuilder;
 public enum PrintPaper { A4, A5, A3, Letter }
 
 /// <summary>元件印在哪幾頁（明細很多、一張單據印好幾頁時）</summary>
+/// <summary>
+/// 元件屬於報表的哪一個區段（跟一般報表引擎一樣）：報表首 = 只印第一頁；頁首 = 每頁上方都印；
+/// 報表尾 = 最後一頁、接在明細表格後面；頁尾 = 每頁下方都印（固定位置）。自動 = 依位置判斷
+/// </summary>
+public enum PrintBand
+{
+    自動,
+    報表首,
+    頁首,
+    報表尾,
+    頁尾,
+}
+
 public enum PrintPages
 {
     每一頁,
@@ -344,8 +357,15 @@ public class PrintItem
     public string Text { get; set; }
 
     [Category("內容"), DisplayName("列印頁面"), JsonConverter(typeof(JsonStringEnumConverter)),
-     Description("明細很多、一張單據印好幾頁時，這個元件印在哪幾頁：每一頁（表頭、公司標誌）、只印第一頁、只印最後一頁（備註、銀行資料、簽名）")]
+     Description("明細很多、一張單據印好幾頁時，這個元件印在哪幾頁：每一頁（表頭、公司標誌）、只印第一頁、只印最後一頁（備註、銀行資料、簽名）。有設「區段」（不是自動）時以區段為準")]
     public PrintPages Pages { get; set; } = PrintPages.每一頁;
+
+    [Category("內容"), DisplayName("區段"), DefaultValue(PrintBand.自動), JsonConverter(typeof(JsonStringEnumConverter)),
+     Description("跟報表引擎一樣分區段（明細表格自動延伸時依區段排版）：報表首 = 只印第一頁（客戶、單號這些單頭資料）；"
+               + "頁首 = 每一頁上方都印（Logo、公司抬頭），續頁的明細表格接在頁首下面；"
+               + "報表尾 = 只印最後一頁、跟著明細表格往下移（合計、備註、銀行資料、簽名）；頁尾 = 每一頁固定印在下方（頁碼、網址），明細表格印到頁尾上方為止。"
+               + "自動 = 表格上方的是報表首（明細表格設了「每頁都印單頭」就是頁首），表格下方的是報表尾；沒有自動延伸的明細表格時照「列印頁面」")]
+    public PrintBand Band { get; set; } = PrintBand.自動;
 
     [Category("內容"), DisplayName("欄位"), TypeConverter(typeof(PrintColumnConverter)), Description("種類 = 欄位 時印出這個欄位的值（可以從清單挑，包含 JOIN 進來的欄位）")]
     public string Column { get; set; }
@@ -354,7 +374,8 @@ public class PrintItem
     public string Format { get; set; }
 
     [Category("內容"), DisplayName("千分號"),
-     Description("True = 數字加千分號（例如 267,625.00），小數位數照原本的值；欄位值、公式算出來的值都適用。有設「格式」時以格式為準")]
+     Description("True = 數字加千分號（例如 267,625.00），小數位數照原本的值；欄位值、公式算出來的值都適用。有設「格式」時以格式為準。"
+               + "明細表格：表格裡所有數字欄位都加千分號（文字欄位不加）；只要某幾欄加的話，到「表格欄位」個別設定「千分號」")]
     public bool Thousands { get; set; }
 
     [Category("內容"), DisplayName("SQL"), Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor)),
@@ -435,6 +456,17 @@ public class PrintItem
     [Category("明細表格"), DisplayName("自動換行"), Description("內容比欄寬長時換行，列高自動加高（完整印出）；關掉 = 單行，太長的用 … 截斷")]
     public bool WrapText { get; set; } = true;
 
+    [Category("明細表格"), DisplayName("自動延伸"), DefaultValue(true),
+     Description("True = 單身完整印出：表格依筆數往下長，表格下方的元件（合計、備註、銀行資料…）跟著往下移；"
+               + "一頁放不下時，表格印到紙張下緣、接到下一頁繼續印（表格上方的單頭每頁照印），表格下方的元件印在最後一頁表格後面。"
+               + "False = 表格固定照設計的高度，放不下的筆數換頁。預設 True")]
+    public bool AutoExtend { get; set; } = true;
+
+    [Category("明細表格"), DisplayName("每頁都印單頭"), DefaultValue(false),
+     Description("自動延伸時才有作用。False = 表格上方「區段 = 自動」的元件是報表首，只印第一頁；第二頁以後表格接在頁首（區段設成「頁首」的元件，例如 Logo）下面，"
+               + "沒有頁首就從紙張上方開始。True = 表格上方的元件每一頁都印（頁首），表格每頁都從原本的位置開始。預設 False")]
+    public bool RepeatHeader { get; set; }
+
     public PrintItem Clone()
     {
         var copy = (PrintItem)MemberwiseClone();
@@ -460,6 +492,9 @@ public class PrintTableColumn
 
     [DisplayName("對齊"), JsonConverter(typeof(JsonStringEnumConverter))]
     public HorizontalAlignment Align { get; set; } = HorizontalAlignment.Left;
+
+    [DisplayName("千分號"), Description("True = 這一欄的數字加千分號（例如 267,625.00），小數位數照原本的值；有設「格式」時以格式為準")]
+    public bool Thousands { get; set; }
 
     public PrintTableColumn Clone() => (PrintTableColumn)MemberwiseClone();
     public override string ToString() => string.IsNullOrWhiteSpace(Header) ? Column ?? "（未選欄位）" : Header;
@@ -537,7 +572,8 @@ public static class PrintRenderer
     /// 畫一個元件；row = 要印的那筆資料，null = 設計畫面（欄位顯示成 {欄位名稱}）。
     /// 明細表格：detail = 單身資料，page = 單身的第幾頁（放不下的接著印下一頁）
     /// </summary>
-    public static void DrawItem(Graphics g, PrintItem item, RectangleF rect, DataRow row, DataTable detail = null, int page = 0, int pageCount = 1)
+    public static void DrawItem(Graphics g, PrintItem item, RectangleF rect, DataRow row, DataTable detail = null, int page = 0, int pageCount = 1,
+                                PrintTemplate template = null)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -545,7 +581,7 @@ public static class PrintRenderer
         switch (item.Kind)
         {
             case PrintItemKind.明細表格:
-                DrawTable(g, item, rect, pen, row == null, detail, page);
+                DrawTable(g, item, rect, pen, row == null, detail, page, template);
                 return;
             case PrintItemKind.線條:
                 // 比較寬就畫橫線，比較高就畫直線（畫在框的中間）
@@ -606,9 +642,66 @@ public static class PrintRenderer
             right.Alignment = StringAlignment.Far;
             g.DrawString(value, font, row == null ? Brushes.DarkBlue : Brushes.Black, valueRect, right);
         }
+        else if (row != null && IsMultiLine(g, text, font, textRect, format))
+            DrawMultiLine(g, item, label, text, font, textRect, format);
         else
             g.DrawString(text, font, row == null && item.Kind == PrintItemKind.欄位 ? Brushes.DarkBlue : Brushes.Black, textRect, format);
         if (item.Border) g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+    }
+
+    /// <summary>印出來的文字有換行、或寬度放不下要折成好幾行</summary>
+    private static bool IsMultiLine(Graphics g, string text, Font font, RectangleF rect, StringFormat format)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        if (text.Contains('\n')) return true;
+        using var wrap = (StringFormat)format.Clone();
+        wrap.FormatFlags &= ~StringFormatFlags.NoWrap;
+        return g.MeasureString(text, font, new SizeF(rect.Width, 100000f), wrap).Height > font.GetHeight(g) * 1.5f;
+    }
+
+    /// <summary>自動縮小的最小字型：6 點（字型大小用像素，96 DPI）</summary>
+    private const float MinFontPixels = 6f * 96f / 72f;
+
+    /// <summary>
+    /// 好幾行的文字（例如備註）：從框的上方開始印；欄位元件的標籤（例如「Remark：」）印在左邊，資料的每一行都對齊在標籤右邊；
+    /// 框放不下時自動把字縮小（最小 6 點，再放不下最後印「…」），不會超出框蓋到下面的元件
+    /// </summary>
+    private static void DrawMultiLine(Graphics g, PrintItem item, string label, string text, Font font, RectangleF rect, StringFormat format)
+    {
+        bool hasLabel = item.Kind == PrintItemKind.欄位 && label.Length > 0 && text.StartsWith(label, StringComparison.Ordinal) && text.Length > label.Length;
+        string value = (hasLabel ? text.Substring(label.Length) : text).Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n', ' ');
+        using var wrap = (StringFormat)format.Clone();
+        wrap.FormatFlags &= ~StringFormatFlags.NoWrap;
+        wrap.LineAlignment = StringAlignment.Near;
+        wrap.Trimming = StringTrimming.EllipsisCharacter;
+        wrap.FormatFlags |= StringFormatFlags.LineLimit;              // 放不下的最後一行不印半行，改在前一行結尾印「…」
+        using var single = (StringFormat)wrap.Clone();
+        single.FormatFlags |= StringFormatFlags.NoWrap;
+        single.Alignment = StringAlignment.Near;
+        Font f = font;
+        Font owned = null;
+        try
+        {
+            while (true)
+            {
+                float labelWidth = hasLabel ? Math.Min(rect.Width / 2, g.MeasureString(label, f, new SizeF(rect.Width, rect.Height), single).Width) : 0;
+                var valueRect = new RectangleF(rect.X + labelWidth, rect.Y, Math.Max(1, rect.Width - labelWidth), rect.Height);
+                float need = g.MeasureString(value, f, new SizeF(valueRect.Width, 100000f), wrap).Height;
+                if (need <= rect.Height + 0.5f || f.Size <= MinFontPixels)
+                {
+                    if (hasLabel) g.DrawString(label, f, Brushes.Black, new RectangleF(rect.X, rect.Y, labelWidth + 1, rect.Height), single);
+                    g.DrawString(value, f, Brushes.Black, valueRect, wrap);
+                    return;
+                }
+                var smaller = new Font(f.FontFamily, Math.Max(MinFontPixels, f.Size * 0.9f), f.Style, f.Unit);
+                owned?.Dispose();
+                owned = f = smaller;
+            }
+        }
+        finally
+        {
+            owned?.Dispose();
+        }
     }
 
     /// <summary>
@@ -649,8 +742,13 @@ public static class PrintRenderer
         return (columns, xs);
     }
 
-    private static string CellText(DataTable detail, DataRow data, PrintTableColumn column) =>
-        detail.Columns.Contains(column.Column) ? FormatValue(data[column.Column], column.Format) : "";
+    /// <summary>表格一格的文字：欄位設了千分號就加；表格設了千分號時只加在數字型別的欄位（文字欄位例如產品編號不加）</summary>
+    private static string CellText(PrintItem item, DataTable detail, DataRow data, PrintTableColumn column)
+    {
+        if (!detail.Columns.Contains(column.Column)) return "";
+        object value = data[column.Column];
+        return FormatValue(value, column.Format, column.Thousands || (item.Thousands && value is not string));
+    }
 
     private static StringFormat CellFormat(PrintItem item, HorizontalAlignment align)
     {
@@ -687,7 +785,12 @@ public static class PrintRenderer
     /// 明細表格每一頁印哪幾筆（依每列實際高度分頁，表格框放不下就換頁；每頁至少一筆）。
     /// 回傳每頁的（開始, 筆數）；沒有資料回傳一頁 0 筆
     /// </summary>
-    public static List<(int Start, int Count)> TablePages(PrintItem item, DataTable detail)
+    public static List<(int Start, int Count)> TablePages(PrintItem item, DataTable detail) => TablePages(null, item, detail);
+
+    /// <summary>
+    /// 有樣板時：明細表格設了「自動延伸」，每一頁的表格高度延伸到那一頁有印的下一個元件上方；最後一頁照原本高度（合計、備註印在原來的位置）
+    /// </summary>
+    public static List<(int Start, int Count)> TablePages(PrintTemplate template, PrintItem item, DataTable detail)
     {
         var pages = new List<(int, int)>();
         int rows = detail?.Rows.Count ?? 0;
@@ -698,28 +801,130 @@ public static class PrintRenderer
         using var font = CreateFont(item);
         using var bold = new Font(font, FontStyle.Bold);
         float header = RowHeightOf(item, columns.Select(c => c.ToString()).ToList(), xs, bold);
-        int start = 0;
-        float used = header;
-        for (int r = 0; r < rows; r++)
+        var heights = Enumerable.Range(0, rows).Select(r => RowHeightOf(item, columns.Select(c => CellText(item, detail, detail.Rows[r], c)).ToList(), xs, font)).ToList();
+        if (template == null || !item.AutoExtend)
         {
-            float h = RowHeightOf(item, columns.Select(c => CellText(detail, detail.Rows[r], c)).ToList(), xs, font);
-            if (r > start && used + h > rect.Height)
+            int start = 0;
+            float used = header;
+            for (int r = 0; r < rows; r++)
             {
-                pages.Add((start, r - start));
-                start = r;
-                used = header;
+                if (r > start && used + heights[r] > rect.Height)
+                {
+                    pages.Add((start, r - start));
+                    start = r;
+                    used = header;
+                }
+                used += heights[r];
             }
-            used += h;
+            pages.Add((start, rows - start));
+            return pages;
         }
-        pages.Add((start, rows - start));
+        // 自動延伸（跟報表引擎一樣）：剩下的放得進最後一頁（報表尾往下推，推到頁尾上方為止）就是最後一頁；
+        // 否則這頁表格印到頁尾上方（報表尾留到最後一頁），放得下幾筆就印幾筆；續頁的表格接在頁首下面
+        int Fit(int from, float height)
+        {
+            float used = header;
+            int n = 0;
+            while (from + n < rows && (n == 0 || used + heights[from + n] <= height)) used += heights[from + n++];
+            return n;
+        }
+        float bottomLimit = TableBottomLimit(template, item);
+        float belowBottom = template.Items.Where(i => MovesWithTable(item, i)).Select(i => (float)(i.Y + i.Height)).DefaultIfEmpty(item.Y + item.Height).Max();
+        float slack = Math.Max(0, bottomLimit - belowBottom);
+        int next = 0;
+        while (next < rows)
+        {
+            int remaining = rows - next;
+            float top = TableTop(template, item, pages.Count);       // 續頁的表格往上移
+            float lastHeight = item.Height + slack + (item.Y - top);
+            float middleHeight = Math.Max(item.Height, bottomLimit - top);
+            if (Fit(next, lastHeight) >= remaining || pages.Count > 1000)
+            {
+                pages.Add((next, remaining));
+                break;
+            }
+            int count = Fit(next, middleHeight);
+            if (count >= remaining) count = Math.Max(1, remaining - 1);     // 至少留一筆到最後一頁，跟合計印在一起
+            pages.Add((next, count));
+            next += count;
+        }
         return pages;
+    }
+
+    /// <summary>
+    /// 元件屬於哪個區段：有設就照設定；自動 = 沒有自動延伸的表格時照「列印頁面」（只印第一頁 = 報表首、只印最後一頁 = 報表尾、每一頁 = 頁首）；
+    /// 有自動延伸的表格時，表格下方的是報表尾，表格上方的是報表首（「每頁都印單頭」= 頁首；「列印頁面」只印最後一頁的 = 報表尾），跟表格同高度的是頁首
+    /// </summary>
+    internal static PrintBand BandOf(PrintItem table, PrintItem i)
+    {
+        if (i.Band != PrintBand.自動) return i.Band;
+        if (table == null || i == table)
+            return i.Pages switch { PrintPages.只印第一頁 => PrintBand.報表首, PrintPages.只印最後一頁 => PrintBand.報表尾, _ => PrintBand.頁首 };
+        if (IsBelowTable(table, i)) return PrintBand.報表尾;
+        if (i.Y < table.Y)
+            return i.Pages switch
+            {
+                PrintPages.只印第一頁 => PrintBand.報表首,
+                PrintPages.只印最後一頁 => PrintBand.報表尾,
+                _ => table.RepeatHeader ? PrintBand.頁首 : PrintBand.報表首,
+            };
+        return PrintBand.頁首;
+    }
+
+    /// <summary>自動延伸的表格這一頁從哪裡開始印：第一頁照設計的位置；續頁接在表格上方的頁首下面（沒有頁首就從紙張上方 20 點開始）</summary>
+    private static float TableTop(PrintTemplate template, PrintItem table, int page)
+    {
+        if (page == 0) return table.Y;
+        float top = template.Items.Where(i => i != table && i.Kind != PrintItemKind.明細表格 && i.Y < table.Y && BandOf(table, i) == PrintBand.頁首)
+                                  .Select(i => (float)(i.Y + i.Height) + 10f).DefaultIfEmpty(20f).Max();
+        return Math.Min(table.Y, top);
+    }
+
+    /// <summary>表格最多印到哪裡：表格下方頁尾的上緣（留 6 點），沒有頁尾就到紙張下緣</summary>
+    private static float TableBottomLimit(PrintTemplate template, PrintItem table) =>
+        template.Items.Where(i => i != table && IsBelowTable(table, i) && BandOf(table, i) == PrintBand.頁尾)
+                      .Select(i => (float)i.Y - 6f).DefaultIfEmpty(PageBottom(template)).Min();
+
+    /// <summary>紙張可以印到的下緣（留 20 點）</summary>
+    private static float PageBottom(PrintTemplate template) => template.PageSize.Height - 20f;
+
+    /// <summary>元件在明細表格下方</summary>
+    private static bool IsBelowTable(PrintItem table, PrintItem i) =>
+        i != table && i.Kind != PrintItemKind.明細表格 && i.Y >= table.Y + table.Height - 2;
+
+    /// <summary>跟著明細表格往下移的元件：表格下方的報表尾</summary>
+    private static bool MovesWithTable(PrintItem table, PrintItem i) => IsBelowTable(table, i) && BandOf(table, i) == PrintBand.報表尾;
+
+    /// <summary>自動延伸的明細表格（同一張樣板只看第一個）</summary>
+    private static PrintItem FlowTable(PrintTemplate template) =>
+        template.Items.FirstOrDefault(i => i.Kind == PrintItemKind.明細表格 && i.AutoExtend);
+
+    /// <summary>報表尾在最後一頁要往下（負數 = 往上）移多少：表格實際印完的位置比設計的表格框下緣多出來的距離</summary>
+    private static float FlowShift(PrintTemplate template, PrintItem table, DataTable detail)
+    {
+        int rows = detail?.Rows.Count ?? 0;
+        if (rows == 0) return 0;
+        var rect = new RectangleF(table.X, table.Y, Math.Max(1, table.Width), Math.Max(1, table.Height));
+        var (columns, xs) = TableColumnsOf(table, rect);
+        if (columns.Count == 0) return 0;
+        var pages = TablePages(template, table, detail);
+        var (start, count) = pages[^1];
+        using var font = CreateFont(table);
+        using var bold = new Font(font, FontStyle.Bold);
+        float used = RowHeightOf(table, columns.Select(c => c.ToString()).ToList(), xs, bold);
+        for (int r = start; r < start + count; r++) used += RowHeightOf(table, columns.Select(c => CellText(table, detail, detail.Rows[r], c)).ToList(), xs, font);
+        float top = TableTop(template, table, pages.Count - 1);
+        float shift = top + used - (table.Y + table.Height);
+        // 只有一頁：照設計的版面（表格框是預留的高度，放不下才往下推）；
+        // 續頁的最後一頁：報表尾緊接在表格後面，跟表格的距離照設計（設計時表格框下緣到元件的距離）
+        return pages.Count == 1 ? Math.Max(0, shift) : shift;
     }
 
     /// <summary>
     /// 明細表格：標題列 + 單身資料，格線框起來；欄寬依「寬度」比例分配到表格的寬度，內容太長時換行、列自動加高。
     /// 設計畫面（design = true）顯示標題列和兩列 {欄位名稱}；page = 單身的第幾頁
     /// </summary>
-    private static void DrawTable(Graphics g, PrintItem item, RectangleF rect, Pen pen, bool design, DataTable detail, int page)
+    private static void DrawTable(Graphics g, PrintItem item, RectangleF rect, Pen pen, bool design, DataTable detail, int page, PrintTemplate template)
     {
         var (columns, xs) = TableColumnsOf(item, rect);
         if (columns.Count == 0)
@@ -749,11 +954,11 @@ public static class PrintRenderer
         }
         else if (detail != null)
         {
-            var pages = TablePages(item, detail);
+            var pages = TablePages(template, item, detail);
             if (page >= pages.Count) return;                        // 這個表格的資料比較少，這頁不用印
             var (start, count) = pages[page];
             for (int r = start; r < start + count; r++)
-                Row(columns.Select(c => CellText(detail, detail.Rows[r], c)).ToList(), font, c => columns[c].Align, Brushes.Black);
+                Row(columns.Select(c => CellText(item, detail, detail.Rows[r], c)).ToList(), font, c => columns[c].Align, Brushes.Black);
         }
         // 格線
         foreach (float y in lines) g.DrawLine(pen, rect.Left, y, xs[^1], y);
@@ -764,12 +969,24 @@ public static class PrintRenderer
     public static void DrawPage(Graphics g, PrintTemplate template, PrintSheet sheet, int page = 0)
     {
         int pageCount = PageCount(template, sheet);
+        // 自動延伸的明細表格：依區段排版（報表首只印第一頁、頁首頁尾每頁印、報表尾印在最後一頁表格後面）
+        var flow = sheet.Detail != null ? FlowTable(template) : null;
+        float shift = flow != null ? FlowShift(template, flow, sheet.Detail) : 0;
+        bool last = page == pageCount - 1;
         foreach (var item in template.Items)
         {
-            // 「列印頁面」：只印第一頁 / 只印最後一頁的元件，其他頁不印
-            if (item.Pages == PrintPages.只印第一頁 && page != 0) continue;
-            if (item.Pages == PrintPages.只印最後一頁 && page != pageCount - 1) continue;
-            DrawItem(g, item, new RectangleF(item.X, item.Y, Math.Max(1, item.Width), Math.Max(1, item.Height)), sheet.Header, sheet.Detail, page, pageCount);
+            float dy = 0;
+            if (flow != null && item == flow) dy = TableTop(template, flow, page) - flow.Y;
+            else
+            {
+                switch (BandOf(flow, item))
+                {
+                    case PrintBand.報表首 when page != 0: continue;
+                    case PrintBand.報表尾 when !last: continue;
+                }
+                if (flow != null && MovesWithTable(flow, item)) dy = shift;
+            }
+            DrawItem(g, item, new RectangleF(item.X, item.Y + dy, Math.Max(1, item.Width), Math.Max(1, item.Height)), sheet.Header, sheet.Detail, page, pageCount, template);
         }
     }
 
@@ -778,7 +995,7 @@ public static class PrintRenderer
     {
         var tables = template.Items.Where(i => i.Kind == PrintItemKind.明細表格).ToList();
         if (sheet.Detail == null || sheet.Detail.Rows.Count == 0 || tables.Count == 0) return 1;
-        return tables.Max(t => TablePages(t, sheet.Detail).Count);
+        return tables.Max(t => TablePages(template, t, sheet.Detail).Count);
     }
 }
 
@@ -1094,6 +1311,7 @@ public static class PrintRunner
         try
         {
             using var preview = new PrintPreviewDialog { Document = doc, Width = 1000, Height = 800, Text = "預覽列印：" + title };
+            PreviewPaging.Attach(preview, doc);                  // 上一頁 / 下一頁、滾輪換頁
             ((Form)preview).WindowState = FormWindowState.Maximized;
             preview.ShowDialog(owner);
         }

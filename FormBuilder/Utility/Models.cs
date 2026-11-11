@@ -519,6 +519,11 @@ public class FieldDefinition : IPickerField
                + "同一個欄位可以放好幾個（例如多組關鍵字搭配「任一符合」），重複放上去的會自動設成 True")]
     public bool QueryOnly { get; set; }
 
+    [Category("畫面"), DisplayName("瀏覽時可輸入（列印用）"),
+     Description("True = 不用按「修改」，瀏覽資料時就能在這個欄位輸入（不會存檔，換到別筆就恢復資料庫的值）；"
+               + "按「列印報表」按鈕時，列印樣板上的這個欄位印畫面上輸入的值，例如列印前臨時改備註")]
+    public bool BrowseInput { get; set; }
+
     [Category("畫面"), DisplayName("查詢方式"), DefaultValue(QueryCompare.自動),
      Description("查詢時這個欄位的條件怎麼比對：自動 = 文字完全相同（可用 * ? 萬用字元）、日期同一天、數字相等；"
                + "大於等於 / 小於等於 = 區間查詢，例如日期放兩個（第二個「只當查詢條件」），起始日設大於等於、結束日設小於等於（含結束日當天）；"
@@ -885,7 +890,12 @@ public class PrintMenuParam
     public string Label { get; set; }
     /// <summary>預設值：固定文字、@欄位（目前這筆的值）、或 SELECT（@欄位 取目前這筆；查第一筆第一個欄位）；空白 = 空的</summary>
     public string Value { get; set; }
-    /// <summary>true = 只顯示，使用者不能改</summary>
+    /// <summary>
+    /// 下拉選項：空白 = 一般輸入框；用逗號分隔的固定值（例如 訂金,出貨,尾款）；或 SELECT（@欄位 取目前這筆，例如
+    /// SELECT 款項期別 FROM F分期付款 WHERE 單號 = @單號），列出第一個欄位的值。有選項時列印視窗顯示下拉選單
+    /// </summary>
+    public string Options { get; set; }
+    /// <summary>true = 只顯示，使用者不能改（有下拉選項時 = 只能從選項選）</summary>
     public bool ReadOnly { get; set; }
 
     public PrintMenuParam Clone() => (PrintMenuParam)MemberwiseClone();

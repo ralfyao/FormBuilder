@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Globalization;
 
 namespace FormBuilder;
@@ -94,9 +94,15 @@ public class PrintMenuDesignDialog : Form
             dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "參數名稱", Width = 130 });
         dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Label", HeaderText = "標籤（空白 = 名稱）", Width = 150 });
         dgvParams.Columns.Add(new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "預設值", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
-        dgvParams.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ReadOnly", HeaderText = "不能改", Width = 60 });
+        dgvParams.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Options", HeaderText = "下拉選項（逗號分隔或 SELECT）", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+            ToolTipText = "空白 = 一般輸入框。固定值用逗號分隔：訂金,出貨,尾款；或寫 SELECT，@欄位 取目前這筆："
+                        + "SELECT 款項期別 FROM F分期付款 WHERE 單號 = @單號（列出第一個欄位）。列印視窗會顯示成下拉選單",
+        });
+        dgvParams.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ReadOnly", HeaderText = "不能改", Width = 60, ToolTipText = "有下拉選項時 = 只能從選項選，不能自己打" });
         dgvParams.AllowUserToAddRows = true;
-        foreach (var p in menu.Params) dgvParams.Rows.Add(p.Name, p.Label, p.Value, p.ReadOnly);
+        foreach (var p in menu.Params) dgvParams.Rows.Add(p.Name, p.Label, p.Value, p.Options, p.ReadOnly);
         layout.Controls.Add(dgvParams, 0, 2);
 
         layout.Controls.Add(new Label
@@ -211,6 +217,7 @@ public class PrintMenuDesignDialog : Form
                 Name = name,
                 Label = Convert.ToString(r.Cells["Label"].Value)?.Trim() is { Length: > 0 } l ? l : null,
                 Value = Convert.ToString(r.Cells["Value"].Value)?.Trim() is { Length: > 0 } v ? v : null,
+                Options = Convert.ToString(r.Cells["Options"].Value)?.Trim() is { Length: > 0 } o ? o : null,
                 ReadOnly = r.Cells["ReadOnly"].Value is true,
             });
         }
@@ -250,7 +257,7 @@ public class PrintMenuDesignDialog : Form
 /// </summary>
 public class PrintMenuRunDialog : Form
 {
-    private readonly Dictionary<string, TextBox> inputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Control> inputs = new(StringComparer.OrdinalIgnoreCase);
 
     /// <param name="current">目前這筆的欄位值（預設值的 @欄位、SQL 的 @名稱；樣板讀資料的主鍵）</param>
     public PrintMenuRunDialog(PrintMenuDefinition menu, string title, string sourcePath, string connectionString, Func<string, object> current)
@@ -275,7 +282,20 @@ public class PrintMenuRunDialog : Form
             // 預設值空白：參數名稱是畫面上的欄位時，帶目前這筆的值
             try { text = ToText(string.IsNullOrWhiteSpace(p.Value) ? current(p.Name) : ResolveDefault(p.Value, connectionString, current)); }
             catch (Exception ex) { text = "（預設值錯誤：" + ex.Message + "）"; }
-            var box = new TextBox { Text = text, ReadOnly = p.ReadOnly, Dock = DockStyle.Fill, Margin = new Padding(3, 4, 3, 4) };
+            Control box;
+            if (!string.IsNullOrWhiteSpace(p.Options))
+            {
+                // 有下拉選項：下拉選單（不能改 = 只能從選項選），預設值空白時選第一個
+                var combo = new ComboBox { DropDownStyle = p.ReadOnly ? ComboBoxStyle.DropDownList : ComboBoxStyle.DropDown, Dock = DockStyle.Fill, Margin = new Padding(3, 4, 3, 4) };
+                try { combo.Items.AddRange(OptionValues(p.Options, connectionString, current).Cast<object>().ToArray()); }
+                catch (Exception ex) { MessageBox.Show($"參數「{p.Label ?? p.Name}」的下拉選項讀取失敗：{ex.Message}", "列印"); }
+                int index = combo.Items.IndexOf(text);
+                if (index >= 0) combo.SelectedIndex = index;
+                else if (text == "" && combo.Items.Count > 0) combo.SelectedIndex = 0;
+                else if (combo.DropDownStyle == ComboBoxStyle.DropDown) combo.Text = text;
+                box = combo;
+            }
+            else box = new TextBox { Text = text, ReadOnly = p.ReadOnly, Dock = DockStyle.Fill, Margin = new Padding(3, 4, 3, 4) };
             inputs[p.Name] = box;
             layout.Controls.Add(new Label { Text = (p.Label ?? p.Name) + "：", AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(3, 8, 3, 3) });
             layout.Controls.Add(box);
@@ -305,6 +325,18 @@ public class PrintMenuRunDialog : Form
     /// <summary>樣板要的值：參數先用視窗上輸入的，其他用目前這筆的欄位</summary>
     private object ValueOf(string name, Func<string, object> current) =>
         inputs.TryGetValue(name, out var box) ? (box.Text.Trim() == "" ? DBNull.Value : box.Text.Trim()) : current(name);
+
+    /// <summary>下拉選項：SELECT（或 WITH）查出第一個欄位的值，@欄位 取目前這筆；其他用逗號（、或換行）分隔的固定值</summary>
+    internal static List<string> OptionValues(string options, string connectionString, Func<string, object> current)
+    {
+        string text = options?.Trim() ?? "";
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^(SELECT|WITH)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            var table = SqlList.Load(connectionString, text, current);
+            return table.Columns.Count == 0 ? new() : table.Rows.Cast<DataRow>().Select(r => ToText(r[0])).Where(v => v != "").Distinct().ToList();
+        }
+        return text.Split(new[] { ',', '，', '、', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(v => v.Trim()).Where(v => v != "").Distinct().ToList();
+    }
 
     /// <summary>預設值：整段 @欄位 = 目前這筆的值；其他照欄位預設值的寫法（固定文字、SELECT、{今天}、{使用者名稱}…）</summary>
     private static object ResolveDefault(string text, string connectionString, Func<string, object> current)

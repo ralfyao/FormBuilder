@@ -335,7 +335,8 @@ public class EditListView
         if (parent != null)
         {
             var row = ParentRow();
-            valueOf = col => row != null && row.Table.Columns.Contains(col) ? row[col] : null;
+            var outer = valueOf;                                 // 上層清單那一列沒有的欄位（例如單號）取編輯視窗上的值
+            valueOf = col => row != null && row.Table.Columns.Contains(col) ? row[col] : outer?.Invoke(col);
             if (row == null)
             {
                 Grid.DataSource = null;                          // 上層清單還沒點選：沒有明細可列

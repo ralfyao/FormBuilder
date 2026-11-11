@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Data.Common;
 using System.Text.RegularExpressions;
 
@@ -962,8 +962,9 @@ public static class ButtonRunner
 
     /// <summary>列印報表：依按鈕的列印樣板預覽列印；records 每個元素提供一筆資料的欄位值（每筆一頁）</summary>
     /// <param name="selected">明細清單上選取的資料（整筆），樣板「只印清單上選取的資料」用</param>
+    /// <param name="screenValues">畫面上輸入的欄位（瀏覽時可輸入）：樣板上這些欄位印 records 提供的值，不用資料庫讀出來的</param>
     public static void Print(ButtonDefinition b, string sourcePath, string connectionString, IReadOnlyList<Func<string, object>> records, IWin32Window owner,
-                             IReadOnlyList<DataRow> selected = null)
+                             IReadOnlyList<DataRow> selected = null, IReadOnlyList<string> screenValues = null)
     {
         if (string.IsNullOrWhiteSpace(b.PrintTemplate))
         {
@@ -987,6 +988,9 @@ public static class ButtonRunner
             if (language == null) return;
             template = template.ForLanguage(language);
         }
+        // 畫面上輸入的值當成列印參數：同名的資料欄位以參數為準
+        foreach (string name in screenValues ?? Array.Empty<string>())
+            if (!template.Params.Contains(name, StringComparer.OrdinalIgnoreCase)) template.Params.Add(name);
         // 選取的資料是單身那個資料表的才拿來過濾單身
         if (selected != null && template.Detail != null && selected.Count > 0
             && !selected[0].Table.TableName.Equals(template.Detail.TableName, StringComparison.OrdinalIgnoreCase)) selected = null;

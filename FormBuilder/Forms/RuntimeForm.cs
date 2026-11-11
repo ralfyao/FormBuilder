@@ -582,7 +582,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 Mode.Query => !f.IsCalculated,
                 Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly && !f.IsJoin && !f.HasFormula && !f.QueryOnly,
                 Mode.Modify => !f.NoEntry && !f.IsIdentity && !f.IsKey && !f.IsReadOnly && !f.IsJoin && !f.HasFormula && !f.QueryOnly,
-                _ => false,
+                _ => f.BrowseInput && !f.IsCalculated && !f.QueryOnly,     // 瀏覽時可輸入（列印用）：不存檔
             };
             if (inputs[f] is TextBox tb) tb.ReadOnly = !editable;
             else inputs[f].Enabled = editable;
@@ -1210,10 +1210,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var rows = SelectedRowIndexes();
         if (rows.Count == 0 && HasCurrent) rows.Add(current);
+        // 「瀏覽時可輸入（列印用）」的欄位：印畫面上輸入的值（不是資料庫裡的）
+        var screen = def.Fields.Where(f => f.BrowseInput && !f.IsTextLabel && inputs.ContainsKey(f)).ToList();
         var records = rows.Select(r => (Func<string, object>)(name =>
-            results.Columns.Contains(name) ? results.Rows[r][name]
+            screen.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } typed ? GetValue(typed)
+            : results.Columns.Contains(name) ? results.Rows[r][name]
             : def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } field ? GetValue(field) : null)).ToList();
-        ButtonRunner.Print(b, def.SourcePath, def.ConnectionString, records, this);
+        ButtonRunner.Print(b, def.SourcePath, def.ConnectionString, records, this, screenValues: screen.Select(f => f.Column).ToList());
     }
 
     /// <summary>
