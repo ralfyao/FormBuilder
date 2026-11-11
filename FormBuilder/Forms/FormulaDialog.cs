@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Drawing.Design;
 
 namespace FormBuilder;
@@ -73,12 +73,15 @@ public class FormulaDialog : Form
             txtFormula.SelectionStart--;                   // 游標放在引號中間，直接打字
         };
         ops.Controls.Add(btnText);
+        var btnNow = new Button { Text = "NOW()", Width = 64, Height = 28 };
+        btnNow.Click += (s, e) => Insert("NOW()");                 // 目前的日期
+        ops.Controls.Add(btnNow);
         right.Controls.Add(txtFormula);
         right.Controls.Add(ops);
         right.Controls.Add(new Label
         {
             Text = "例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0。\n"
-                 + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）",
+                 + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）；NOW() = 今天的日期",
             Dock = DockStyle.Top, Height = 58, UseMnemonic = false,      // & 照字面顯示
         });
 
@@ -147,6 +150,22 @@ public class PrintFormulaEditor : UITypeEditor
     {
         using var dlg = new FormulaDialog(value as string, HeaderFields(), "單頭欄位（雙擊插入）", detailFields: DetailFields());
         dlg.Text = "公式：單頭欄位做 + - * /，SUM(明細欄位) 加總明細；& 接文字";
+        return dlg.ShowDialog(Form.ActiveForm) == DialogResult.OK ? (dlg.Formula == "" ? null : dlg.Formula) : value;
+    }
+}
+
+/// <summary>明細表格欄位「公式」的「…」：左邊列出單身欄位（同一列的值），另外列出單頭欄位</summary>
+public class PrintColumnFormulaEditor : UITypeEditor
+{
+    public override UITypeEditorEditStyle GetEditStyle(ITypeDescriptorContext context) => UITypeEditorEditStyle.Modal;
+
+    public override object EditValue(ITypeDescriptorContext context, IServiceProvider provider, object value)
+    {
+        var self = (context?.Instance as PrintTableColumn)?.Column;
+        using var dlg = new FormulaDialog(value as string,
+            PrintFormulaEditor.DetailFields().Where(f => !string.Equals(f.Column, self, StringComparison.OrdinalIgnoreCase)),
+            "單身欄位（同一列，雙擊插入）", masterFields: PrintFormulaEditor.HeaderFields());
+        dlg.Text = "表格欄位公式：同一列的單身欄位做 + - * /，例如 數量2 * 單價2；& 接文字";
         return dlg.ShowDialog(Form.ActiveForm) == DialogResult.OK ? (dlg.Formula == "" ? null : dlg.Formula) : value;
     }
 }

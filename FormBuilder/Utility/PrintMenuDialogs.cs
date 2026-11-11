@@ -308,7 +308,14 @@ public class PrintMenuRunDialog : Form
             button.Click += (s, e) =>
             {
                 if (b.Action == ButtonAction.開啟畫面)    // 選的是畫面定義檔：開啟自訂畫面，@名稱 取視窗上的參數，沒有再取目前這筆
-                    ButtonRunner.OpenForm(b, sourcePath, this, name => ValueOf(name, current), connectionString: connectionString);
+                {
+                    // 開了自訂的列印畫面，這個列印視窗就功成身退：參數先記下來，關掉這個視窗，畫面掛在原本的視窗底下
+                    var values = inputs.ToDictionary(x => x.Key, x => ValueOf(x.Key, current), StringComparer.OrdinalIgnoreCase);
+                    var parent = Owner;
+                    Hide();
+                    ButtonRunner.OpenForm(b, sourcePath, parent, name => values.TryGetValue(name, out var v) ? v : current(name), connectionString: connectionString);
+                    Close();
+                }
                 else
                     ButtonRunner.Print(b, sourcePath, connectionString, new Func<string, object>[] { name => ValueOf(name, current) }, this);
             };

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 
 namespace FormBuilder;
@@ -9,7 +9,8 @@ namespace FormBuilder;
 /// 彙總函數（明細清單的執行後動作用）：SUM、AVG、COUNT、MAX、MIN、STD（樣本標準差）、STDP（母體標準差），
 /// 括號裡是明細欄位，例如 SUM(金額) * 1.05。
 /// 文字串接（像 Access）：用 &amp; 把文字、欄位、算式接起來，文字用 "雙引號" 或 '單引號' 括起來，例如 100 - 單價1 / 單價 * 100 &amp; "%"；
-/// &amp; 的優先順序最低（先算完 + - * / 再接），單獨一個欄位接起來時用它原本的文字（不會當成數字）
+/// &amp; 的優先順序最低（先算完 + - * / 再接），單獨一個欄位接起來時用它原本的文字（不會當成數字）。
+/// NOW()：目前的日期（yyyy/MM/dd），是文字，用 &amp; 接，例如 "列印日期：" &amp; NOW()
 /// </summary>
 public static class Formula
 {
@@ -61,12 +62,22 @@ public static class Formula
         }
     }
 
-    /// <summary>文字公式：有用 &amp; 串接或 "引號" 文字，結果是文字（用 EvaluateText 算）</summary>
+    /// <summary>文字公式：有用 &amp; 串接、"引號" 文字或 NOW()，結果是文字（用 EvaluateText 算）</summary>
     public static bool IsText(string formula)
     {
-        try { return Tokenize(formula).Any(t => t.Kind == TokenKind.Text || t is { Kind: TokenKind.Op, Text: "&" }); }
+        try { return Tokenize(formula).Any(t => t.Kind is TokenKind.Text or TokenKind.Now || t is { Kind: TokenKind.Op, Text: "&" }); }
         catch (FormatException) { return false; }
     }
+
+    /// <summary>公式只有 NOW()（列印樣板的元件可以照「格式」印日期時間）</summary>
+    public static bool IsNowOnly(string formula)
+    {
+        try { return Tokenize(formula) is [{ Kind: TokenKind.Now }]; }
+        catch (FormatException) { return false; }
+    }
+
+    /// <summary>NOW() 印出來的日期</summary>
+    public static string NowText() => DateTime.Now.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture);
 
     /// <summary>檢查公式：格式不對、用到 knownNames 以外的名稱時回傳錯誤訊息；沒問題回傳 null</summary>
     public static string Check(string formula, IEnumerable<string> knownNames)
@@ -156,8 +167,8 @@ public static class Formula
         decimals >= 0 ? Math.Round(value, decimals, MidpointRounding.AwayFromZero).ToString("F" + decimals, CultureInfo.CurrentCulture)
                       : Math.Round(value, 4, MidpointRounding.AwayFromZero).ToString("0.####", CultureInfo.CurrentCulture);
 
-    /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱；Text = 引號括起來的文字</summary>
-    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text }
+    /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱；Text = 引號括起來的文字；Now = NOW()</summary>
+    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text, Now }
 
     private record Token(TokenKind Kind, string Text);
 
@@ -210,13 +221,24 @@ public static class Formula
             while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/&()（）[]\"'".Contains(s[i])) sb.Append(s[i++]);
             tokens.Add(new Token(TokenKind.Name, sb.ToString()));
         }
+        // NOW()：目前的日期，變成一個 Now 符號
+        for (int t = 0; t + 2 < tokens.Count; t++)
+        {
+            if (tokens[t].Kind == TokenKind.Name && tokens[t].Text.Equals("NOW", StringComparison.OrdinalIgnoreCase)
+                && tokens[t + 1].Kind == TokenKind.LParen && tokens[t + 2].Kind == TokenKind.RParen)
+            {
+                tokens[t] = new Token(TokenKind.Now, "NOW()");
+                tokens.RemoveRange(t + 1, 2);
+            }
+        }
         // 名稱後面接左括號的是彙總函數，括號裡的是明細欄位
         for (int t = 0; t + 1 < tokens.Count; t++)
         {
             if (tokens[t].Kind != TokenKind.Name || tokens[t + 1].Kind != TokenKind.LParen) continue;
             string function = tokens[t].Text.ToUpperInvariant();
+            if (function == "NOW") throw new FormatException("NOW 的寫法是 NOW()，括號裡不用放東西");
             if (!Aggregates.Contains(function))
-                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}");
+                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}、NOW()");
             if (t + 3 >= tokens.Count || tokens[t + 2].Kind != TokenKind.Name || tokens[t + 3].Kind != TokenKind.RParen)
                 throw new FormatException($"{function} 的寫法是 {function}(明細欄位)，例如 {function}(金額)");
             tokens[t] = new Token(TokenKind.Func, function);
@@ -273,6 +295,7 @@ public static class Formula
             var t = Peek ?? throw new FormatException("公式不完整（& 後面少了文字或欄位）");
             bool alone = pos + 1 >= tokens.Count || tokens[pos + 1] is { Kind: TokenKind.Op, Text: "&" };
             if (t.Kind == TokenKind.Text && alone) { pos++; return t.Text; }
+            if (t.Kind == TokenKind.Now && alone) { pos++; return NowText(); }
             if (t.Kind == TokenKind.Name && alone) { pos++; return textOf(t.Text); }
             return format(Expression());
         }
@@ -330,6 +353,8 @@ public static class Formula
                     return Factor();
                 case TokenKind.Text:
                     throw new FormatException($"文字「{t.Text}」只能用 & 接起來，不能做 + - * /");
+                case TokenKind.Now:
+                    throw new FormatException("NOW() 是日期，只能單獨使用或用 & 接起來，不能做 + - * /");
                 case TokenKind.Op when t.Text == "&":
                     throw new FormatException("& 要放在兩段文字或算式中間，而且不能放在括號裡");
                 default:

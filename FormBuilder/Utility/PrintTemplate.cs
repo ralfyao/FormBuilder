@@ -484,6 +484,20 @@ public class PrintTableColumn
     [DisplayName("標題"), Description("空白 = 欄位名稱")]
     public string Header { get; set; }
 
+    [DisplayName("第二行欄位"), TypeConverter(typeof(PrintDetailColumnConverter)),
+     Description("同一格分上下兩行時，下面那一行印的單身欄位（例如上面 QTY、下面 Unit；上面單價、下面金額）。格式、千分號、對齊跟第一行一樣；空白 = 只有一行")]
+    public string Column2 { get; set; }
+
+    [DisplayName("第二行標題"), Description("標題列下面那一行的文字（例如上面 QTY、下面 Unit）；空白 = 標題只有一行")]
+    public string Header2 { get; set; }
+
+    [Browsable(false), System.Text.Json.Serialization.JsonIgnore]
+    public bool HasColumn2 => !string.IsNullOrWhiteSpace(Column2);
+
+    /// <summary>標題列印的文字：有第二行標題時分兩行</summary>
+    [Browsable(false), System.Text.Json.Serialization.JsonIgnore]
+    public string HeaderText => string.IsNullOrWhiteSpace(Header2) ? ToString() : ToString() + "\n" + Header2.Trim();
+
     [DisplayName("寬度"), Description("相對寬度：依比例分配到表格的寬度")]
     public int Width { get; set; } = 100;
 
@@ -495,6 +509,15 @@ public class PrintTableColumn
 
     [DisplayName("千分號"), Description("True = 這一欄的數字加千分號（例如 267,625.00），小數位數照原本的值；有設「格式」時以格式為準")]
     public bool Thousands { get; set; }
+
+    [DisplayName("公式"),
+     Editor("FormBuilder.PrintColumnFormulaEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing"),
+     Description("這一欄用同一列的單身欄位計算（也可以用單頭欄位），例如：數量2 * 單價2。算出來的值取代「欄位」原本的值，"
+               + "合計的 SUM(欄位) 也用算出來的值；「欄位」可以自己取新名稱（例如 小計）。接文字用 &，例如：數量2 & \" \" & 單位")]
+    public string Formula { get; set; }
+
+    [Browsable(false), System.Text.Json.Serialization.JsonIgnore]
+    public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
 
     public PrintTableColumn Clone() => (PrintTableColumn)MemberwiseClone();
     public override string ToString() => string.IsNullOrWhiteSpace(Header) ? Column ?? "（未選欄位）" : Header;
@@ -714,6 +737,9 @@ public static class PrintRenderer
         decimal AggregateOf(string function, string column) =>
             FormBuilder.Formula.Aggregate(function, detail != null && detail.Columns.Contains(column)
                 ? detail.Rows.Cast<DataRow>().Select(r => r[column]) : Enumerable.Empty<object>());
+        // 只有 NOW()：照「格式」印（例如 yyyy/MM/dd HH:mm），沒設格式印日期
+        if (FormBuilder.Formula.IsNowOnly(item.Formula))
+            return string.IsNullOrWhiteSpace(item.Format) ? FormBuilder.Formula.NowText() : FormatValue(DateTime.Now, item.Format);
         if (FormBuilder.Formula.IsText(item.Formula))
             return FormBuilder.Formula.EvaluateText(item.Formula, ValueOf, -1, AggregateOf) ?? "";
         var value = FormBuilder.Formula.Evaluate(item.Formula, ValueOf, AggregateOf);
@@ -745,9 +771,14 @@ public static class PrintRenderer
     /// <summary>表格一格的文字：欄位設了千分號就加；表格設了千分號時只加在數字型別的欄位（文字欄位例如產品編號不加）</summary>
     private static string CellText(PrintItem item, DataTable detail, DataRow data, PrintTableColumn column)
     {
-        if (!detail.Columns.Contains(column.Column)) return "";
-        object value = data[column.Column];
-        return FormatValue(value, column.Format, column.Thousands || (item.Thousands && value is not string));
+        string Text(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || !detail.Columns.Contains(name)) return "";
+            object value = data[name];
+            return FormatValue(value, column.Format, column.Thousands || (item.Thousands && value is not string));
+        }
+        // 第二行欄位：同一格分上下兩行（例如上面數量、下面單位）
+        return column.HasColumn2 ? Text(column.Column) + "\n" + Text(column.Column2) : Text(column.Column);
     }
 
     private static StringFormat CellFormat(PrintItem item, HorizontalAlignment align)
@@ -766,7 +797,12 @@ public static class PrintRenderer
     private static float RowHeightOf(PrintItem item, IList<string> texts, List<float> xs, Font font)
     {
         float min = Math.Max(8, item.RowHeight);
-        if (!item.WrapText) return min;
+        // 不自動換行時：有分兩行（第二行欄位、第二行標題）的格子照行數加高
+        if (!item.WrapText)
+        {
+            int lines = texts.Select(t => string.IsNullOrEmpty(t) ? 1 : t.Split('\n').Length).DefaultIfEmpty(1).Max();
+            return lines <= 1 ? min : Math.Max(min, (float)Math.Ceiling(font.GetHeight() * lines) + 6);
+        }
         float height = min;
         lock (measure)
         {
@@ -800,7 +836,7 @@ public static class PrintRenderer
         if (columns.Count == 0) return new() { (0, 0) };
         using var font = CreateFont(item);
         using var bold = new Font(font, FontStyle.Bold);
-        float header = RowHeightOf(item, columns.Select(c => c.ToString()).ToList(), xs, bold);
+        float header = RowHeightOf(item, columns.Select(c => c.HeaderText).ToList(), xs, bold);
         var heights = Enumerable.Range(0, rows).Select(r => RowHeightOf(item, columns.Select(c => CellText(item, detail, detail.Rows[r], c)).ToList(), xs, font)).ToList();
         if (template == null || !item.AutoExtend)
         {
@@ -911,7 +947,7 @@ public static class PrintRenderer
         var (start, count) = pages[^1];
         using var font = CreateFont(table);
         using var bold = new Font(font, FontStyle.Bold);
-        float used = RowHeightOf(table, columns.Select(c => c.ToString()).ToList(), xs, bold);
+        float used = RowHeightOf(table, columns.Select(c => c.HeaderText).ToList(), xs, bold);
         for (int r = start; r < start + count; r++) used += RowHeightOf(table, columns.Select(c => CellText(table, detail, detail.Rows[r], c)).ToList(), xs, font);
         float top = TableTop(template, table, pages.Count - 1);
         float shift = top + used - (table.Y + table.Height);
@@ -947,10 +983,10 @@ public static class PrintRenderer
             lines.Add(top + h);
         }
 
-        Row(columns.Select(c => c.ToString()).ToList(), bold, c => HorizontalAlignment.Center, Brushes.Black);      // 標題列
+        Row(columns.Select(c => c.HeaderText).ToList(), bold, c => HorizontalAlignment.Center, Brushes.Black);      // 標題列
         if (design)
         {
-            for (int r = 0; r < 2; r++) Row(columns.Select(c => "{" + c.Column + "}").ToList(), font, c => columns[c].Align, Brushes.DarkBlue);
+            for (int r = 0; r < 2; r++) Row(columns.Select(c => (c.HasFormula ? "{=" + c.Formula.Trim() + "}" : "{" + c.Column + "}") + (c.HasColumn2 ? "\n{" + c.Column2 + "}" : "")).ToList(), font, c => columns[c].Align, Brushes.DarkBlue);
         }
         else if (detail != null)
         {
@@ -1074,7 +1110,7 @@ public static class PrintRunner
             string identity = t.HasDetailSql ? sheets.Count.ToString(CultureInfo.InvariantCulture)
                 : string.Join("\u001f", links.Select(l => header.Table.Columns.Contains(l.Master) ? Convert.ToString(header[l.Master], CultureInfo.InvariantCulture) : ""));
             if (!seen.Add(identity)) continue;
-            var detail = LoadDetail(t, connectionString, header);
+            var detail = ApplyColumnFormulas(t, header, LoadDetail(t, connectionString, header));
             if (t.DetailSelectedOnly && selected != null && detail != null) detail = OnlySelected(t, detail, selected);
             sheets.Add(new PrintSheet(header, detail));
         }
@@ -1134,6 +1170,44 @@ public static class PrintRunner
     }
 
     /// <summary>
+    /// 明細表格欄位的「公式」：每一列用同一列的單身欄位（沒有的取單頭欄位）計算，結果放進「欄位」那一欄（沒有就新增），
+    /// 表格、合計的 SUM(…) 都用算出來的值；照表格欄位的順序算，後面的公式可以用前面算好的欄位
+    /// </summary>
+    private static DataTable ApplyColumnFormulas(PrintTemplate t, DataRow header, DataTable detail)
+    {
+        if (detail == null) return null;
+        var formulas = t.Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns)
+                              .Where(c => c.HasFormula && !string.IsNullOrWhiteSpace(c.Column)).ToList();
+        foreach (var c in formulas)
+        {
+            bool text;
+            try { text = FormBuilder.Formula.IsText(c.Formula); }
+            catch (FormatException) { continue; }
+            // 原本的欄位型別放不下算出來的值（例如文字公式放進數字欄位）時換成新的欄位
+            if (detail.Columns.Contains(c.Column) && detail.Columns[c.Column].DataType != (text ? typeof(string) : typeof(decimal)))
+            {
+                int ordinal = detail.Columns[c.Column].Ordinal;
+                detail.Columns.Remove(c.Column);
+                detail.Columns.Add(c.Column, text ? typeof(string) : typeof(decimal)).SetOrdinal(ordinal);
+            }
+            else if (!detail.Columns.Contains(c.Column)) detail.Columns.Add(c.Column, text ? typeof(string) : typeof(decimal));
+            detail.Columns[c.Column].ReadOnly = false;
+            foreach (DataRow r in detail.Rows)
+            {
+                object ValueOf(string name) => detail.Columns.Contains(name) ? r[name]
+                    : header != null && header.Table.Columns.Contains(name) ? header[name] : null;
+                try
+                {
+                    object value = text ? FormBuilder.Formula.EvaluateText(c.Formula, ValueOf, -1) : FormBuilder.Formula.Evaluate(c.Formula, ValueOf);
+                    r[c.Column] = value ?? DBNull.Value;
+                }
+                catch (Exception) { r[c.Column] = DBNull.Value; }     // 算不出來印空白
+            }
+        }
+        return detail;
+    }
+
+    /// <summary>
     /// 單身 SQL 拿掉測試用的 DECLARE：一行一個「DECLARE @名稱 …」、而且 @名稱 由單頭提供（provided = true）的整行略過，
     /// 這些 @名稱 就變成參數，帶入要印的那筆的值。其他 DECLARE（SQL 自己要用的變數）保留
     /// </summary>
@@ -1156,9 +1230,12 @@ public static class PrintRunner
         if (columns.Count == 0)
             columns = (t.Detail?.Links ?? new()).Select(l => new GridColumnDefinition { Column = l.Detail }).ToList();
         // 公式 SUM(…) 加總的明細欄位，表格沒放也要讀出來
+        var computed = t.Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns)
+                              .Where(c => c.HasFormula).Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (columns.Count > 0)
             columns.AddRange(t.FormulaNames(aggregate: true).Distinct(StringComparer.OrdinalIgnoreCase)
                               .Where(n => !columns.Any(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                              .Where(n => !computed.Contains(n) || t.DetailColumns.Any(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase)))
                               .Select(n => t.DetailColumns.FirstOrDefault(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase))
                                            ?? new GridColumnDefinition { Column = n }));
         // 只印選取的資料時要用主鍵比對，主鍵沒選也要讀出來
@@ -1197,15 +1274,21 @@ public static class PrintRunner
         string select = GridSql.Select(d, d.Table(t.TableSchema, t.TableName), t.UsedColumns(), t.Joins);
         var rows = new List<DataRow>();
         using var conn = d.Open(connectionString);
+        // 列印參數（列印選單、畫面上臨時輸入的值，例如改過的備註）不拿來找資料
+        var keys = t.KeyColumns.Where(k => !t.Params.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
         foreach (var valueOf in records)
         {
             using var cmd = d.CreateCommand(conn);
             var conditions = new List<string>();
-            for (int i = 0; i < t.KeyColumns.Count; i++)
+            for (int i = 0; i < keys.Count; i++)
             {
-                conditions.Add($"{GridSql.Base(d, t.KeyColumns[i])} = {d.Param($"k{i}")}");
-                d.AddParam(cmd, $"k{i}", valueOf(t.KeyColumns[i]) ?? DBNull.Value);
+                // 畫面上沒有的主鍵欄位（值是空的）不當條件：例如樣板主鍵存了很多欄位，但列印視窗只有單號
+                object value = valueOf(keys[i]);
+                if (value == null || value == DBNull.Value) continue;
+                conditions.Add($"{GridSql.Base(d, keys[i])} = {d.Param($"k{i}")}");
+                d.AddParam(cmd, $"k{i}", value);
             }
+            if (conditions.Count == 0) continue;                       // 一個主鍵值都沒有：不知道要印哪一筆
             cmd.CommandText = $"{select} WHERE {string.Join(" AND ", conditions)}";
             var table = d.Fill(cmd);
             if (table.Rows.Count > 0) rows.Add(table.Rows[0]);
@@ -1227,7 +1310,7 @@ public static class PrintRunner
         foreach (string name in placeholders) table.Columns.Add(name, typeof(object));
         FillSqlValues(t, connectionString, table.Rows[0]);
         foreach (string name in placeholders) table.Rows[0][name] = "{" + name + "}";
-        return new PrintSheet(table.Rows[0], LoadDetail(t, connectionString, table.Rows[0], sample: true));
+        return new PrintSheet(table.Rows[0], ApplyColumnFormulas(t, table.Rows[0], LoadDetail(t, connectionString, table.Rows[0], sample: true)));
     }
 
     /// <summary>
