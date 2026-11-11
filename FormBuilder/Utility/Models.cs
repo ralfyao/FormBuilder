@@ -788,7 +788,8 @@ public class GridDefinition
     public List<FieldDefinition> EditTextLabels { get; set; } = new();
 
     /// <summary>
-    /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」。
+    /// 生效欄位：編輯視窗的「生效」把它改成 1、「取消生效」改成 0，生效的資料才能「列印」；
+    /// 已生效的資料不能修改、刪除（要先取消生效）。
     /// 空白 = 不使用（不顯示生效 / 取消生效）
     /// </summary>
     [Browsable(false)]

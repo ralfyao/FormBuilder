@@ -2914,6 +2914,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
     {
         var rows = SelectedRowIndexes();
         if (rows.Count == 0 || !HasKey) return;
+        // 已生效的資料不能刪除（要先取消生效）
+        int locked = rows.Count(IsEffectiveRow);
+        if (locked > 0)
+        {
+            MessageBox.Show((rows.Count > 1 ? $"選取的資料有 {locked} 筆已經生效" : "這筆資料已經生效") + "，不能刪除；要刪除請先取消生效。", "刪除",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         bool withDetail = details.Any(p => p.Def.Links.Count > 0);
         string what = rows.Count > 1 ? $"選取的 {rows.Count} 筆資料" : "這筆資料";
         if (MessageBox.Show($"確定要刪除{what}{(withDetail ? "（連同單身明細）" : "")}嗎？", "刪除",
@@ -2953,6 +2961,14 @@ public partial class RuntimeForm : Form, IRecordNavigator
         SetMode(Mode.Browse);
         MessageBox.Show(deleted == rows.Count ? $"已刪除 {deleted} 筆。" : $"已刪除 {deleted} 筆（有 {rows.Count - deleted} 筆找不到，可能已被其他人刪除）。", "刪除");
         AfterSave(null);
+    }
+
+    /// <summary>查詢結果的這一列已經生效（單頭清單有設定生效欄位、且值是生效）</summary>
+    private bool IsEffectiveRow(int row)
+    {
+        string column = listDef?.EffectiveColumn;
+        return !string.IsNullOrWhiteSpace(column) && results != null && row >= 0 && row < results.Rows.Count
+            && results.Columns.Contains(column) && GridDefinition.IsEffectiveValue(results.Rows[row][column]);
     }
 
     /// <summary>清單上選取的資料一起生效（生效欄位改成 1）或取消生效（改成 0）</summary>

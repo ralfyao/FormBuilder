@@ -253,8 +253,10 @@ public partial class RecordNavigatorDialog : Form
         bool browsing = mode == EditMode.Browse;
         bool hasRow = nav.CurrentRow != null;
         btnInsert.Enabled = browsing && nav.CanInsert;
-        btnModify.Enabled = browsing && hasRow && nav.CanModify;
-        btnDelete.Enabled = browsing && hasRow && nav.CanDelete;
+        // 已生效的資料不能修改、刪除（要先取消生效）
+        bool locked = hasRow && IsEffective(nav.CurrentRow);
+        btnModify.Enabled = browsing && hasRow && nav.CanModify && !locked;
+        btnDelete.Enabled = browsing && hasRow && nav.CanDelete && !locked;
         btnFirst.Enabled = btnPrevious.Enabled = browsing && nav.Current > 0;
         btnNext.Enabled = btnLast.Enabled = browsing && hasRow && nav.Current < nav.Count - 1;
         btnOk.Enabled = btnCancel.Enabled = !browsing;
@@ -287,6 +289,7 @@ public partial class RecordNavigatorDialog : Form
             _ => baseTitle,
         };
         lblPosition.Text = mode != EditMode.Browse ? "輸入完按「確定」存檔，Esc 取消"
+                         : hasRow && locked ? $"第 {nav.Current + 1} / {nav.Count} 筆（已生效，不能修改、刪除；要修改請先取消生效）"
                          : hasRow ? $"第 {nav.Current + 1} / {nav.Count} 筆"
                          : "沒有資料，可以按「新增」";
         // 選取視窗按鈕（有回傳對應）要在新增、修改時才能按，帶回的值填進正在輸入的欄位
