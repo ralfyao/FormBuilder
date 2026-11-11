@@ -3,7 +3,7 @@ namespace FormBuilder;
 /// <summary>
 /// 後台設計視窗：連線資料庫 → 選資料表 → 把欄位拖到畫面上 → 存成畫面定義檔（JSON）給使用者使用
 /// </summary>
-public partial class DesignerForm : Form, IPickerHost
+public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
 {
     // 屬性面板「開窗畫面」的設定視窗：回傳值可以填進畫面上的欄位，相對路徑以目前畫面的資料夾為準
     // 文字標籤也可以接回傳值（例如帶回姓名顯示在標籤上）
@@ -910,10 +910,17 @@ public partial class DesignerForm : Form, IPickerHost
     private void OpenPrintDesigner(ButtonBox box)
     {
         if (box.ButtonDef.Action != ButtonAction.列印報表) return;
+        DesignPrintTemplate(box.ButtonDef);
+    }
+
+    /// <summary>屬性面板「列印樣板檔」的「…」也走這裡</summary>
+    public bool DesignPrintTemplate(ButtonDefinition b)
+    {
         string folder = currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : FormDefinition.DefaultFolder;
-        if (PrintDesignerForm.OpenFor(box.ButtonDef, this, folder, connectionString, def.TableSchema, def.TableName,
-                                      def.MasterKeys.Select(k => k.Column)))
-            propertyGrid.Refresh();
+        bool changed = PrintDesignerForm.OpenFor(b, this, folder, connectionString, def.TableSchema, def.TableName,
+                                                 def.MasterKeys.Select(k => k.Column));
+        if (changed) propertyGrid.Refresh();
+        return changed;
     }
 
     // ================= 工具箱 =================

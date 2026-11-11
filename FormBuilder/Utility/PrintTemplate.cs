@@ -12,6 +12,14 @@ namespace FormBuilder;
 /// <summary>紙張大小</summary>
 public enum PrintPaper { A4, A5, A3, Letter }
 
+/// <summary>元件印在哪幾頁（明細很多、一張單據印好幾頁時）</summary>
+public enum PrintPages
+{
+    每一頁,
+    只印第一頁,
+    只印最後一頁,
+}
+
 /// <summary>列印樣板上的元件種類</summary>
 public enum PrintItemKind
 {
@@ -265,10 +273,19 @@ public class PrintTemplate
     /// 樣板上用到的欄位（給 SELECT 用）：JOIN 的欄位用 JOIN 定義，其他當成主資料表的欄位；主鍵、單身對應的單頭欄位一定要有。
     /// 由列印來源提供的欄位（RecordColumns）不從資料庫讀
     /// </summary>
+    /// <summary>元件公式用到的欄位：aggregate = false 是單頭欄位，true 是 SUM(…) 括號裡的明細欄位（公式寫錯的略過）</summary>
+    public IEnumerable<string> FormulaNames(bool aggregate) =>
+        Items.Where(i => i.HasFormula).SelectMany(i =>
+        {
+            try { return aggregate ? FormBuilder.Formula.AggregateColumns(i.Formula) : FormBuilder.Formula.Names(i.Formula); }
+            catch (FormatException) { return new List<string>(); }
+        });
+
     public List<GridColumnDefinition> UsedColumns()
     {
         var record = RecordColumns.Concat(Params).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var names = Items.Where(i => i.Kind == PrintItemKind.欄位 && !string.IsNullOrWhiteSpace(i.Column)).Select(i => i.Column)
+                         .Concat(FormulaNames(aggregate: false))                       // 公式用到的單頭欄位
                          .Concat(Detail?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
                          .Concat(SqlColumns)
                          .Where(n => !record.Contains(n)).Concat(KeyColumns)
@@ -311,8 +328,14 @@ public class PrintItem
     [Category("內容"), DisplayName("種類"), ReadOnly(true), JsonConverter(typeof(JsonStringEnumConverter))]
     public PrintItemKind Kind { get; set; }
 
-    [Category("內容"), DisplayName("文字"), Description("文字：直接印出來；欄位：印在值前面的文字（例如「廠商名稱：」），可以留空白")]
+    [Category("內容"), DisplayName("文字"),
+     Description("文字：直接印出來；欄位：印在值前面的文字（例如「廠商名稱：」），可以留空白。"
+               + "可以用 {頁次}、{總頁數} 印頁碼，例如「第 {頁次} / {總頁數} 頁」")]
     public string Text { get; set; }
+
+    [Category("內容"), DisplayName("列印頁面"), JsonConverter(typeof(JsonStringEnumConverter)),
+     Description("明細很多、一張單據印好幾頁時，這個元件印在哪幾頁：每一頁（表頭、公司標誌）、只印第一頁、只印最後一頁（備註、銀行資料、簽名）")]
+    public PrintPages Pages { get; set; } = PrintPages.每一頁;
 
     [Category("內容"), DisplayName("欄位"), TypeConverter(typeof(PrintColumnConverter)), Description("種類 = 欄位 時印出這個欄位的值（可以從清單挑，包含 JOIN 進來的欄位）")]
     public string Column { get; set; }
@@ -327,6 +350,15 @@ public class PrintItem
 
     [Browsable(false), JsonIgnore]
     public bool HasSql => !string.IsNullOrWhiteSpace(Sql);
+
+    [Category("內容"), DisplayName("公式"),
+     Description("文字、欄位都可以用：印「文字」後面接公式算出來的值（取代欄位本身的值）。可以用單頭欄位做 + - * / 運算，"
+               + "也可以加總明細：SUM(明細欄位)、AVG、COUNT、MAX、MIN，例如 SUM(金額1)、SUM(金額1) * 1.05、數量 * 單價；"
+               + "用 & 串接文字，例如 幣別 & \" \" & SUM(金額1)。數字的顯示格式看「格式」，例如 #,##0.00")]
+    public string Formula { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool HasFormula => !string.IsNullOrWhiteSpace(Formula);
 
     /// <summary>SQL 查出來的值放在單頭資料的這個欄位（同一段 SQL 只查一次）</summary>
     [Browsable(false), JsonIgnore]
@@ -474,7 +506,7 @@ public static class PrintRenderer
     /// 畫一個元件；row = 要印的那筆資料，null = 設計畫面（欄位顯示成 {欄位名稱}）。
     /// 明細表格：detail = 單身資料，page = 單身的第幾頁（放不下的接著印下一頁）
     /// </summary>
-    public static void DrawItem(Graphics g, PrintItem item, RectangleF rect, DataRow row, DataTable detail = null, int page = 0)
+    public static void DrawItem(Graphics g, PrintItem item, RectangleF rect, DataRow row, DataTable detail = null, int page = 0, int pageCount = 1)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -511,8 +543,13 @@ public static class PrintRenderer
 
         // 有寫 SQL 的欄位印 SQL 查出來的值（讀資料時已經查好放在 SqlValueColumn）；設計畫面顯示 {SQL}
         string valueColumn = item.HasSql ? item.SqlValueColumn : item.Column ?? "";
-        string text = item.Kind == PrintItemKind.文字 ? item.Text ?? ""
-                    : (item.Text ?? "") + (row == null ? "{" + (item.HasSql ? "SQL" + (string.IsNullOrWhiteSpace(item.Column) ? "" : "：" + item.Column) : item.Column ?? "未選欄位") + "}"
+        // 頁碼：{頁次} = 這張單據的第幾頁，{總頁數} = 這張單據共幾頁（設計畫面照原樣顯示）
+        string label = row == null ? item.Text ?? ""
+            : (item.Text ?? "").Replace("{頁次}", (page + 1).ToString(CultureInfo.InvariantCulture))
+                               .Replace("{總頁數}", Math.Max(1, pageCount).ToString(CultureInfo.InvariantCulture));
+        string text = item.HasFormula ? label + (row == null ? "{=" + item.Formula.Trim() + "}" : FormulaText(item, row, detail))
+                    : item.Kind == PrintItemKind.文字 ? label
+                    : label + (row == null ? "{" + (item.HasSql ? "SQL" + (string.IsNullOrWhiteSpace(item.Column) ? "" : "：" + item.Column) : item.Column ?? "未選欄位") + "}"
                                          : row.Table.Columns.Contains(valueColumn) ? FormatValue(row[valueColumn], item.Format) : "");
         using var font = CreateFont(item);
         using var format = new StringFormat
@@ -526,6 +563,22 @@ public static class PrintRenderer
         var textRect = RectangleF.Inflate(rect, -3, 0);
         g.DrawString(text, font, row == null && item.Kind == PrintItemKind.欄位 ? Brushes.DarkBlue : Brushes.Black, textRect, format);
         if (item.Border) g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+    }
+
+    /// <summary>
+    /// 元件「公式」的結果：單頭欄位從要印的那筆取，SUM(…) 等彙總函數加總整張單據的明細（不分頁）；
+    /// 數字照「格式」顯示，算不出來印空白
+    /// </summary>
+    private static string FormulaText(PrintItem item, DataRow row, DataTable detail)
+    {
+        object ValueOf(string name) => row.Table.Columns.Contains(name) ? row[name] : null;
+        decimal AggregateOf(string function, string column) =>
+            FormBuilder.Formula.Aggregate(function, detail != null && detail.Columns.Contains(column)
+                ? detail.Rows.Cast<DataRow>().Select(r => r[column]) : Enumerable.Empty<object>());
+        if (FormBuilder.Formula.IsText(item.Formula))
+            return FormBuilder.Formula.EvaluateText(item.Formula, ValueOf, -1, AggregateOf) ?? "";
+        var value = FormBuilder.Formula.Evaluate(item.Formula, ValueOf, AggregateOf);
+        return value == null ? "" : FormatValue(value.Value, item.Format);
     }
 
     private static void DrawPlaceholder(Graphics g, RectangleF rect, string text)
@@ -664,8 +717,14 @@ public static class PrintRenderer
     /// <summary>畫整頁（預覽與列印）：g 的座標要已經換算成 1/96 吋；page = 這張單據的第幾頁（單身很多時一張單據印好幾頁）</summary>
     public static void DrawPage(Graphics g, PrintTemplate template, PrintSheet sheet, int page = 0)
     {
+        int pageCount = PageCount(template, sheet);
         foreach (var item in template.Items)
-            DrawItem(g, item, new RectangleF(item.X, item.Y, Math.Max(1, item.Width), Math.Max(1, item.Height)), sheet.Header, sheet.Detail, page);
+        {
+            // 「列印頁面」：只印第一頁 / 只印最後一頁的元件，其他頁不印
+            if (item.Pages == PrintPages.只印第一頁 && page != 0) continue;
+            if (item.Pages == PrintPages.只印最後一頁 && page != pageCount - 1) continue;
+            DrawItem(g, item, new RectangleF(item.X, item.Y, Math.Max(1, item.Width), Math.Max(1, item.Height)), sheet.Header, sheet.Detail, page, pageCount);
+        }
     }
 
     /// <summary>一張單據要印幾頁：單身超過明細表格放得下的高度時接著印下一頁</summary>
@@ -817,6 +876,12 @@ public static class PrintRunner
         // 對應的單身欄位不一定有選，SELECT 不用；欄位一個都沒有時至少讀對應欄位，表格才知道有幾筆
         if (columns.Count == 0)
             columns = (t.Detail?.Links ?? new()).Select(l => new GridColumnDefinition { Column = l.Detail }).ToList();
+        // 公式 SUM(…) 加總的明細欄位，表格沒放也要讀出來
+        if (columns.Count > 0)
+            columns.AddRange(t.FormulaNames(aggregate: true).Distinct(StringComparer.OrdinalIgnoreCase)
+                              .Where(n => !columns.Any(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                              .Select(n => t.DetailColumns.FirstOrDefault(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase))
+                                           ?? new GridColumnDefinition { Column = n }));
         // 只印選取的資料時要用主鍵比對，主鍵沒選也要讀出來
         if (t.DetailSelectedOnly)
             columns.AddRange(t.DetailKeyColumns.Where(k => !columns.Any(c => c.Column.Equals(k, StringComparison.OrdinalIgnoreCase)))

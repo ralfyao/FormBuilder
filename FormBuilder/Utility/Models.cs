@@ -1304,7 +1304,8 @@ public class ButtonDefinition
     public bool OpenInNewWindow { get; set; }
 
     [Category("列印報表"), DisplayName("列印樣板檔"),
-     Description("動作 = 列印報表 時使用的樣板（*.print.json）。在設計畫面上雙擊這個按鈕，就會開啟列印樣板設計（第一次儲存時會建立樣板檔）；只寫檔名時，會找跟目前畫面同一個資料夾的檔案")]
+     Description("動作 = 列印報表 時使用的樣板（*.print.json）。按右邊的「…」（或在設計畫面上雙擊這個按鈕）開啟列印樣板設計，第一次儲存時會建立樣板檔；只寫檔名時，會找跟目前畫面同一個資料夾的檔案"),
+     Editor(typeof(PrintTemplateEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string PrintTemplate { get; set; }
 
     [Category("列印報表"), DisplayName("列印來源清單"), TypeConverter(typeof(PrintListConverter)),

@@ -1147,13 +1147,27 @@ public partial class PrintDesignerForm : Form
             return false;
         }
         var keys = keyColumns.ToList();
-        if (keys.Count == 0)
-        {
-            MessageBox.Show("這個資料表沒有設定主鍵，列印時不知道要印哪一筆。請先在欄位（或單頭清單的欄位設定）勾選主鍵。", "列印樣板");
-            return false;
-        }
         string folder = string.IsNullOrWhiteSpace(formFolder) ? FormDefinition.DefaultFolder : formFolder;
         string path = ButtonRunner.ResolvePath(b.PrintTemplate, folder);
+        if (keys.Count == 0)
+        {
+            // 畫面沒有主鍵（例如只用來列印的自訂畫面）：沿用樣板上次選的欄位，沒有就請設計者選用哪個欄位找出要印的那筆
+            try { if (File.Exists(path)) keys = PrintTemplate.Load(path).KeyColumns.ToList(); } catch { }
+            if (keys.Count == 0)
+            {
+                List<ColumnInfo> columns;
+                try { columns = SchemaReader.GetColumns(connectionString, tableSchema, tableName); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("讀不到資料表的欄位：" + ex.Message, "列印樣板");
+                    return false;
+                }
+                using var pick = new PickListDialog("勾選找出要印那筆的欄位（例如單號）",
+                    columns.Select(c => new PickListDialog.Item(c.Name, c.Name)));
+                if (pick.ShowDialog(owner) != DialogResult.OK) return false;
+                keys = pick.PickedKeys;
+            }
+        }
         // 新樣板檔的預設檔名：資料表_按鈕文字（去掉檔名不能用的字元）
         string name = string.IsNullOrWhiteSpace(b.Text) ? tableName : $"{tableName}_{b.Text}";
         name = string.Concat(name.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch))).Trim();
