@@ -249,7 +249,7 @@ public partial class PrintDesignerForm : Form
         Load += (s, e) =>
         {
             LoadColumns();
-            if (template.Detail != null) AddDetailTableIfMissing();   // 有單身但明細表格不在紙張上（以前被放到紙張外面）：放進來
+            if (template.Detail != null || template.HasDetailSql) AddDetailTableIfMissing();   // 有單身但明細表格不在紙張上（以前被放到紙張外面）：放進來
         };
         history = new UndoHistory(this, () => template.ToJson(), RestoreSnapshot);
         savedJson = template.ToJson();
@@ -355,7 +355,7 @@ public partial class PrintDesignerForm : Form
         PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).Concat(template.RecordColumns)
                                          .Concat(template.Params).ToList();
         PrintDetailColumnConverter.Available = template.DetailColumns.Select(c => c.Column).ToList();
-        btnDetail.Text = template.Detail == null ? "設定單身（單頭與單身的對應）…" : $"單身：{template.Detail.TableName}（重新設定…）";
+        btnDetail.Text = template.HasDetailSql ? "單身：SQL 產生（重新設定…）" : template.Detail == null ? "設定單身（單頭與單身的對應）…" : $"單身：{template.Detail.TableName}（重新設定…）";
         MarkMissingColumns();
     }
 
@@ -417,16 +417,12 @@ public partial class PrintDesignerForm : Form
     /// <summary>設定單身：編輯視窗上有明細清單時，可以直接用清單（資料表、關聯、欄位、清單的 JOIN 都照清單），或另外選資料表</summary>
     private void ChooseDetail()
     {
-        if (editLists.Count == 0)
-        {
-            SetDetail();
-            return;
-        }
         var menu = new ContextMenuStrip();
         foreach (var list in editLists)
             menu.Items.Add($"使用編輯視窗的明細清單：{list.Title ?? list.TableName}（關聯：{list.LinkText}）", null, (s, e) => UseListAsDetail(list));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("選其他資料表…", null, (s, e) => SetDetail());
+        if (editLists.Count > 0) menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(editLists.Count > 0 ? "選其他資料表…" : "選資料表（單頭與單身的對應）…", null, (s, e) => SetDetail());
+        menu.Items.Add(template.HasDetailSql ? "修改單身 SQL…" : "用 SQL 產生單身…", null, (s, e) => SetDetailSql());
         menu.Show(btnDetail, new Point(0, btnDetail.Height));
     }
 
@@ -461,6 +457,7 @@ public partial class PrintDesignerForm : Form
         using var dlg = new JoinDialog(connectionString, "D", HeaderColumns(), Array.Empty<string>(), forDetail: true);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         template.Detail = dlg.Join;
+        template.DetailSql = null;                          // 改用資料表：不再用 SQL 產生單身
         template.DetailJoins = new();
         template.DetailKeyColumns = DetailKeysFromDatabase();
         // 單身資料表本身的欄位（JOIN 對話框沒有其他欄位，名稱就是原本的欄位名稱）
@@ -471,6 +468,62 @@ public partial class PrintDesignerForm : Form
         AddDetailTableIfMissing();
         propertyGrid.Refresh();
         UpdateStatus($"已設定單身 {dlg.Join.TableName}（對應：{dlg.Join.LinkText}，{dlg.NewColumns.Count} 個欄位）");
+    }
+
+    /// <summary>
+    /// 用 SQL 產生單身：寫一段 SELECT，@名稱 帶入要印的那筆單頭的欄位（含列印參數）。按「確定」先讀出結果的欄位，
+    /// 單身欄位就是這些欄位（拖到明細表格）；測試用的 DECLARE @單號 = … 可以留著，列印時會換成這筆的值
+    /// </summary>
+    private void SetDetailSql()
+    {
+        using var dlg = new Form
+        {
+            Text = "用 SQL 產生單身", Font = Font, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false,
+            MinimizeBox = false, ClientSize = new Size(820, 520),
+        };
+        var box = new SqlTextBox { Dock = DockStyle.Fill, Text = (template.DetailSql ?? "").Replace("\r\n", "\n") };
+        var hint = new Label
+        {
+            Dock = DockStyle.Top, Height = 56, Padding = new Padding(4),
+            Text = "寫一段 SELECT，結果的每一列就是單身的一筆。@名稱 帶入要印的那筆單頭的欄位或列印參數，例如 WHERE d.單號 = @單號 AND p.款項期別 = @款項期別。"
+                 + "在 SSMS 測試用的「DECLARE @單號 … = …」可以留著，列印時會換成這筆的值。按「確定」會先讀出 SQL 的欄位。",
+        };
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
+        var ok = new Button { Text = "確定", Width = 90, Height = 30 };
+        var cancel = new Button { Text = "取消", Width = 90, Height = 30, DialogResult = DialogResult.Cancel };
+        bottom.Controls.AddRange(new Control[] { cancel, ok });
+        dlg.Controls.Add(box);
+        dlg.Controls.Add(hint);
+        dlg.Controls.Add(bottom);
+        dlg.CancelButton = cancel;
+        List<GridColumnDefinition> columns = null;
+        ok.Click += (s, e) =>
+        {
+            string sql = box.Text.Trim();
+            if (sql == "") { MessageBox.Show(dlg, "請輸入 SQL。", dlg.Text); return; }
+            try
+            {
+                // 讀欄位時 @參數都當 NULL（測試用的 DECLARE 一樣拿掉，避免跟參數撞名）
+                columns = SqlList.ReadColumns(connectionString, PrintRunner.DetailSqlFor(sql, _ => true));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(dlg, "SQL 執行失敗：" + ex.Message, dlg.Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (columns.Count == 0) { MessageBox.Show(dlg, "這段 SQL 沒有查出任何欄位。", dlg.Text); return; }
+            dlg.DialogResult = DialogResult.OK;
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        template.DetailSql = box.Text.Trim().Replace("\r\n", "\n").Replace("\n", "\r\n");
+        template.Detail = null;                             // 單身改用 SQL：不再用資料表與對應
+        template.DetailJoins = new();
+        template.DetailKeyColumns = new();
+        template.DetailColumns = columns.Select(c => new GridColumnDefinition { Column = c.Column, Header = c.Header, DataType = c.DataType, Width = c.Width }).ToList();
+        FillColumnList();
+        AddDetailTableIfMissing();
+        propertyGrid.Refresh();
+        UpdateStatus($"單身改用 SQL 產生（{columns.Count} 個欄位：{string.Join("、", columns.Take(8).Select(c => c.Column))}{(columns.Count > 8 ? "…" : "")}）");
     }
 
     /// <summary>單身資料表的主鍵：編輯視窗上同一個資料表的明細清單有設定主鍵就用它，否則用資料庫的主鍵</summary>
@@ -486,9 +539,10 @@ public partial class PrintDesignerForm : Form
 
     private void RemoveDetail()
     {
-        if (template.Detail == null) return;
-        if (MessageBox.Show($"確定要移除單身「{template.Detail.TableName}」嗎？明細表格會印成空白。", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        if (template.Detail == null && !template.HasDetailSql) return;
+        if (MessageBox.Show($"確定要移除單身「{(template.HasDetailSql ? "SQL" : template.Detail.TableName)}」嗎？明細表格會印成空白。", "提醒", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
         template.Detail = null;
+        template.DetailSql = null;
         template.DetailColumns = new();
         template.DetailJoins = new();
         template.DetailKeyColumns = new();

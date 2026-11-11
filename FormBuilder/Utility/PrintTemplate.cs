@@ -85,8 +85,18 @@ public class PrintTemplate
     [Browsable(false)]
     public List<GridJoinDefinition> DetailJoins { get; set; } = new();
 
-    [Category("單身"), DisplayName("單身資料表"), JsonIgnore, Description("在左邊「欄位」頁籤按「設定單身」選資料表與對應")]
-    public string DetailTableText => Detail == null ? "（未設定）" : $"{Detail.TableSchema}.{Detail.TableName}";
+    [Category("單身"), DisplayName("單身資料表"), JsonIgnore, Description("在左邊「欄位」頁籤按「設定單身」選資料表與對應，或用 SQL 產生單身")]
+    public string DetailTableText => HasDetailSql ? "（SQL 產生）" : Detail == null ? "（未設定）" : $"{Detail.TableSchema}.{Detail.TableName}";
+
+    /// <summary>
+    /// 單身 SQL：單身改用這段 SELECT 的結果（取代單身資料表與對應）。@名稱 帶入要印的那筆單頭的欄位、列印參數；
+    /// 測試用的 DECLARE @名稱（單頭有提供的）列印時略過
+    /// </summary>
+    [Browsable(false)]
+    public string DetailSql { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool HasDetailSql => !string.IsNullOrWhiteSpace(DetailSql);
 
     [Category("單身"), DisplayName("單頭與單身的對應"), JsonIgnore,
      Description("單頭欄位=單身欄位，多組用逗號分隔，例如：廠商編號=廠商編號, 詢價日期=詢價日期。對應的值都相同的單身資料印在同一張；"
@@ -838,12 +848,14 @@ public static class PrintRunner
             headers.Add(row);
         }
         var links = t.Detail?.Links ?? new();
-        if (links.Count == 0) return headers.Select(r => new PrintSheet(r, null)).ToList();
+        if (links.Count == 0 && !t.HasDetailSql) return headers.Select(r => new PrintSheet(r, null)).ToList();
         var sheets = new List<PrintSheet>();
         var seen = new HashSet<string>();
         foreach (var header in headers)
         {
-            string identity = string.Join("\u001f", links.Select(l => header.Table.Columns.Contains(l.Master) ? Convert.ToString(header[l.Master], CultureInfo.InvariantCulture) : ""));
+            // 單身用 SQL 時每筆單頭各印一張；用資料表時對應的值相同的只印一張
+            string identity = t.HasDetailSql ? sheets.Count.ToString(CultureInfo.InvariantCulture)
+                : string.Join("\u001f", links.Select(l => header.Table.Columns.Contains(l.Master) ? Convert.ToString(header[l.Master], CultureInfo.InvariantCulture) : ""));
             if (!seen.Add(identity)) continue;
             var detail = LoadDetail(t, connectionString, header);
             if (t.DetailSelectedOnly && selected != null && detail != null) detail = OnlySelected(t, detail, selected);
@@ -871,6 +883,12 @@ public static class PrintRunner
     /// </summary>
     public static DataTable LoadDetail(PrintTemplate t, string connectionString, DataRow header, bool sample = false)
     {
+        if (t.HasDetailSql)
+        {
+            // 單身 SQL：@名稱 帶入這筆單頭的欄位（含列印參數）；測試用的 DECLARE（單頭有提供的變數）先拿掉
+            object ValueOf(string name) => header.Table.Columns.Contains(name) ? header[name] : null;
+            return SqlList.Load(connectionString, DetailSqlFor(t.DetailSql, header.Table.Columns.Contains), ValueOf);
+        }
         var detail = t.Detail;
         if (detail == null || detail.Links.Count == 0) return null;
         var d = DbDialect.Of(connectionString);
@@ -897,6 +915,14 @@ public static class PrintRunner
         cmd.CommandText = GridSql.Select(d, detail.FullTableName(d), columns, t.DetailJoins, top) + where + order + (top == null ? "" : d.Limit(50));
         return d.Fill(cmd);
     }
+
+    /// <summary>
+    /// 單身 SQL 拿掉測試用的 DECLARE：一行一個「DECLARE @名稱 …」、而且 @名稱 由單頭提供（provided = true）的整行略過，
+    /// 這些 @名稱 就變成參數，帶入要印的那筆的值。其他 DECLARE（SQL 自己要用的變數）保留
+    /// </summary>
+    public static string DetailSqlFor(string sql, Func<string, bool> provided) =>
+        System.Text.RegularExpressions.Regex.Replace(sql ?? "", @"(?im)^[ \t]*DECLARE[ \t]+@([\p{L}\p{N}_]+)\b(?![^\r\n]*,[ \t]*@)[^\r\n]*(?=\r?$)",
+            m => provided(m.Groups[1].Value) ? $"-- （列印時帶入 {m.Groups[1].Value}）" : m.Value);
 
     /// <summary>
     /// 單身 SELECT 的欄位：單身資料表本身的欄位、DetailJoins 的欄位。
