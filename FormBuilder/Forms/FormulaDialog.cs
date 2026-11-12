@@ -33,7 +33,7 @@ public class FormulaDialog : Form
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(720, 420);
+        ClientSize = new Size(760, 460);
         var list = fields.ToList();
         var masters = (masterFields ?? Enumerable.Empty<(string Column, string Label)>())
             .Where(m => !list.Any(f => f.Column.Equals(m.Column, StringComparison.OrdinalIgnoreCase))).ToList();
@@ -59,7 +59,7 @@ public class FormulaDialog : Form
 
         // 右邊：運算符號按鈕、公式、檢查結果
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 8, 8, 8) };
-        var ops = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36 };
+        var ops = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 70 };
         foreach (string op in new[] { "+", "-", "*", "/", "(", ")", "&" })
         {
             var b = new Button { Text = op, Width = 40, Height = 28, UseMnemonic = false };     // & 不要當成快速鍵符號
@@ -73,16 +73,30 @@ public class FormulaDialog : Form
             txtFormula.SelectionStart--;                   // 游標放在引號中間，直接打字
         };
         ops.Controls.Add(btnText);
+        ops.SetFlowBreak(btnText, true);                           // 函數按鈕放第二排
         var btnNow = new Button { Text = "NOW()", Width = 64, Height = 28 };
         btnNow.Click += (s, e) => Insert("NOW()");                 // 目前的日期
         ops.Controls.Add(btnNow);
+        // 文字函數：有選取文字時包進第一個參數，游標停在下一個要填的位置
+        foreach (var (name, tail) in new[] { ("LEFT", ", )"), ("RIGHT", ", )"), ("MID", ", , )") })
+        {
+            var b = new Button { Text = name + "( )", Width = 72, Height = 28 };
+            b.Click += (s, e) =>
+            {
+                string selected = txtFormula.SelectedText;
+                Insert($"{name}({selected}{tail}");
+                txtFormula.SelectionStart -= selected == "" ? tail.Length : tail.Length - 2;
+            };
+            ops.Controls.Add(b);
+        }
         right.Controls.Add(txtFormula);
         right.Controls.Add(ops);
         right.Controls.Add(new Label
         {
             Text = "例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。欄位名稱有空白或運算符號時用 [ ] 括起來；欄位沒填當成 0。\n"
-                 + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）；NOW() = 今天的日期",
-            Dock = DockStyle.Top, Height = 58, UseMnemonic = false,      // & 照字面顯示
+                 + "接文字用 &，文字用雙引號：100 - 單價1 / 單價 * 100 & \"%\"、單號 & \"-\" & 品名（& 最後才接，結果是文字）；NOW() = 今天的日期\n"
+                 + "取部分文字：LEFT(欄位, 字數) 左邊幾個字、RIGHT(欄位, 字數) 右邊幾個字、MID(欄位, 起點, 字數) 從第幾個字取（字數省略 = 取到最後），例如 \"No.\" & RIGHT(單號, 5)",
+            Dock = DockStyle.Top, Height = 80, UseMnemonic = false,      // & 照字面顯示
         });
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };

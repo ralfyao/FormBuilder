@@ -11,6 +11,8 @@ namespace FormBuilder;
 /// 文字串接（像 Access）：用 &amp; 把文字、欄位、算式接起來，文字用 "雙引號" 或 '單引號' 括起來，例如 100 - 單價1 / 單價 * 100 &amp; "%"；
 /// &amp; 的優先順序最低（先算完 + - * / 再接），單獨一個欄位接起來時用它原本的文字（不會當成數字）。
 /// NOW()：目前的日期（yyyy/MM/dd），是文字，用 &amp; 接，例如 "列印日期：" &amp; NOW()
+/// 文字函數：LEFT(欄位, n) 取左邊 n 個字、RIGHT(欄位, n) 取右邊 n 個字、MID(欄位, 起點, n) 從第幾個字（從 1 算）取 n 個字（n 省略 = 取到最後），
+/// 結果是文字，可以用 &amp; 接，例如 "No." &amp; RIGHT(單號, 5)；第一個參數也可以是 "文字" 或用 &amp; 接起來的文字
 /// </summary>
 public static class Formula
 {
@@ -24,6 +26,9 @@ public static class Formula
 
     /// <summary>支援的彙總函數</summary>
     public static readonly string[] Aggregates = { "SUM", "AVG", "COUNT", "MAX", "MIN", "STD", "STDP" };
+
+    /// <summary>支援的文字函數</summary>
+    public static readonly string[] TextFunctions = { "LEFT", "RIGHT", "MID" };
 
     /// <summary>公式有用到彙總函數（SUM、AVG…）：要從明細加總，Grid 同一列的公式不算這種</summary>
     public static bool HasAggregate(string formula)
@@ -62,10 +67,10 @@ public static class Formula
         }
     }
 
-    /// <summary>文字公式：有用 &amp; 串接、"引號" 文字或 NOW()，結果是文字（用 EvaluateText 算）</summary>
+    /// <summary>文字公式：有用 &amp; 串接、"引號" 文字、NOW() 或 LEFT / RIGHT / MID，結果是文字（用 EvaluateText 算）</summary>
     public static bool IsText(string formula)
     {
-        try { return Tokenize(formula).Any(t => t.Kind is TokenKind.Text or TokenKind.Now || t is { Kind: TokenKind.Op, Text: "&" }); }
+        try { return Tokenize(formula).Any(t => t.Kind is TokenKind.Text or TokenKind.Now or TokenKind.TextFunc || t is { Kind: TokenKind.Op, Text: "&" }); }
         catch (FormatException) { return false; }
     }
 
@@ -167,8 +172,9 @@ public static class Formula
         decimals >= 0 ? Math.Round(value, decimals, MidpointRounding.AwayFromZero).ToString("F" + decimals, CultureInfo.CurrentCulture)
                       : Math.Round(value, 4, MidpointRounding.AwayFromZero).ToString("0.####", CultureInfo.CurrentCulture);
 
-    /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱；Text = 引號括起來的文字；Now = NOW()</summary>
-    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text, Now }
+    /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱；Text = 引號括起來的文字；Now = NOW()；
+    /// TextFunc = 文字函數 LEFT / RIGHT / MID（後面接括號）；Comma = 函數參數之間的逗號</summary>
+    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text, Now, TextFunc, Comma }
 
     private record Token(TokenKind Kind, string Text);
 
@@ -199,6 +205,7 @@ public static class Formula
             }
             if (c == '(' || c == '（') { tokens.Add(new Token(TokenKind.LParen, "(")); i++; continue; }
             if (c == ')' || c == '）') { tokens.Add(new Token(TokenKind.RParen, ")")); i++; continue; }
+            if (c == ',' || c == '，') { tokens.Add(new Token(TokenKind.Comma, ",")); i++; continue; }
             if (c == '[')
             {
                 int end = s.IndexOf(']', i + 1);
@@ -218,7 +225,7 @@ public static class Formula
             }
             // 欄位名稱：連續到空白、運算符號、括號為止（中文欄位名稱不用括起來）
             var sb = new StringBuilder();
-            while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/&()（）[]\"'".Contains(s[i])) sb.Append(s[i++]);
+            while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/&()（）[]\"',，".Contains(s[i])) sb.Append(s[i++]);
             tokens.Add(new Token(TokenKind.Name, sb.ToString()));
         }
         // NOW()：目前的日期，變成一個 Now 符號
@@ -237,8 +244,9 @@ public static class Formula
             if (tokens[t].Kind != TokenKind.Name || tokens[t + 1].Kind != TokenKind.LParen) continue;
             string function = tokens[t].Text.ToUpperInvariant();
             if (function == "NOW") throw new FormatException("NOW 的寫法是 NOW()，括號裡不用放東西");
+            if (TextFunctions.Contains(function)) { tokens[t] = new Token(TokenKind.TextFunc, function); continue; }   // 參數在 Parser 解析
             if (!Aggregates.Contains(function))
-                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}、NOW()");
+                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}、{string.Join("、", TextFunctions)}、NOW()");
             if (t + 3 >= tokens.Count || tokens[t + 2].Kind != TokenKind.Name || tokens[t + 3].Kind != TokenKind.RParen)
                 throw new FormatException($"{function} 的寫法是 {function}(明細欄位)，例如 {function}(金額)");
             tokens[t] = new Token(TokenKind.Func, function);
@@ -248,8 +256,8 @@ public static class Formula
     }
 
     /// <summary>
-    /// 文字 = 片段 (&amp; 片段)*；片段 = "文字" | 單獨的欄位 | 運算式；
-    /// 運算式 = 項 (+|- 項)*；項 = 因子 (*|/ 因子)*；因子 = 數字 | 欄位 | 函數(明細欄位) | (運算式) | -因子
+    /// 文字 = 片段 (&amp; 片段)*；片段 = "文字" | 單獨的欄位 | 文字函數 | 運算式；文字函數 = LEFT|RIGHT(文字, 運算式) | MID(文字, 運算式[, 運算式])；
+    /// 運算式 = 項 (+|- 項)*；項 = 因子 (*|/ 因子)*；因子 = 數字 | 欄位 | 函數(明細欄位) | 文字函數（要是數字） | (運算式) | -因子
     /// </summary>
     private sealed class Parser
     {
@@ -276,28 +284,89 @@ public static class Formula
             return value;
         }
 
+        /// <summary>算式結果接進文字時的格式（ParseText 會換成呼叫端給的格式）</summary>
+        private Func<decimal, string> format = v => v.ToString("0.####", CultureInfo.InvariantCulture);
+
         /// <param name="format">算式結果轉成文字</param>
         public string ParseText(Func<decimal, string> format)
         {
             if (tokens.Count == 0) throw new FormatException("公式是空的");
-            var text = new StringBuilder(Piece(format));
+            this.format = format;
+            string text = TextExpression();
+            if (pos < tokens.Count) throw new FormatException($"公式在「{tokens[pos].Text}」附近格式不正確");
+            return text;
+        }
+
+        /// <summary>片段 (&amp; 片段)*</summary>
+        private string TextExpression()
+        {
+            var text = new StringBuilder(Piece());
             while (Peek is { Kind: TokenKind.Op, Text: "&" })
             {
                 pos++;
-                text.Append(Piece(format));
+                text.Append(Piece());
             }
-            if (pos < tokens.Count) throw new FormatException($"公式在「{tokens[pos].Text}」附近格式不正確");
             return text.ToString();
         }
 
-        private string Piece(Func<decimal, string> format)
+        /// <summary>這個位置是一段文字的結尾：後面沒東西、接 &amp;、或是函數參數的 , )</summary>
+        private bool EndsPiece(int index) =>
+            index >= tokens.Count || tokens[index] is { Kind: TokenKind.Op, Text: "&" } or { Kind: TokenKind.Comma } or { Kind: TokenKind.RParen };
+
+        private string Piece()
         {
             var t = Peek ?? throw new FormatException("公式不完整（& 後面少了文字或欄位）");
-            bool alone = pos + 1 >= tokens.Count || tokens[pos + 1] is { Kind: TokenKind.Op, Text: "&" };
+            bool alone = EndsPiece(pos + 1);
             if (t.Kind == TokenKind.Text && alone) { pos++; return t.Text; }
             if (t.Kind == TokenKind.Now && alone) { pos++; return NowText(); }
             if (t.Kind == TokenKind.Name && alone) { pos++; return textOf(t.Text); }
+            if (t.Kind == TokenKind.TextFunc)
+            {
+                int start = pos;
+                string text = CallText();
+                if (EndsPiece(pos)) return text;
+                pos = start;                                     // 後面還有 + - * /：當成數字算
+            }
             return format(Expression());
+        }
+
+        /// <summary>LEFT(文字, n)、RIGHT(文字, n)、MID(文字, 起點[, n])；pos 在函數名稱上</summary>
+        private string CallText()
+        {
+            string function = tokens[pos].Text;
+            string usage = function == "MID"
+                ? "MID 的寫法是 MID(欄位, 起點, 字數)，例如 MID(單號, 3, 4)；字數省略 = 取到最後"
+                : $"{function} 的寫法是 {function}(欄位, 字數)，例如 {function}(單號, 5)";
+            pos += 2;                                            // 函數名稱、(（Tokenize 確認過後面是左括號）
+            if (Peek is null or { Kind: TokenKind.RParen or TokenKind.Comma }) throw new FormatException(usage);
+            string text = TextExpression();
+            var numbers = new List<int>();
+            while (Peek is { Kind: TokenKind.Comma })
+            {
+                pos++;
+                if (Peek is null or { Kind: TokenKind.RParen or TokenKind.Comma }) throw new FormatException(usage);
+                numbers.Add((int)Math.Truncate(Math.Clamp(Expression(), -1_000_000m, 1_000_000m)));
+            }
+            if (Peek is not { Kind: TokenKind.RParen }) throw new FormatException($"{function}( ) 的括號沒有成對");
+            pos++;
+            switch (function)
+            {
+                case "LEFT":
+                case "RIGHT":
+                {
+                    if (numbers.Count != 1) throw new FormatException(usage);
+                    int n = Math.Clamp(numbers[0], 0, text.Length);
+                    return function == "LEFT" ? text[..n] : text[(text.Length - n)..];
+                }
+                default:                                         // MID
+                {
+                    if (numbers.Count is not (1 or 2)) throw new FormatException(usage);
+                    int start = Math.Max(numbers[0], 1) - 1;
+                    if (start >= text.Length) return "";
+                    int n = numbers.Count == 2 ? Math.Clamp(numbers[1], 0, text.Length - start) : text.Length - start;
+                    return text.Substring(start, n);
+                }
+            }
         }
 
         private Token Peek => pos < tokens.Count ? tokens[pos] : null;
@@ -355,6 +424,18 @@ public static class Formula
                     throw new FormatException($"文字「{t.Text}」只能用 & 接起來，不能做 + - * /");
                 case TokenKind.Now:
                     throw new FormatException("NOW() 是日期，只能單獨使用或用 & 接起來，不能做 + - * /");
+                case TokenKind.TextFunc:
+                {
+                    // LEFT / RIGHT / MID 取出來的是數字時可以拿來算，例如 RIGHT(單號, 3) + 1
+                    pos--;
+                    string text = CallText().Trim();
+                    if (text == "") return 0m;
+                    if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.CurrentCulture, out var parsed))
+                        throw new FormatException($"{t.Text}( ) 取出來的「{text}」不是數字，不能做 + - * /（要接文字請用 &）");
+                    return parsed;
+                }
+                case TokenKind.Comma:
+                    throw new FormatException("逗號只能放在 LEFT / RIGHT / MID 的括號裡分隔參數");
                 case TokenKind.Op when t.Text == "&":
                     throw new FormatException("& 要放在兩段文字或算式中間，而且不能放在括號裡");
                 default:
