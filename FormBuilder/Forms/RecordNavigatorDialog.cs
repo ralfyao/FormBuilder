@@ -131,6 +131,21 @@ public partial class RecordNavigatorDialog : Form
             if (input is CheckBox cb) cb.CheckedChanged += changed;
         }
         foreach (var view in listViews) view.Changed += RunListAfterChange;    // 明細有變動：清單的執行後動作（例如 AMOUNT=SUM(金額)）
+        // 文字標籤的公式（視窗上的欄位、SUM(明細欄位)…）：換筆、明細有變動、用到的欄位改了就重算
+        labelFormulas = inputs.Keys.Where(f => f.IsTextLabel && f.HasFormula).ToList();
+        if (labelFormulas.Count > 0)
+        {
+            foreach (var view in listViews) view.Changed += _ => RecalcLabelFormulas();
+            var labelUsed = labelFormulas.SelectMany(f => { try { return Formula.Names(f.Formula); } catch (FormatException) { return new List<string>(); } })
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var (f, input) in inputs.Where(x => !x.Key.IsTextLabel && labelUsed.Contains(x.Key.Column)))
+            {
+                EventHandler changed = (s, e) => RecalcLabelFormulas();
+                input.TextChanged += changed;
+                if (input is DateTimePicker dtp) dtp.ValueChanged += changed;
+                if (input is CheckBox cb) cb.CheckedChanged += changed;
+            }
+        }
         // 執行後動作的欄位名稱寫錯會一直算不出來：打開時檢查一次，有錯就提醒
         var afterChangeProblems = listViews.Where(v => !string.IsNullOrWhiteSpace(v.Definition.AfterChange))
             .SelectMany(v => GridCells.CheckAfterChange(v.Definition.AfterChange, inputs.Keys.Select(f => f.Column),
@@ -196,6 +211,40 @@ public partial class RecordNavigatorDialog : Form
         ButtonRunner.RefreshTextLabels(inputs, connectionString, ValueOf);     // 文字標籤用欄位的執行後動作帶出來
         if (row != null) ButtonRunner.RunAfterShow(inputs, connectionString, ValueOf);
         ReloadLists(row);
+        RecalcLabelFormulas();
+    }
+
+    /// <summary>有公式的文字標籤</summary>
+    private readonly List<FieldDefinition> labelFormulas;
+    private bool recalculatingLabels;
+
+    /// <summary>
+    /// 文字標籤的公式：一直顯示計算結果（瀏覽、新增、修改都算）。公式可以用視窗上的欄位（含其他文字標籤）、目前這筆的欄位，
+    /// 和 SUM / AVG / COUNT / MAX / MIN(明細欄位)（先找有這個欄位的明細清單）；算不出來顯示空白
+    /// </summary>
+    private void RecalcLabelFormulas()
+    {
+        if (recalculatingLabels || labelFormulas == null || labelFormulas.Count == 0) return;
+        recalculatingLabels = true;
+        try
+        {
+            decimal AggregateOf(string function, string column) =>
+                (listViews.FirstOrDefault(v => v.HasColumn(column)) ?? throw new FormatException($"明細清單沒有「{column}」")).Aggregate(function, column);
+            // 數字公式先算，文字公式（& 串接）再用算好的值接起來
+            foreach (var f in labelFormulas.OrderBy(f => Formula.IsText(f.Formula)))
+            {
+                string text;
+                if (Formula.IsText(f.Formula))
+                    text = Formula.EvaluateText(f.Formula, ValueOf, f.Decimals, AggregateOf);
+                else
+                    text = Formula.Evaluate(f.Formula, ValueOf, AggregateOf) is decimal value ? Formula.Display(value, f.Decimals) : null;
+                InputHelper.SetValue(inputs[f], text ?? "");
+            }
+        }
+        finally
+        {
+            recalculatingLabels = false;
+        }
     }
 
     /// <summary>SQL 的 @名稱：先找視窗上的欄位，沒有就用目前這筆資料</summary>
@@ -540,6 +589,7 @@ public partial class RecordNavigatorDialog : Form
         ReloadLists(null);
         DefaultValue.FillInputs(inputs, connectionString);                       // 欄位的預設值（可以是 SQL）
         NumberRule.FillInputs(inputs, connectionString, nav.FullTableName);     // 有編號規則的欄位自動帶入下一個編號
+        RecalcLabelFormulas();
         SetMode(EditMode.Insert);
     }
 

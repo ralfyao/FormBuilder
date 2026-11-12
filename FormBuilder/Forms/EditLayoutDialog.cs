@@ -308,6 +308,19 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         SetSelection(Array.Empty<DesignBox>());
         UpdateCanvasSize();
 
+        // 屬性面板「公式」的「…」：列出這個編輯視窗的欄位、文字標籤，和明細清單的欄位（雙擊插入 SUM）；關閉時換回畫面設計的
+        var formulaFields = FormulaEditor.Fields;
+        var formulaDetails = FormulaEditor.DetailFields;
+        FormulaEditor.Fields = () => placed.Values.Select(b => b.Field).Concat(labelBoxes.Select(b => b.Field));
+        FormulaEditor.DetailFields = () => listBoxes.SelectMany(x => x.ListDef.Columns)
+            .Where(c => !(c.IsCustom && c.CellType == GridCellKind.按鈕))
+            .Select(c => (c.Column, c.Header ?? c.Column)).DistinctBy(c => c.Column, StringComparer.OrdinalIgnoreCase);
+        FormClosed += (s, e) =>
+        {
+            FormulaEditor.Fields = formulaFields;
+            FormulaEditor.DetailFields = formulaDetails;
+        };
+
         // Ctrl+Z 復原、Ctrl+Y 取消復原：記錄版面（欄位、按鈕、大小）的快照
         history = new UndoHistory(this, CaptureLayout, RestoreLayout);
         appliedLayout = CaptureLayout();

@@ -189,13 +189,16 @@ public class FormulaEditor : UITypeEditor
 {
     /// <summary>設計畫面目前的欄位（設計畫面開啟時設定）</summary>
     public static Func<IEnumerable<FieldDefinition>> Fields { get; set; } = () => Enumerable.Empty<FieldDefinition>();
+    /// <summary>明細清單的欄位（編輯視窗版面開啟時設定）：雙擊插入 SUM(欄位)，文字標籤顯示明細的合計</summary>
+    public static Func<IEnumerable<(string Column, string Label)>> DetailFields { get; set; } = () => Enumerable.Empty<(string, string)>();
 
     public override UITypeEditorEditStyle GetEditStyle(ITypeDescriptorContext context) => UITypeEditorEditStyle.Modal;
 
     public override object EditValue(ITypeDescriptorContext context, IServiceProvider provider, object value)
     {
         var self = context?.Instance as FieldDefinition;
-        using var dlg = new FormulaDialog(value as string, Fields().Where(f => f != self));
+        using var dlg = new FormulaDialog(value as string, Fields().Where(f => f != self).Select(f => (f.Column, f.Label)),
+                                          detailFields: DetailFields());
         return dlg.ShowDialog() == DialogResult.OK ? (dlg.Formula == "" ? null : dlg.Formula) : value;
     }
 }
