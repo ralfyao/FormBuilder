@@ -349,7 +349,7 @@ public static class ButtonRunner
 
     /// <summary>
     /// Grid 自訂按鈕欄位：按下某一列的按鈕。@欄位 先取那一列的值（含自訂勾選框、日期），沒有再交給 fallback（畫面上的欄位等）。
-    /// 依序做 執行前檢查、確認訊息、執行後動作，再做 執行SQL 或 開啟畫面。
+    /// 依序做 執行前檢查、確認訊息、執行後動作，再做 執行SQL、開啟畫面 或 列印報表（用那一列的資料印樣板）。
     /// 回傳：true = 有執行 SQL 成功（呼叫端重新讀取資料）；false = 沒執行或失敗；null = 其他動作，交給呼叫端照畫面按鈕執行
     /// </summary>
     public static bool? RunRowButton(ButtonDefinition b, DataRow row, Func<string, object> fallback, string sourcePath, IWin32Window owner,
@@ -360,7 +360,7 @@ public static class ButtonRunner
             MessageBox.Show("這個按鈕還沒有設定動作（到單身欄位設定，在按鈕欄位上按右鍵設定）。", "提醒");
             return false;
         }
-        if (b.Action is not (ButtonAction.執行SQL or ButtonAction.開啟畫面)) return null;
+        if (b.Action is not (ButtonAction.執行SQL or ButtonAction.開啟畫面 or ButtonAction.列印報表)) return null;
         object ValueOf(string name) => row.Table.Columns.Contains(name) ? row[name] : fallback?.Invoke(name);
         if (!string.IsNullOrWhiteSpace(b.PreCheck))
         {
@@ -393,6 +393,13 @@ public static class ButtonRunner
         }
         if (b.Action == ButtonAction.執行SQL)
             return RunSql(b, connectionString, new Func<string, object>[] { ValueOf }, formKey, onResult: onResult) || changed;
+        // 列印報表：樣板的欄位先找「執行後動作」查出來的值，再找按下的那一列，那一列沒有的取畫面上的欄位
+        if (b.Action == ButtonAction.列印報表)
+        {
+            Print(b, sourcePath, connectionString,
+                  new Func<string, object>[] { name => TryGetResult(preResult, name, out var v) ? v : ValueOf(name) }, owner, new[] { row });
+            return changed;
+        }
         // 開啟畫面的傳入參數先找「執行後動作」SQL 查出來的值；回傳對應（選取視窗）帶回的值交給呼叫端；
         // 「存檔後關閉並重新整理」存檔過就算有改資料，讓呼叫端重新讀取
         OpenForm(b, sourcePath, owner, name => TryGetResult(preResult, name, out var v) ? v : ValueOf(name),

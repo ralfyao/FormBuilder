@@ -335,7 +335,13 @@ public partial class GridColumnsDialog : Form
         if (c is not { IsCustom: true, CellType: GridCellKind.按鈕 }) return;
         dgvColumns.EndEdit();
         var rowColumns = workColumns.Where(x => x.CellType != GridCellKind.按鈕 || !x.IsCustom).Select(x => x.Column);
-        var edited = CustomColumnDialog.EditButton(this, editedButtons.TryGetValue(c, out var b) ? b : c.Button, c.Header ?? c.Column, rowColumns);
+        // 列印報表的樣板：用這個 Grid 的資料表、主鍵（照這裡目前勾的主鍵）設計，按下時印那一列
+        bool DesignTemplate(ButtonDefinition button) =>
+            PrintDesignerForm.OpenFor(button, this, FormDefinition.DefaultFolder, connectionString, grid.TableSchema, grid.TableName,
+                                      columnTable.Rows.Cast<DataRow>().Where(r => r["IsKey"] is true).Select(r => (string)r["Column"])
+                                          .Where(n => workColumns.Any(x => x.Column == n && !x.IsJoin && !x.IsCustom)).ToList());
+        var edited = CustomColumnDialog.EditButton(this, editedButtons.TryGetValue(c, out var b) ? b : c.Button, c.Header ?? c.Column, rowColumns,
+                                                   DesignTemplate);
         if (edited != null) editedButtons[c] = edited;
     }
 

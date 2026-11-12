@@ -111,7 +111,7 @@ public class EditListView
         GridCells.HookCustomColumns(Grid, (c, row) =>
         {
             bool? done = ButtonRunner.RunRowButton(c.Button, row, fallback, sourcePath, owner, connectionString);
-            if (done == null) MessageBox.Show("明細清單上的按鈕只能用「執行SQL」或「開啟畫面」。", "提醒");
+            if (done == null) MessageBox.Show("明細清單上的按鈕只能用「執行SQL」、「開啟畫面」或「列印報表」。", "提醒");
             else if (done == true) Reload(lastValueOf);
         }, connectionString);
         // 輸入方式 = 開窗選取：輸入明細時「…」或 F4 開選取視窗，選的值帶回同一列

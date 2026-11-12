@@ -176,13 +176,33 @@ public class CustomColumnDialog : Form
         return true;
     }
 
+    /// <summary>按鈕動作設定視窗：屬性面板「列印樣板檔」的「…」也交給 designTemplate（用這個 Grid 的資料表設計樣板）</summary>
+    private sealed class ButtonEditForm : Form, IPrintTemplateHost
+    {
+        public Func<ButtonDefinition, bool> DesignTemplate { get; init; }
+
+        public bool DesignPrintTemplate(ButtonDefinition b)
+        {
+            if (DesignTemplate != null) return DesignTemplate(b);
+            // 沒有提供設計：選一個現有的樣板檔
+            using var dlg = new OpenFileDialog { Filter = "列印樣板 (*.print.json)|*.print.json", InitialDirectory = FormDefinition.DefaultFolder };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+            bool sameFolder = string.Equals(Path.GetDirectoryName(dlg.FileName), Path.GetFullPath(FormDefinition.DefaultFolder), StringComparison.OrdinalIgnoreCase);
+            b.PrintTemplate = sameFolder ? Path.GetFileName(dlg.FileName) : dlg.FileName;
+            return true;
+        }
+    }
+
     /// <summary>設定自訂按鈕欄位的動作（同畫面上的按鈕屬性）：改的是複本，按「確定」才回傳</summary>
     /// <param name="rowColumns">Grid 這一列有的欄位（「插入欄位」清單用）</param>
-    public static ButtonDefinition EditButton(IWin32Window owner, ButtonDefinition button, string title, IEnumerable<string> rowColumns)
+    /// <param name="designTemplate">動作 = 列印報表時「設計…」開列印樣板設計（回傳 true = 樣板有改）；null = 只能選現有的樣板檔</param>
+    public static ButtonDefinition EditButton(IWin32Window owner, ButtonDefinition button, string title, IEnumerable<string> rowColumns,
+                                              Func<ButtonDefinition, bool> designTemplate = null)
     {
         var copy = (button ?? new ButtonDefinition { Action = ButtonAction.執行SQL }).Clone();
-        using var form = new Form
+        using var form = new ButtonEditForm
         {
+            DesignTemplate = designTemplate,
             Text = $"按鈕動作：{title}",
             Font = new Font("Microsoft JhengHei UI", 9F),
             Size = new Size(640, 780),
@@ -193,7 +213,14 @@ public class CustomColumnDialog : Form
 
         // ---- 常用設定：動作、執行的 SQL、要開的畫面、傳入參數、開新視窗 ----
         var cboAction = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-        cboAction.Items.AddRange(new object[] { ButtonAction.執行SQL, ButtonAction.開啟畫面 });
+        cboAction.Items.AddRange(new object[] { ButtonAction.執行SQL, ButtonAction.開啟畫面, ButtonAction.列印報表 });
+        var txtTemplate = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
+        var btnTemplate = new Button { Text = "設計…", Width = 70, Margin = new Padding(4, 2, 0, 2) };
+        var templateRow = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty };
+        templateRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        templateRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        templateRow.Controls.Add(txtTemplate);
+        templateRow.Controls.Add(btnTemplate);
         var cboInsert = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
         cboInsert.Items.Add("插入這一列的欄位…");
         cboInsert.Items.AddRange(rowColumns.Distinct(StringComparer.OrdinalIgnoreCase).Cast<object>().ToArray());
@@ -235,12 +262,14 @@ public class CustomColumnDialog : Form
             Margin = new Padding(0, 4, 0, 4),
             Text = "@欄位名稱 取按下那一列的值（含自訂勾選框、日期），那一列沒有的再取畫面上的欄位。"
                  + "傳入參數一行一個「對方欄位=值」，值可以是 @這一列的欄位、SQL 運算式或固定值，例如 QUONO=@QUONO；"
-                 + "對方畫面上有同名欄位時會自動用它查詢，對方的 SQL 也可以用 @名稱 取得。",
+                 + "對方畫面上有同名欄位時會自動用它查詢，對方的 SQL 也可以用 @名稱 取得。"
+                 + "列印報表：按「設計…」用這個清單的資料表設計樣板，按下按鈕時印那一列的資料。",
         };
         Row("動作", cboAction);
         Row("", cboInsert);
         Row("執行的 SQL", txtSql);
         Row("開啟畫面", formRow);
+        Row("列印樣板", templateRow);
         Row("傳入參數", paramsRow);
         Row("", options);
         top.Controls.Add(hint);
@@ -264,7 +293,7 @@ public class CustomColumnDialog : Form
         void LoadSimple()
         {
             loading = true;
-            if (copy.Action is ButtonAction.執行SQL or ButtonAction.開啟畫面) cboAction.SelectedItem = copy.Action;
+            if (copy.Action is ButtonAction.執行SQL or ButtonAction.開啟畫面 or ButtonAction.列印報表) cboAction.SelectedItem = copy.Action;
             else cboAction.SelectedIndex = -1;             // 屬性面板選了其他動作（照畫面按鈕執行）
             txtSql.Text = (copy.Sql ?? "").ReplaceLineEndings();
             txtForm.Text = copy.TargetForm ?? "";
@@ -275,6 +304,8 @@ public class CustomColumnDialog : Form
             bool open = copy.Action == ButtonAction.開啟畫面;
             txtSql.Enabled = copy.Action == ButtonAction.執行SQL;
             txtForm.Enabled = btnBrowse.Enabled = txtParams.Enabled = btnParams.Enabled = chkNewWindow.Enabled = chkInsert.Enabled = chkRefresh.Enabled = open;
+            txtTemplate.Text = copy.PrintTemplate ?? "（還沒有設計）";
+            txtTemplate.Enabled = btnTemplate.Enabled = copy.Action == ButtonAction.列印報表;
             loading = false;
         }
         void Changed(Action apply)
@@ -300,6 +331,10 @@ public class CustomColumnDialog : Form
         chkInsert.CheckedChanged += (s, e) => Changed(() => copy.OpenAsInsert = chkInsert.Checked);
         chkRefresh.CheckedChanged += (s, e) => Changed(() => copy.RefreshAfterSave = chkRefresh.Checked);
         grid.PropertyValueChanged += (s, e) => LoadSimple();
+        btnTemplate.Click += (s, e) =>
+        {
+            if (form.DesignPrintTemplate(copy)) { grid.Refresh(); LoadSimple(); }
+        };
         btnBrowse.Click += (s, e) =>
         {
             using var dlg = new OpenFileDialog
