@@ -87,6 +87,25 @@ public static class SqlList
         return "(" + inner + "\n)";                    // 換行再括號：SQL 最後一行是 -- 註解時才不會把括號註解掉
     }
 
+    /// <summary>
+    /// SQL 最外層 SELECT 的欄位清單（SELECT 和 FROM 中間那段，原文）：判斷 SQL 會不會帶出某個欄位用，
+    /// 只出現在 ON、WHERE、ORDER BY 的名稱不算。欄位清單有 * 或找不到 SELECT … FROM 時回傳整段 SQL（照舊看整段）
+    /// </summary>
+    public static string SelectList(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return sql ?? "";
+        string top = TopLevel(sql);                          // 跟原文一樣長，位置對得上
+        var select = Regex.Match(top, @"\bSELECT\b", RegexOptions.IgnoreCase);
+        if (!select.Success) return sql;
+        var from = Regex.Match(top[(select.Index + select.Length)..], @"\bFROM\b", RegexOptions.IgnoreCase);
+        if (!from.Success) return sql;
+        int start = select.Index + select.Length, length = from.Index;
+        if (Regex.Replace(top.Substring(start, length), @"/\*.*?\*/", " ", RegexOptions.Singleline).Contains('*'))
+            return sql;                                      // SELECT *、T0.*：帶出哪些欄位要看資料表
+        // 註解拿掉（註解裡寫的名稱不算）
+        return Regex.Replace(sql.Substring(start, length), @"--[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline);
+    }
+
     /// <summary>SQL 最外層的文字：括號、字串、[識別名稱]、註解裡的內容換成空白（找最外層的 ORDER BY、TOP 用）</summary>
     private static string TopLevel(string sql)
     {

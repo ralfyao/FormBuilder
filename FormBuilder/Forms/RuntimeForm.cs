@@ -1362,10 +1362,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return string.Join(", ", columns.Values);
     }
 
-    /// <summary>清單 SQL 裡有沒有這個欄位名稱（有寫到就當作清單 SQL 會帶出來，例如 [J1].[姓名] AS [姓名]）</summary>
+    /// <summary>
+    /// 清單 SQL 最外層 SELECT 的欄位清單裡有沒有這個欄位名稱（有寫到就當作清單 SQL 會帶出來，例如 [J1].[姓名] AS [姓名]）；
+    /// 只出現在 ON、WHERE、ORDER BY 的不算（例如 ON T0.品項編號 = m.產品編號 不會讓外層去取 T0.產品編號）
+    /// </summary>
     private bool ListSqlProvides(string column) =>
         !string.IsNullOrWhiteSpace(listDef?.ListSql)
-        && System.Text.RegularExpressions.Regex.IsMatch(listDef.ListSql, $@"(?<![\p{{L}}\p{{N}}_]){System.Text.RegularExpressions.Regex.Escape(column)}(?![\p{{L}}\p{{N}}_])",
+        && System.Text.RegularExpressions.Regex.IsMatch(SqlList.SelectList(listDef.ListSql), $@"(?<![\p{{L}}\p{{N}}_]){System.Text.RegularExpressions.Regex.Escape(column)}(?![\p{{L}}\p{{N}}_])",
                                                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>JOIN 欄位清單 SQL 沒帶出來的 JOIN（清單 SQL 寫好之後才 JOIN 的）：外層要自己 JOIN</summary>
