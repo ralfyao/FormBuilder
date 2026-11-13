@@ -304,6 +304,17 @@ public class PrintTemplate
             catch (FormatException) { return new List<string>(); }
         });
 
+    /// <summary>明細表格（含第二行欄位）用到、單身沒有的欄位：從單頭讀，每一列印單頭的值</summary>
+    public IEnumerable<string> TableHeaderColumns()
+    {
+        var columns = Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns).ToList();
+        var computed = columns.SelectMany(c => c.ComputedColumns()).Select(x => x.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return columns.SelectMany(c => new[] { c.Column, c.Column2 })
+                      .Where(n => !string.IsNullOrWhiteSpace(n) && !computed.Contains(n)
+                                  && !DetailColumns.Any(d => d.Column.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                      .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
     public List<GridColumnDefinition> UsedColumns()
     {
         var record = RecordColumns.Concat(Params).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -311,6 +322,7 @@ public class PrintTemplate
                          .Concat(FormulaNames(aggregate: false))                       // 公式用到的單頭欄位
                          .Concat(Detail?.Links.Select(l => l.Master) ?? Enumerable.Empty<string>())
                          .Concat(SqlColumns)
+                         .Concat(TableHeaderColumns())                                  // 明細表格用到的單頭欄位（例如幣別）
                          .Where(n => !record.Contains(n)).Concat(KeyColumns)
                          .Distinct(StringComparer.OrdinalIgnoreCase);
         return names.Select(n => JoinColumns.FirstOrDefault(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase))
@@ -478,39 +490,52 @@ public class PrintItem
 /// <summary>明細表格的一個欄位</summary>
 public class PrintTableColumn
 {
-    [DisplayName("欄位"), TypeConverter(typeof(PrintDetailColumnConverter)), Description("單身的欄位")]
+    [Category("1. 上面一行"), DisplayName("欄位"), TypeConverter(typeof(PrintDetailColumnConverter)), Description("單身的欄位；單身沒有、單頭有的欄位（例如幣別）每一列印單頭的值")]
     public string Column { get; set; }
 
-    [DisplayName("標題"), Description("空白 = 欄位名稱")]
+    [Category("1. 上面一行"), DisplayName("標題"), Description("空白 = 欄位名稱")]
     public string Header { get; set; }
 
-    [DisplayName("第二行欄位"), TypeConverter(typeof(PrintDetailColumnConverter)),
-     Description("同一格分上下兩行時，下面那一行印的單身欄位（例如上面 QTY、下面 Unit；上面單價、下面金額）。格式、千分號、對齊跟第一行一樣；空白 = 只有一行")]
+    [Category("2. 下面一行（同一格分兩行）"), DisplayName("第二行欄位"), TypeConverter(typeof(PrintDetailColumnConverter)),
+     Description("同一格分上下兩行資料時，下面那一行印的欄位（例如上面數量、下面單位；上面幣別、下面單價）。單身沒有的欄位取單頭的值（例如幣別）。"
+               + "格式、千分號、對齊跟第一行一樣；空白 = 只有一行。標題要不要也分兩行另外設「第二行標題」")]
     public string Column2 { get; set; }
 
-    [DisplayName("第二行標題"), Description("標題列下面那一行的文字（例如上面 QTY、下面 Unit）；空白 = 標題只有一行")]
+    [Category("2. 下面一行（同一格分兩行）"), DisplayName("第二行標題"), Description("標題列也要分兩行時，下面那一行的文字；空白 = 標題只有一行（資料分兩行、標題一行時留空）")]
     public string Header2 { get; set; }
+
+    [Category("2. 下面一行（同一格分兩行）"), DisplayName("第二行公式"),
+     Editor("FormBuilder.PrintColumnFormulaEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing"),
+     Description("下面那一行用公式算（例如 數量2 * 單價2），算出來的值放進「第二行欄位」（可以自己取新名稱，例如 小計），合計的 SUM(小計) 也用算出來的值")]
+    public string Formula2 { get; set; }
 
     [Browsable(false), System.Text.Json.Serialization.JsonIgnore]
     public bool HasColumn2 => !string.IsNullOrWhiteSpace(Column2);
+
+    /// <summary>這一欄用公式算出來的欄位（第一行、第二行）</summary>
+    public IEnumerable<(string Column, string Formula)> ComputedColumns()
+    {
+        if (!string.IsNullOrWhiteSpace(Formula) && !string.IsNullOrWhiteSpace(Column)) yield return (Column, Formula);
+        if (!string.IsNullOrWhiteSpace(Formula2) && HasColumn2) yield return (Column2, Formula2);
+    }
 
     /// <summary>標題列印的文字：有第二行標題時分兩行</summary>
     [Browsable(false), System.Text.Json.Serialization.JsonIgnore]
     public string HeaderText => string.IsNullOrWhiteSpace(Header2) ? ToString() : ToString() + "\n" + Header2.Trim();
 
-    [DisplayName("寬度"), Description("相對寬度：依比例分配到表格的寬度")]
+    [Category("3. 外觀"), DisplayName("寬度"), Description("相對寬度：依比例分配到表格的寬度")]
     public int Width { get; set; } = 100;
 
-    [DisplayName("格式"), Description("數字、日期的顯示格式，例如 #,##0.00、yyyy/MM/dd")]
+    [Category("3. 外觀"), DisplayName("格式"), Description("數字、日期的顯示格式，例如 #,##0.00、yyyy/MM/dd")]
     public string Format { get; set; }
 
-    [DisplayName("對齊"), JsonConverter(typeof(JsonStringEnumConverter))]
+    [Category("3. 外觀"), DisplayName("對齊"), JsonConverter(typeof(JsonStringEnumConverter))]
     public HorizontalAlignment Align { get; set; } = HorizontalAlignment.Left;
 
-    [DisplayName("千分號"), Description("True = 這一欄的數字加千分號（例如 267,625.00），小數位數照原本的值；有設「格式」時以格式為準")]
+    [Category("3. 外觀"), DisplayName("千分號"), Description("True = 這一欄的數字加千分號（例如 267,625.00），小數位數照原本的值；有設「格式」時以格式為準")]
     public bool Thousands { get; set; }
 
-    [DisplayName("公式"),
+    [Category("1. 上面一行"), DisplayName("公式"),
      Editor("FormBuilder.PrintColumnFormulaEditor, FormBuilder", "System.Drawing.Design.UITypeEditor, System.Drawing"),
      Description("這一欄用同一列的單身欄位計算（也可以用單頭欄位），例如：數量2 * 單價2。算出來的值取代「欄位」原本的值，"
                + "合計的 SUM(欄位) 也用算出來的值；「欄位」可以自己取新名稱（例如 小計）。接文字用 &，例如：數量2 & \" \" & 單位")]
@@ -986,7 +1011,7 @@ public static class PrintRenderer
         Row(columns.Select(c => c.HeaderText).ToList(), bold, c => HorizontalAlignment.Center, Brushes.Black);      // 標題列
         if (design)
         {
-            for (int r = 0; r < 2; r++) Row(columns.Select(c => (c.HasFormula ? "{=" + c.Formula.Trim() + "}" : "{" + c.Column + "}") + (c.HasColumn2 ? "\n{" + c.Column2 + "}" : "")).ToList(), font, c => columns[c].Align, Brushes.DarkBlue);
+            for (int r = 0; r < 2; r++) Row(columns.Select(c => (c.HasFormula ? "{=" + c.Formula.Trim() + "}" : "{" + c.Column + "}") + (c.HasColumn2 ? (string.IsNullOrWhiteSpace(c.Formula2) ? "\n{" + c.Column2 + "}" : "\n{=" + c.Formula2.Trim() + "}") : "")).ToList(), font, c => columns[c].Align, Brushes.DarkBlue);
         }
         else if (detail != null)
         {
@@ -1176,8 +1201,21 @@ public static class PrintRunner
     private static DataTable ApplyColumnFormulas(PrintTemplate t, DataRow header, DataTable detail)
     {
         if (detail == null) return null;
+        // 表格欄位（含第二行欄位）用到單身沒有、單頭有的欄位（例如幣別）：每一列都放單頭的值
+        if (header != null)
+        {
+            var headerNames = t.Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns)
+                                     .SelectMany(c => new[] { c.HasFormula ? null : c.Column, string.IsNullOrWhiteSpace(c.Formula2) ? c.Column2 : null })
+                                     .Where(n => !string.IsNullOrWhiteSpace(n) && !detail.Columns.Contains(n) && header.Table.Columns.Contains(n))
+                                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (string name in headerNames)
+            {
+                detail.Columns.Add(name, header.Table.Columns[name].DataType);
+                foreach (DataRow r in detail.Rows) r[name] = header[name];
+            }
+        }
         var formulas = t.Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns)
-                              .Where(c => c.HasFormula && !string.IsNullOrWhiteSpace(c.Column)).ToList();
+                              .SelectMany(c => c.ComputedColumns()).ToList();
         foreach (var c in formulas)
         {
             bool text;
@@ -1231,7 +1269,7 @@ public static class PrintRunner
             columns = (t.Detail?.Links ?? new()).Select(l => new GridColumnDefinition { Column = l.Detail }).ToList();
         // 公式 SUM(…) 加總的明細欄位，表格沒放也要讀出來
         var computed = t.Items.Where(i => i.Kind == PrintItemKind.明細表格).SelectMany(i => i.TableColumns)
-                              .Where(c => c.HasFormula).Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                              .SelectMany(c => c.ComputedColumns()).Select(x => x.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (columns.Count > 0)
             columns.AddRange(t.FormulaNames(aggregate: true).Distinct(StringComparer.OrdinalIgnoreCase)
                               .Where(n => !columns.Any(c => c.Column.Equals(n, StringComparison.OrdinalIgnoreCase)))

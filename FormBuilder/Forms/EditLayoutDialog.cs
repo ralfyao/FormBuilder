@@ -1763,7 +1763,8 @@ public class EditFieldView : IPickerField
 
     [DisplayName("編號規則"),
      Description("新增時自動產生編號（可再手動修改；設成唯讀就不能改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期（[YYY] = 民國年，例如 114）；"
-               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
+               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1（可以不寫流水號）；@登入帳號、@登入姓名 = 登入的使用者。"
+               + "例如 [BF][YYYY][MM][DD][XXX] → BF20240131001；@登入帳號-[YYYYMMDD] → admin-20240131。不需要自動編號就留空白")]
     public string NumberRule { get => field.NumberRule; set => field.NumberRule = value; }
 
     [DisplayName("預設值"), Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；USER() = 登入帳號；"

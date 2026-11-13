@@ -1617,7 +1617,8 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
 
     /// <summary>
     /// 發布到系統：先存檔，再把畫面定義（代號 = 檔名）和按鈕用到的列印樣板寫進系統資料庫。
-    /// 「開啟畫面」按鈕指向的畫面（包含那些畫面再開啟的畫面）在本機有畫面定義檔的，問過後一併發布
+    /// 「開啟畫面」按鈕指向的畫面（包含那些畫面再開啟的畫面）在本機有畫面定義檔的，問過後一併發布；
+    /// 那些畫面在別的畫面設計視窗開著、還有沒存的修改時，一併發布前先幫它存檔（發布的才是最新版）
     /// </summary>
     /// <summary>回傳 true = 存檔並發布成功</summary>
     private bool Publish()
@@ -1630,18 +1631,38 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
             var cs = SysContext.Connection;
             var notes = new List<string>();
             // 這個畫面底下會開到的其他畫面（一層一層找下去，不重複）
-            var related = RelatedForms(def, currentFilePath, notes);
+            var related = RelatedForms(def, currentFilePath, new List<string>());
+            var unsaved = related.Select(r => (r.Key, Designer: OpenDesignerOf(r.Path))).Where(x => x.Designer is { HasUnsavedChanges: true }).ToList();
             bool withRelated = related.Count > 0 &&
                 MessageBox.Show($"這個畫面的按鈕會開啟下列畫面，要一併發布嗎？{Environment.NewLine}{Environment.NewLine}"
-                                + string.Join(Environment.NewLine, related.Select(r => $"　{r.Def.Title ?? r.Key}（{r.Key}）"))
-                                + $"{Environment.NewLine}{Environment.NewLine}是 = 全部發布（用本機的畫面定義檔與列印樣板）；否 = 只發布這個畫面",
+                                + string.Join(Environment.NewLine, related.Select(r => $"　{r.Def.Title ?? r.Key}（{r.Key}）"
+                                                                                      + (unsaved.Any(u => u.Key == r.Key) ? "　← 設計中還沒存檔，會先儲存" : "")))
+                                + $"{Environment.NewLine}{Environment.NewLine}是 = 全部儲存並發布（用本機的畫面定義檔與列印樣板）；否 = 只發布這個畫面",
                                 "發布", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+            if (withRelated && unsaved.Count > 0)
+            {
+                // 先存檔（存失敗就不發布，免得發布出舊版），存完重找一次：剛存的畫面可能又多開了別的畫面
+                foreach (var (relatedKey, designer) in unsaved)
+                    if (!designer.SaveForm(false))
+                    {
+                        MessageBox.Show($"畫面「{relatedKey}」存檔失敗，這次沒有發布。", "發布", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return false;
+                    }
+                related = RelatedForms(def, currentFilePath, notes);
+            }
+            else
+                RelatedForms(def, currentFilePath, notes);                  // 只收集「找不到畫面定義檔」之類的提醒
+            if (!withRelated)
+                notes.AddRange(unsaved.Select(u => $"畫面「{u.Key}」在畫面設計裡還有沒存的修改，沒有儲存也沒有發布"));
 
             int version = PublishOne(cs, key, def, currentFilePath, notes);
             var done = new List<string> { $"「{PublishTitle(def, key)}」（{key}）第 {version} 版" };
             if (withRelated)
                 foreach (var r in related)
+                {
                     done.Add($"「{PublishTitle(r.Def, r.Key)}」（{r.Key}）第 {PublishOne(cs, r.Key, r.Def, r.Path, notes)} 版");
+                    if (OpenDesignerOf(r.Path) is { } designer) designer.publishedJson = designer.PublishComparable(designer.def);   // 那個設計視窗關閉時不用再問要不要發布
+                }
             else if (related.Count > 0)
             {
                 var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1672,6 +1693,11 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
             return false;
         }
     }
+
+    /// <summary>正在別的畫面設計視窗裡編輯這個畫面定義檔的視窗（沒有 = null）</summary>
+    private DesignerForm OpenDesignerOf(string path) =>
+        Application.OpenForms.OfType<DesignerForm>().FirstOrDefault(f => f != this && !f.IsDisposed && f.currentFilePath != null
+                                                                          && string.Equals(Path.GetFullPath(f.currentFilePath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>畫面上所有的按鈕（主畫面 + 編輯視窗），欄位的開窗選取也當成「開啟畫面」按鈕</summary>
     internal static List<ButtonDefinition> AllButtons(FormDefinition form) =>

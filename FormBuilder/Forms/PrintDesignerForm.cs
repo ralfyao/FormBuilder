@@ -1,4 +1,4 @@
-namespace FormBuilder;
+﻿namespace FormBuilder;
 
 /// <summary>
 /// 列印樣板設計（按鈕動作 = 列印報表，在設計畫面雙擊按鈕開啟）：
@@ -354,7 +354,10 @@ public partial class PrintDesignerForm : Form
         // 屬性面板「欄位」的下拉清單
         PrintColumnConverter.Available = tableColumns.Select(c => c.Name).Concat(template.JoinColumns.Select(c => c.Column)).Concat(template.RecordColumns)
                                          .Concat(template.Params).ToList();
-        PrintDetailColumnConverter.Available = template.DetailColumns.Select(c => c.Column).ToList();
+        // 表格欄位：單身欄位，後面接單頭欄位（例如幣別，每一列印單頭的值）
+        PrintDetailColumnConverter.Available = template.DetailColumns.Select(c => c.Column)
+            .Concat(PrintColumnConverter.Available.Where(n => !template.DetailColumns.Any(d => d.Column.Equals(n, StringComparison.OrdinalIgnoreCase))))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         btnDetail.Text = template.HasDetailSql ? "單身：SQL 產生（重新設定…）" : template.Detail == null ? "設定單身（單頭與單身的對應）…" : $"單身：{template.Detail.TableName}（重新設定…）";
         MarkMissingColumns();
     }
@@ -370,7 +373,7 @@ public partial class PrintDesignerForm : Form
         var detail = PrintDetailColumnConverter.Available.ToHashSet(StringComparer.OrdinalIgnoreCase);
         return template.Items.Where(i => i.Kind == PrintItemKind.欄位 && !string.IsNullOrWhiteSpace(i.Column) && !known.Contains(i.Column)).Select(i => i.Column)
             .Concat(template.Items.Where(i => i.Kind == PrintItemKind.明細表格)
-                                  .SelectMany(i => i.TableColumns).Select(c => c.Column)
+                                  .SelectMany(i => i.TableColumns).SelectMany(c => new[] { c.HasFormula ? null : c.Column, string.IsNullOrWhiteSpace(c.Formula2) ? c.Column2 : null })   // 公式欄位是算出來的
                                   .Where(c => !string.IsNullOrWhiteSpace(c) && !detail.Contains(c)))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
@@ -382,7 +385,7 @@ public partial class PrintDesignerForm : Form
         foreach (var box in canvas.Controls.OfType<PrintItemBox>())
         {
             bool m = box.Item.Kind == PrintItemKind.欄位 ? missing.Contains(box.Item.Column ?? "")
-                   : box.Item.Kind == PrintItemKind.明細表格 && box.Item.TableColumns.Any(c => missing.Contains(c.Column ?? ""));
+                   : box.Item.Kind == PrintItemKind.明細表格 && box.Item.TableColumns.Any(c => missing.Contains(c.Column ?? "") || missing.Contains(c.Column2 ?? ""));
             if (box.Missing == m) continue;
             box.Missing = m;
             box.Invalidate();

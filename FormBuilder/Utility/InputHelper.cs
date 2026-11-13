@@ -333,8 +333,9 @@ public static class InputHelper
                 }
                 if (date == null)
                 {
-                    if (dtp.ShowCheckBox) dtp.Checked = false;
+                    // 先設日期再取消勾選：設定 Value 時 DateTimePicker 會自動打勾，反過來的話空值又會變成有日期
                     dtp.Value = DateTime.Today;
+                    if (dtp.ShowCheckBox) dtp.Checked = false;
                 }
                 else
                 {

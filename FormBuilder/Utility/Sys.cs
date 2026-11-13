@@ -323,6 +323,9 @@ public record SysUser(string UserId, string UserName, bool IsAdmin);
 /// </summary>
 public static class SysParams
 {
+    /// <summary>所有系統參數的名稱（不含 @），設計畫面下拉選、檢查拼字用</summary>
+    public static readonly string[] Names = { "登入帳號", "登入姓名" };
+
     public static bool TryGet(string name, out object value)
     {
         value = name switch

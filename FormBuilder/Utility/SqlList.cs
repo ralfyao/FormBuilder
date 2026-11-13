@@ -106,6 +106,32 @@ public static class SqlList
         return Regex.Replace(sql.Substring(start, length), @"--[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline);
     }
 
+    /// <summary>
+    /// SQL 最外層 SELECT 帶出來的欄位名稱（有 AS 別名用別名，例如 d.包裝單號 AS 專案序號 → 專案序號；別名 = 運算式 也算；
+    /// 沒別名的 d.品名規格 → 品名規格）。SELECT *、T0.* 或找不到 SELECT … FROM 時回傳 null（不知道會帶出哪些欄位）
+    /// </summary>
+    public static HashSet<string> OutputColumns(string sql)
+    {
+        string list = SelectList(sql);
+        if (ReferenceEquals(list, sql) || string.IsNullOrWhiteSpace(list)) return null;
+        string top = TopLevel(list);                          // 括號、字串、[名稱] 裡的逗號不算
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int start = 0;
+        for (int i = 0; i <= top.Length; i++)
+        {
+            if (i < top.Length && top[i] != ',') continue;
+            string item = list[start..i].Trim();
+            start = i + 1;
+            if (names.Count == 0)                             // 第一個欄位前面可能有 DISTINCT、TOP n
+                item = Regex.Replace(item, @"^(DISTINCT\s+|ALL\s+)?(TOP\s*(\(\s*[^)]*\)|\d+)(\s+PERCENT)?(\s+WITH\s+TIES)?\s+)?", "", RegexOptions.IgnoreCase);
+            const string name = @"(\[[^\]]+\]|""[^""]+""|'[^']+'|[\p{L}\p{N}_]+)";
+            var m = Regex.Match(item, $@"^{name}\s*=(?!=)");                      // 別名 = 運算式（SQL Server）
+            if (!m.Success) m = Regex.Match(item, $@"{name}\s*$");                 // … AS 別名、… 別名、T0.欄位
+            if (m.Success) names.Add(m.Groups[1].Value.Trim('[', ']', '"', '\''));
+        }
+        return names;
+    }
+
     /// <summary>SQL 最外層的文字：括號、字串、[識別名稱]、註解裡的內容換成空白（找最外層的 ORDER BY、TOP 用）</summary>
     private static string TopLevel(string sql)
     {

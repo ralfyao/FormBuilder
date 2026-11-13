@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 
 namespace FormBuilder;
 
@@ -155,6 +155,12 @@ public partial class GridColumnsDialog : Form
         {
             if (dgvColumns.IsCurrentCellDirty && dgvColumns.CurrentCell?.ColumnIndex == colCellType.Index)
                 dgvColumns.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        // 「來源（JOIN）」點一下：看這個 JOIN 產生的 SQL、改關聯條件（會檢查兩邊型別）
+        colSource.ToolTipText = "JOIN 帶進來的欄位：點一下看 JOIN 的 SQL、修改關聯條件";
+        dgvColumns.CellClick += (s, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex == colSource.Index && ColumnAt(e.RowIndex) is { IsJoin: true } jc) ShowJoinSql(jc.JoinAlias);
         };
         dgvColumns.CellDoubleClick += (s, e) =>
         {
@@ -426,6 +432,29 @@ public partial class GridColumnsDialog : Form
             workColumns.Add(c);
             addedColumns.Add(c);
             AddColumnRow(c);
+        }
+    }
+
+    /// <summary>顯示 JOIN 的 SQL，可以改關聯條件或移除這個 JOIN（單頭 JOIN 不在這裡改）</summary>
+    private void ShowJoinSql(string alias)
+    {
+        var join = workJoins.FirstOrDefault(j => j.Alias == alias);
+        if (join == null)
+        {
+            MessageBox.Show($"這是單頭 JOIN {alias} 的欄位，要在畫面設計的單頭欄位修改關聯條件。", "JOIN");
+            return;
+        }
+        dgvColumns.EndEdit();
+        var local = workColumns.Where(c => !c.IsJoin && !c.ScreenOnly).Select(c => (c.Column, c.DataType));
+        var picked = workColumns.Where(c => c.JoinAlias == alias).Select(c => $"{alias}.[{c.SourceColumn ?? c.Column}] AS [{c.Column}]");
+        using var dlg = new JoinSqlDialog(join, grid.TableSchema, grid.TableName, local, picked, connectionString, !lockedAliases.Contains(alias));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (dlg.RemoveRequested) RemoveJoin(alias);
+        else
+        {
+            join.LinkText = dlg.LinkText;
+            join.SourceSql = dlg.SourceSql;                    // 自訂來源（子查詢）、自訂 ON 條件
+            join.OnSql = dlg.OnSql;
         }
     }
 

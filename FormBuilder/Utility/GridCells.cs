@@ -379,7 +379,7 @@ public static class GridCells
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Action<int, int>> afterSelectRunners = new();
 
     /// <summary>開窗帶回值後：帶回的欄位有設定執行後動作就執行（跟手動輸入完離開格子一樣）</summary>
-    private static void RunAfterSelect(DataGridView grid, int rowIndex, IEnumerable<string> columns)
+    internal static void RunAfterSelect(DataGridView grid, int rowIndex, IEnumerable<string> columns)
     {
         if (!afterSelectRunners.TryGetValue(grid, out var run)) return;
         foreach (string name in columns.Distinct(StringComparer.OrdinalIgnoreCase).ToList())

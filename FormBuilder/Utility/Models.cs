@@ -423,7 +423,8 @@ public class FieldDefinition : IPickerField
 
     [Category("編號"), DisplayName("編號規則"),
      Description("新增時自動產生編號（可再手動修改）。用中括號組成：[BF] 固定文字；[YYYY][MM][DD] 新增當天的日期（[YYY] = 民國年，例如 114）；"
-               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1。例如 [BF][YYYY][MM][DD][XXX] → BF20240131001。不需要自動編號就留空白")]
+               + "[XXX] 流水號，幾個 X 就是幾碼，到資料表查同樣前綴的最大流水號 + 1（可以不寫流水號）；@登入帳號、@登入姓名 = 登入的使用者。"
+               + "例如 [BF][YYYY][MM][DD][XXX] → BF20240131001；@登入帳號-[YYYYMMDD] → admin-20240131。不需要自動編號就留空白")]
     public string NumberRule { get; set; }
 
     [Category("編號"), DisplayName("預設值"),
@@ -656,6 +657,18 @@ public class GridDefinition
      Description("SQL 清單的哪個欄位對到資料表的哪個欄位，用來找出要修改的那一筆，用逗號分隔「清單欄位=資料表欄位」，例如 RFQNO=RFQNO, MEMOID=ID。"
                + "空白 = 用資料表的主鍵（SQL 的 SELECT 要有同名的欄位）")]
     public string EditKeyText { get; set; }
+
+    [Category("編輯視窗"), DisplayName("在清單上直接修改"), DefaultValue(false),
+     Description("SQL 清單用，要先設「存回資料表」：True = 按「修改」後，清單上跟那張資料表同名的欄位（主鍵、自動編號除外）可以直接在清單上改，"
+               + "例如勾「結案」；按「確定」用「主鍵對應」把改過的列存回那張表，「取消」放棄。SQL 的 SELECT 要有主鍵欄位（可以不顯示）")]
+    public bool InlineEdit { get; set; }
+
+    [Category("編輯視窗"), DisplayName("可修改的欄位"),
+     Description("在清單上直接修改時，哪些欄位可以改，用逗號分隔，例如：結案 或 結案, 備註；空白 = 存回資料表裡有的欄位都可以改（主鍵、自動編號除外）")]
+    public string InlineEditColumns { get; set; }
+
+    [Browsable(false), JsonIgnore]
+    public bool IsInlineEditSqlList => IsSqlList && InlineEdit && !string.IsNullOrWhiteSpace(EditTable);
 
     [Category("資料"), DisplayName("Schema"), ReadOnly(true)]
     public string TableSchema { get; set; }
@@ -912,7 +925,22 @@ public class GridJoinDefinition
     /// <summary>關聯條件：本身欄位=關聯資料表欄位，多組用逗號分隔（Master = 本身欄位，Detail = 關聯資料表欄位）</summary>
     public string LinkText { get; set; } = "";
 
+    /// <summary>
+    /// 自訂的 JOIN 來源（取代資料表），例如 (SELECT 單號, 品項編號, SUM(數量) AS 數量 FROM dbo.B採購明細 GROUP BY 單號, 品項編號)；
+    /// 空白 = 用 TableSchema.TableName
+    /// </summary>
+    public string SourceSql { get; set; }
+
+    /// <summary>自訂的 ON 條件（取代 LinkText），本身資料表的別名是 T0、這個 JOIN 是自己的別名，例如 T0.[採購單號] = J4.[單號] AND T0.[品項編號] = J4.[品項編號]</summary>
+    public string OnSql { get; set; }
+
+    [JsonIgnore]
+    public bool HasCustomSql => !string.IsNullOrWhiteSpace(SourceSql) || !string.IsNullOrWhiteSpace(OnSql);
+
     public string FullTableName(DbDialect d) => d.Table(TableSchema, TableName);
+
+    /// <summary>JOIN 的來源：有自訂來源用自訂的，沒有就是資料表</summary>
+    public string SourceText(DbDialect d) => string.IsNullOrWhiteSpace(SourceSql) ? FullTableName(d) : SourceSql.Trim();
 
     [JsonIgnore]
     public List<(string Master, string Detail)> Links => GridDefinition.ParseLinks(LinkText);
@@ -937,6 +965,11 @@ public static class GridSql
     private static string Expr(DbDialect d, GridColumnDefinition c) =>
         c.IsJoin ? $"{Joined(d, c.JoinAlias, c.SourceColumn)} AS {d.Quote(c.Column)}" : Base(d, c.Column);
 
+    /// <summary>JOIN 的 ON 條件：有自訂條件用自訂的，沒有就照關聯條件（本身欄位 = 關聯欄位，用 AND 接起來）</summary>
+    public static string OnText(DbDialect d, GridJoinDefinition j, Func<string, string> left = null) =>
+        !string.IsNullOrWhiteSpace(j.OnSql) ? j.OnSql.Trim()
+        : string.Join(" AND ", j.Links.Select(l => $"{(left ?? (m => Base(d, m)))(l.Master)} = {d.Quote(j.Alias)}.{d.Quote(l.Detail)}"));
+
     /// <summary>FROM 子句：只 JOIN 有欄位被選到的資料表</summary>
     public static string From(DbDialect d, string fullTableName, IEnumerable<GridJoinDefinition> joins, IEnumerable<GridColumnDefinition> columns) =>
         From(d, fullTableName, joins, columns.Where(c => c.IsJoin).Select(c => c.JoinAlias));
@@ -952,13 +985,16 @@ public static class GridSql
         string JoinOf(string master) => master.IndexOf('.') is > 0 and var dot && aliases.Contains(master[..dot]) ? master[..dot] : null;
         string Left(string master) => JoinOf(master) is { } alias ? Joined(d, alias, master[(alias.Length + 1)..]) : Base(d, master);
         var used = usedAliases.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // 自訂 ON 條件用到的其他 JOIN（寫成 J1.欄位 或 [J1].[欄位]）
+        IEnumerable<string> OnAliases(GridJoinDefinition j) => string.IsNullOrWhiteSpace(j.OnSql) ? Enumerable.Empty<string>()
+            : System.Text.RegularExpressions.Regex.Matches(j.OnSql, @"[\[""`]?(\w+)[\]""`]?\s*\.").Select(m => m.Groups[1].Value)
+                .Where(a => aliases.Contains(a) && !a.Equals(j.Alias, StringComparison.OrdinalIgnoreCase));
         for (bool added = true; added;)                    // 用到的 JOIN 所依賴的 JOIN 也要加
-            added = list.Where(j => used.Contains(j.Alias)).SelectMany(j => j.Links).Select(l => JoinOf(l.Master))
+            added = list.Where(j => used.Contains(j.Alias)).SelectMany(j => j.Links.Select(l => JoinOf(l.Master)).Concat(OnAliases(j)))
                         .Where(a => a != null).ToList().Aggregate(false, (any, a) => used.Add(a) | any);
         var sql = new System.Text.StringBuilder(fullTableName + d.TableAlias(BaseAlias));
         foreach (var j in list.Where(j => used.Contains(j.Alias)))
-            sql.Append($" LEFT JOIN {j.FullTableName(d)}{d.TableAlias(j.Alias)} ON "
-                     + string.Join(" AND ", j.Links.Select(l => $"{Left(l.Master)} = {d.Quote(j.Alias)}.{d.Quote(l.Detail)}")));
+            sql.Append($" LEFT JOIN {j.SourceText(d)}{d.TableAlias(j.Alias)} ON " + OnText(d, j, Left));
         return sql.ToString();
     }
 

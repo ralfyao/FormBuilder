@@ -272,10 +272,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
 
-        // 沒有單頭資料表（只放 SQL 清單的畫面）：沒有資料可以查詢、新增、修改，只留「離開」，SQL 清單打開就查
+        // 沒有單頭資料表（只放 SQL 清單的畫面）：沒有資料可以查詢、新增、修改，只留「離開」，SQL 清單打開就查；
+        // 有「在清單上直接修改」的 SQL 清單時留下修改、確定、取消（還是照畫面屬性「工具列按鈕」有沒有勾）
         if (!HasMasterTable)
+        {
+            bool inlineEdit = sqlGrids.Any(x => x.Def.IsInlineEditSqlList);
             foreach (ToolStripItem item in new ToolStripItem[] { btnQuery, btnInsert, btnModify, btnDelete, btnDetail, sepNavigate, btnFirst, btnPrevious, btnNext, btnLast, sepEdit, btnOk, btnCancel, sepExit })
-                item.Visible = false;
+                if (!inlineEdit || !(item == btnModify || item == sepEdit || item == btnOk || item == btnCancel))
+                    item.Visible = false;
+        }
         ApplyToolbarSetting();
 
         if (pickMode) SetupPickMode();
@@ -549,7 +554,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         btnQuery.Enabled = browsing;
         // 權限：沒有新增 / 修改 / 刪除權限的按鈕不能按（單身輸入算修改）
         btnInsert.Enabled = browsing && perm.Insert;
-        btnModify.Enabled = browsing && HasCurrent && HasKey && perm.Modify;
+        // 只有 SQL 清單（在清單上直接修改）的畫面：沒有主資料表也可以按修改
+        btnModify.Enabled = browsing && perm.Modify && (HasCurrent && HasKey || !HasMasterTable && sqlGrids.Any(x => x.Def.IsInlineEditSqlList));
         btnDelete.Enabled = browsing && HasCurrent && HasKey && perm.Delete;
         btnDetail.Enabled = browsing && HasCurrent && HasDetail && perm.Modify;
         if (listGrid != null)
@@ -568,6 +574,21 @@ public partial class RuntimeForm : Form, IRecordNavigator
             foreach (DataGridViewColumn col in part.Grid.Columns)
                 if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || c.HasFormula || IsLinkColumn(part, c.Column)))
                     col.ReadOnly = true;
+        }
+        // SQL 清單「在清單上直接修改」：修改時，存回資料表裡有的欄位可以改
+        foreach (var (g, grid) in sqlGrids.Where(x => x.Def.IsInlineEditSqlList))
+        {
+            bool editing = mode == Mode.Modify && perm.Modify;
+            var editable = editing ? InlineEditColumns(g) : new HashSet<string>();
+            grid.ReadOnly = editable.Count == 0;
+            grid.BackgroundColor = editable.Count > 0 ? SystemColors.Window : SystemColors.Control;
+            foreach (DataGridViewColumn col in grid.Columns)
+            {
+                bool can = col.Tag is GridColumnDefinition c && editable.Contains(c.Column);
+                col.ReadOnly = !can;
+                col.DefaultCellStyle.BackColor = can ? Color.LightYellow : Color.Empty;
+                if (can && grid.DataSource is DataTable t && t.Columns.Contains(col.DataPropertyName)) t.Columns[col.DataPropertyName].ReadOnly = false;
+            }
         }
         btnFirst.Enabled = btnPrevious.Enabled = browsing && current > 0;
         btnNext.Enabled = btnLast.Enabled = browsing && current < results.Rows.Count - 1;
@@ -653,6 +674,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>修改前先重讀這筆資料，確保改的是資料庫裡最新的內容</summary>
     private void BeginModify()
     {
+        if (!HasMasterTable)                               // 只有 SQL 清單的畫面：直接在清單上改
+        {
+            if (sqlGrids.Any(x => x.Def.IsInlineEditSqlList)) SetMode(Mode.Modify);
+            return;
+        }
         if (!HasCurrent) return;
         if (!RefreshCurrentRow())
         {
@@ -685,8 +711,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             DialogResult = DialogResult.Cancel;
             return;
         }
+        bool inline = mode == Mode.Modify && sqlGrids.Any(x => x.Def.IsInlineEditSqlList);
         ShowCurrent();
         SetMode(Mode.Browse);
+        if (inline) LoadSqlLists();                         // 清單上直接改的值放棄，重新查
     }
 
     private void MoveTo(int index)
@@ -1249,6 +1277,95 @@ public partial class RuntimeForm : Form, IRecordNavigator
         };
     }
 
+    /// <summary>「在清單上直接修改」可以改的欄位：存回資料表裡有、不是主鍵對應、不是自動編號的欄位（讀資料表結構一次後記住）</summary>
+    private readonly Dictionary<GridDefinition, (string FullTable, string Table, List<GridColumnDefinition> Columns)> inlineTables = new();
+
+    private (string FullTable, string Table, List<GridColumnDefinition> Columns) InlineTable(GridDefinition g)
+    {
+        if (inlineTables.TryGetValue(g, out var info)) return info;
+        var (schema, table) = SqlListEdit.ResolveTable(def.ConnectionString, g.EditTable);
+        info = (Dialect.Table(schema, table), table, SqlListEdit.Columns(def.ConnectionString, schema, table));
+        inlineTables[g] = info;
+        return info;
+    }
+
+    private HashSet<string> InlineEditColumns(GridDefinition g)
+    {
+        try
+        {
+            var (_, _, columns) = InlineTable(g);
+            var keyTables = GridDefinition.ParseLinks(g.EditKeyText ?? "").Select(p => p.Detail)
+                .Concat(columns.Where(c => c.IsKey).Select(c => c.Column)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // 有設「可修改的欄位」就只開放那幾個
+            var only = (g.InlineEditColumns ?? "").Split(new[] { ',', '，', '、' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                                  .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return columns.Where(c => !c.NoEntry && !c.IsIdentity && !keyTables.Contains(c.Column) && (only.Count == 0 || only.Contains(c.Column)))
+                          .Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"SQL 清單「{g.Title}」不能直接修改：{ex.Message}", "提醒");
+            return new HashSet<string>();
+        }
+    }
+
+    /// <summary>
+    /// 把 SQL 清單上直接改過的列存回「存回資料表」（同一個交易，失敗全部還原）；回傳存了幾筆，失敗回傳 -1
+    /// </summary>
+    private int SaveInlineSqlEdits()
+    {
+        var work = new List<(GridDefinition Def, DataTable Table, List<DataRow> Rows)>();
+        foreach (var (g, grid) in sqlGrids.Where(x => x.Def.IsInlineEditSqlList))
+        {
+            grid.EndEdit();
+            if (grid.BindingContext?[grid.DataSource] is CurrencyManager cm) cm.EndCurrentEdit();
+            if (grid.DataSource is not DataTable t) continue;
+            var rows = t.Rows.Cast<DataRow>().Where(r => r.RowState == DataRowState.Modified).ToList();
+            if (rows.Count > 0) work.Add((g, t, rows));
+        }
+        if (work.Count == 0) return 0;
+        var d = Dialect;
+        int count = 0;
+        try
+        {
+            using var conn = d.Open(def.ConnectionString);
+            using var tran = conn.BeginTransaction();
+            foreach (var (g, t, rows) in work)
+            {
+                var (fullTable, table, columns) = InlineTable(g);
+                var keys = SqlListEdit.Keys(g.EditKeyText, columns, t);
+                var editable = InlineEditColumns(g);
+                foreach (var row in rows)
+                {
+                    var changed = t.Columns.Cast<DataColumn>().Where(c => editable.Contains(c.ColumnName)
+                        && !Equals(row[c, DataRowVersion.Original], row[c, DataRowVersion.Current])).ToList();
+                    if (changed.Count == 0) continue;
+                    using var cmd = d.CreateCommand(conn);
+                    cmd.Transaction = tran;
+                    var sets = new List<string>();
+                    foreach (var c in changed)
+                    {
+                        d.AddParam(cmd, $"v{sets.Count}", row[c] ?? DBNull.Value);
+                        sets.Add($"{d.Quote(c.ColumnName)} = {d.Param($"v{sets.Count}")}");
+                    }
+                    cmd.CommandText = $"UPDATE {fullTable} SET {string.Join(", ", sets)} WHERE " + SqlListEdit.Where(d, cmd, keys, row);
+                    int n = cmd.ExecuteNonQuery();
+                    if (n == 0) throw new InvalidOperationException($"在「{table}」找不到要修改的那一筆（可能已被其他人刪除，或主鍵對應不對）。");
+                    if (n > 1) throw new InvalidOperationException($"「主鍵對應」在「{table}」對到 {n} 筆，沒有存檔，請檢查 SQL 清單的「主鍵對應」。");
+                    count++;
+                    Audit.Write(def.FormKey, table, "修改", Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Table, row[k.List]))), g.Title);
+                }
+            }
+            tran.Commit();
+            return count;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("存檔失敗，清單上的修改都沒有存：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return -1;
+        }
+    }
+
     /// <summary>
     /// SQL 清單的編輯視窗（照 SQL 清單設定的「編輯視窗版面」）：欄位值取雙擊那一列。
     /// 有設「存回資料表」時，資料表裡有同名欄位的可以修改，按「確定」用主鍵對應 UPDATE 那張表；沒設時欄位只顯示，靠版面上的按鈕（執行SQL）改資料。
@@ -1363,13 +1480,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>
-    /// 清單 SQL 最外層 SELECT 的欄位清單裡有沒有這個欄位名稱（有寫到就當作清單 SQL 會帶出來，例如 [J1].[姓名] AS [姓名]）；
-    /// 只出現在 ON、WHERE、ORDER BY 的不算（例如 ON T0.品項編號 = m.產品編號 不會讓外層去取 T0.產品編號）
+    /// 清單 SQL 會不會帶出這個欄位：看最外層 SELECT 帶出來的名稱（有 AS 看別名，例如 d.包裝單號 AS 專案序號 只帶出 專案序號）；
+    /// 只出現在 ON、WHERE、ORDER BY 的不算（例如 ON T0.品項編號 = m.產品編號 不會讓外層去取 T0.產品編號）；
+    /// SELECT * 時看不出來，照舊看欄位清單有沒有寫到這個名稱
     /// </summary>
     private bool ListSqlProvides(string column) =>
         !string.IsNullOrWhiteSpace(listDef?.ListSql)
-        && System.Text.RegularExpressions.Regex.IsMatch(SqlList.SelectList(listDef.ListSql), $@"(?<![\p{{L}}\p{{N}}_]){System.Text.RegularExpressions.Regex.Escape(column)}(?![\p{{L}}\p{{N}}_])",
-                                                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        && (SqlList.OutputColumns(listDef.ListSql) is { } output
+            ? output.Contains(column)                       // 看帶出來的名稱：d.包裝單號 AS 專案序號 帶出的是 專案序號，不是 包裝單號
+            : System.Text.RegularExpressions.Regex.IsMatch(SqlList.SelectList(listDef.ListSql), $@"(?<![\p{{L}}\p{{N}}_]){System.Text.RegularExpressions.Regex.Escape(column)}(?![\p{{L}}\p{{N}}_])",
+                                                        System.Text.RegularExpressions.RegexOptions.IgnoreCase));
 
     /// <summary>JOIN 欄位清單 SQL 沒帶出來的 JOIN（清單 SQL 寫好之後才 JOIN 的）：外層要自己 JOIN</summary>
     private HashSet<string> ListSqlMissingJoins() =>
@@ -1411,8 +1531,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             DataRow fresh = LoadRowByKey(def.MasterKeys.ToDictionary(k => k.Column, k => row[k.Column]), row);
             if (fresh == null) return row;
             bool unchanged = row.RowState == DataRowState.Unchanged;
-            foreach (DataColumn col in fresh.Table.Columns)
-                if (row.Table.Columns.Contains(col.ColumnName)) row[col.ColumnName] = fresh[col.ColumnName];
+            CopyFreshValues(row, fresh);
             if (unchanged) row.AcceptChanges();
         }
         catch (Exception ex)
@@ -1743,6 +1862,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void UpdateRecord()
     {
+        // SQL 清單上直接改的資料先存回去（存失敗就停在修改，不動單頭）
+        int saved = SaveInlineSqlEdits();
+        if (saved < 0) return;
+        if (!HasMasterTable)
+        {
+            SetMode(Mode.Browse);
+            LoadSqlLists();
+            if (saved > 0) MessageBox.Show($"修改完成（{saved} 筆）。", "修改");
+            return;
+        }
         var values = CollectValues();
         if (values == null) return;
         var pending = PendingDetail();                     // 跟單頭一起改的單身
@@ -1914,7 +2043,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             DataRow fresh = LoadRowByKey(CurrentKey(), results.Rows[current]);
             if (fresh == null) return false;
-            foreach (DataColumn col in fresh.Table.Columns) results.Rows[current][col.ColumnName] = fresh[col.ColumnName];
+            CopyFreshValues(results.Rows[current], fresh);
             partialRows?.Remove(results.Rows[current]);
             ShowCurrent();
             return true;
@@ -1924,6 +2053,52 @@ public partial class RuntimeForm : Form, IRecordNavigator
             MessageBox.Show("讀取資料失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 把用主鍵重讀的值寫回查詢結果的那一列（查詢結果沒有的欄位略過）。
+    /// 清單查詢（清單 SQL）跟重讀（單頭資料表）同名欄位的型別可能不一樣，例如清單 SQL 把「結案」算成數字、資料表存的是 'No'：
+    /// 先試著轉成查詢結果那一欄的型別，轉不了就把那一欄改成可以放任何值，不會「Couldn't store &lt;No&gt; in 結案 Column」
+    /// </summary>
+    private static void CopyFreshValues(DataRow target, DataRow fresh)
+    {
+        foreach (DataColumn col in fresh.Table.Columns)
+        {
+            var dest = target.Table.Columns[col.ColumnName];
+            if (dest == null) continue;
+            object value = fresh[col];
+            if (value != DBNull.Value && dest.DataType != typeof(object) && !dest.DataType.IsInstanceOfType(value))
+            {
+                try { value = Convert.ChangeType(value, dest.DataType, System.Globalization.CultureInfo.InvariantCulture); }
+                catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+                {
+                    dest = WidenColumn(dest);
+                }
+            }
+            target[dest] = value;
+        }
+    }
+
+    /// <summary>把查詢結果的一欄換成型別 object 的同名欄位（位置、各列的值與狀態不變）；有限制條件拿不掉時維持原欄位</summary>
+    private static DataColumn WidenColumn(DataColumn old)
+    {
+        var table = old.Table;
+        if (!table.Columns.CanRemove(old)) return old;
+        string name = old.ColumnName;
+        int ordinal = old.Ordinal;
+        var wide = new DataColumn(name + "\u0001", typeof(object)) { Caption = old.Caption, AllowDBNull = true };
+        table.Columns.Add(wide);
+        foreach (DataRow r in table.Rows)
+        {
+            if (r.RowState is DataRowState.Deleted or DataRowState.Detached) continue;
+            bool unchanged = r.RowState == DataRowState.Unchanged;
+            r[wide] = r[old];
+            if (unchanged) r.AcceptChanges();
+        }
+        table.Columns.Remove(old);
+        wide.ColumnName = name;
+        wide.SetOrdinal(ordinal);
+        return wide;
     }
 
     /// <summary>組出「主鍵 = 值」條件，參數名稱用 k0、k1…；tableAlias = 查詢單頭（有別名 T0）時加在欄位前面</summary>
@@ -3082,8 +3257,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 DataRow fresh = LoadRowByKey(KeyOf(row), results.Rows[row]);
                 if (fresh == null) continue;
-                foreach (DataColumn col in fresh.Table.Columns)
-                    if (results.Columns.Contains(col.ColumnName)) results.Rows[row][col.ColumnName] = fresh[col.ColumnName];
+                CopyFreshValues(results.Rows[row], fresh);
             }
         }
         catch (Exception ex)

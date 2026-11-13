@@ -71,6 +71,7 @@ public class OpenParamsDialog : Form
     public OpenParamsDialog(string formFile, string openParams, string folder, IEnumerable<string> localColumns)
     {
         locals = localColumns.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var sysNames = SysParams.Names.Where(n => !locals.Contains(n, StringComparer.OrdinalIgnoreCase)).ToList();
         Text = "傳入參數設定";
         Font = new Font("Microsoft JhengHei UI", 9F);
         StartPosition = FormStartPosition.CenterParent;
@@ -90,6 +91,8 @@ public class OpenParamsDialog : Form
         };
         colLocal.Items.Add("");
         colLocal.Items.AddRange(locals.Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        colLocal.Items.AddRange(sysNames.ToArray());               // 系統參數 @登入帳號、@登入姓名 放最後面（本畫面沒有同名欄位時）
+        locals.AddRange(sysNames);
         grid.Columns.Add(colLocal);
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = ColCustom, HeaderText = "或輸入值（SQL 運算式 / 固定值）", FillWeight = 25 });
         grid.Columns[ColNote].DefaultCellStyle.ForeColor = SystemColors.GrayText;
@@ -123,7 +126,8 @@ public class OpenParamsDialog : Form
         {
             Dock = DockStyle.Fill,
             Text = "開啟時把本畫面欄位的值傳過去：對方畫面有同名欄位時自動用它查詢，對方的 SQL 也可以用 @參數名稱 取得。"
-                 + "兩邊都空白的參數不傳；清單沒列到的參數可以在最下面一列自己加。紅字 = 本畫面找不到這個欄位（多半是打錯字）。",
+                 + "兩邊都空白的參數不傳；清單沒列到的參數可以在最下面一列自己加。登入帳號、登入姓名 = 登入的使用者（下拉選單最後面）。"
+                 + "紅字 = 本畫面找不到這個欄位（多半是打錯字）。",
         }, 0, 2);
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };

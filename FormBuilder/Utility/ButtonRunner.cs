@@ -562,10 +562,16 @@ public static class ButtonRunner
             MessageBox.Show("這個 Grid 現在還不能新增資料。", "提醒");
             return 0;
         }
-        grid.EndEdit();
-        if (grid.BindingContext?[table] is CurrencyManager cm) cm.EndCurrentEdit();
+        // 游標停在最下面的「新增列」（還沒輸入）時放棄它，不然會多存一筆空白列
+        bool onNewRow = grid.CurrentRow is { IsNewRow: true };
+        if (onNewRow) grid.CancelEdit(); else grid.EndEdit();
+        if (grid.BindingContext?[table] is CurrencyManager cm)
+        {
+            if (onNewRow) cm.CancelCurrentEdit(); else cm.EndCurrentEdit();
+        }
         var missing = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var bad = new List<string>();
+        var added = new List<(DataRow Row, IEnumerable<string> Columns)>();
         foreach (var values in rows)
         {
             var row = table.NewRow();                      // TableNewRow：預設值、關聯欄位
@@ -586,6 +592,13 @@ public static class ButtonRunner
                 }
             }
             table.Rows.Add(row);
+            added.Add((row, values.Keys.ToList()));
+        }
+        // 帶回的欄位有設「執行後動作」（例如會科代碼帶出會科名稱）：每一列都跑一次，跟手動輸入一樣
+        foreach (var (row, columns) in added)
+        {
+            int index = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => r.DataBoundItem is DataRowView v && v.Row == row)?.Index ?? -1;
+            if (index >= 0) GridCells.RunAfterSelect(grid, index, columns);
         }
         if (missing.Count > 0 || bad.Count > 0)
             MessageBox.Show((missing.Count > 0 ? "Grid 上沒有這些欄位，沒有帶入：" + string.Join("、", missing) + Environment.NewLine : "")
