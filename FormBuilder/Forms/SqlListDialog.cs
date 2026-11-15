@@ -37,13 +37,43 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Header", typeof(string));
         columnTable.Columns.Add("Width", typeof(int));
         columnTable.Columns.Add("Source", typeof(string));
+        columnTable.Columns.Add("Click", typeof(string));       // 點擊開啟的說明（顯示用，設定在 clickButtons）
+        foreach (var c in grid.Columns.Where(c => c.IsLink)) clickButtons[c.Column] = c.Button;
         workJoins = grid.Joins.Select(j => j.Clone()).ToList();
         foreach (var c in grid.Columns.Where(c => c.IsJoin && workJoins.Any(j => j.Alias == c.JoinAlias))) joinColumns[c.Column] = c;
         foreach (var c in grid.Columns.Where(c => c.IsCustom)) customColumns[c.Column] = c;
         foreach (var c in grid.Columns.Where(c => c.IsCustom || !c.ScreenOnly && (!c.IsJoin || joinColumns.ContainsKey(c.Column))))   // 編輯視窗的畫面欄位不是 SQL 的欄位
             columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
         dgvColumns.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Source", HeaderText = "來源（JOIN）", ReadOnly = true, Width = 220 });
+        var colClick = new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = "Click", HeaderText = "點擊開啟", ReadOnly = true, Width = 180,
+            ToolTipText = "雙擊設定：執行時這一欄的文字變成藍色底線，點一下就用那一列的值開啟畫面（可以依條件開不同畫面）；右鍵清除",
+        };
+        dgvColumns.Columns.Add(colClick);
+        RefreshClickText();
         dgvColumns.DataSource = columnTable;
+        // 點擊開啟：右鍵清除
+        var ctxClick = new ContextMenuStrip();
+        var miEditClick = new ToolStripMenuItem("設定點擊開啟…");
+        var miClearClick = new ToolStripMenuItem("清除點擊開啟");
+        ctxClick.Items.AddRange(new ToolStripItem[] { miEditClick, miClearClick });
+        string clickColumn = null;
+        miEditClick.Click += (s, e) => EditClick(clickColumn);
+        miClearClick.Click += (s, e) =>
+        {
+            clickButtons.Remove(clickColumn);
+            RefreshClickText();
+        };
+        dgvColumns.CellMouseClick += (s, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.RowIndex < 0 || e.ColumnIndex != colClick.Index) return;
+            if (dgvColumns.Rows[e.RowIndex].DataBoundItem is not DataRowView v || customColumns.ContainsKey((string)v.Row["Column"])) return;
+            clickColumn = (string)v.Row["Column"];
+            dgvColumns.CurrentCell = dgvColumns[e.ColumnIndex, e.RowIndex];
+            miClearClick.Enabled = clickButtons.ContainsKey(clickColumn);
+            ctxClick.Show(Cursor.Position);
+        };
         dgvColumns.DataError += (s, e) => e.Cancel = true;
         // Delete：選的是 JOIN 帶進來的欄位時，移除那個 JOIN（連同它帶進來的欄位）
         dgvColumns.KeyDown += (s, e) =>
@@ -63,9 +93,13 @@ public partial class SqlListDialog : Form
         // 自訂按鈕欄位：雙擊設定按鈕動作
         dgvColumns.CellDoubleClick += (s, e) =>
         {
-            if (e.RowIndex >= 0 && dgvColumns.Rows[e.RowIndex].DataBoundItem is DataRowView v
-                && customColumns.TryGetValue((string)v.Row["Column"], out var c) && c.CellType == GridCellKind.按鈕)
-                EditButton(c);
+            if (e.RowIndex < 0 || dgvColumns.Rows[e.RowIndex].DataBoundItem is not DataRowView v) return;
+            string name = (string)v.Row["Column"];
+            if (customColumns.TryGetValue(name, out var c))
+            {
+                if (c.CellType == GridCellKind.按鈕) EditButton(c);
+            }
+            else if (dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "Click") EditClick(name);   // 一般欄位：設定點擊開啟
         };
 
         // 自訂欄位：例如勾選框，使用者打勾的列，按「執行SQL」按鈕時只對打勾的列執行
@@ -139,6 +173,7 @@ public partial class SqlListDialog : Form
             else columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
         }
         readColumns = columns;
+        RefreshClickText();
         return true;
     }
 
@@ -188,6 +223,8 @@ public partial class SqlListDialog : Form
             c.Visible = r["Visible"] is true;
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
+            c.Button = clickButtons.TryGetValue(name, out var click) ? click : null;   // 點擊開啟
+            if (c.Button != null) c.Button.Text = c.Header;
             return c;
         }).Concat(grid.Columns.Where(c => c.ScreenOnly && !c.IsCustom && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
           .ToList();                                       // 編輯視窗的畫面欄位保留（SQL 有同名欄位時就用 SQL 的）
@@ -242,6 +279,33 @@ public partial class SqlListDialog : Form
         var rowColumns = columnTable.Rows.Cast<DataRow>().Select(r => (string)r["Column"]).Where(n => n != c.Column);
         var edited = CustomColumnDialog.EditButton(this, c.Button, c.Header ?? c.Column, rowColumns);
         if (edited != null) c.Button = edited;
+    }
+
+    /// <summary>一般欄位的點擊開啟（欄位名稱 → 動作，按「確定」才寫回欄位的 Button）</summary>
+    private readonly Dictionary<string, ButtonDefinition> clickButtons = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>點擊開啟：跟按鈕動作同一個設定視窗，預設是開啟畫面（傳入參數用 @欄位 取那一列的值）</summary>
+    private void EditClick(string name)
+    {
+        if (name == null || customColumns.ContainsKey(name)) return;
+        dgvColumns.EndEdit();
+        var row = columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => ((string)r["Column"]).Equals(name, StringComparison.OrdinalIgnoreCase));
+        string title = Convert.ToString(row?["Header"]) is { Length: > 0 } h ? h : name;
+        var rowColumns = columnTable.Rows.Cast<DataRow>().Select(r => (string)r["Column"])
+                                    .Where(n => !(customColumns.TryGetValue(n, out var cc) && cc.CellType == GridCellKind.按鈕));
+        var edited = CustomColumnDialog.EditButton(this, clickButtons.TryGetValue(name, out var b) ? b : new ButtonDefinition { Action = ButtonAction.開啟畫面 },
+                                                   $"點擊「{title}」", rowColumns);
+        if (edited == null) return;
+        clickButtons[name] = edited;
+        RefreshClickText();
+    }
+
+    /// <summary>清單的「點擊開啟」欄：依 clickButtons 重新顯示（讀取欄位會重建清單）</summary>
+    private void RefreshClickText()
+    {
+        foreach (DataRow r in columnTable.Rows)
+            if (r.RowState != DataRowState.Deleted)
+                r["Click"] = clickButtons.TryGetValue((string)r["Column"], out var b) ? GridCells.LinkSummary(b) : DBNull.Value;
     }
 
     private void RemoveCustom(GridColumnDefinition c)

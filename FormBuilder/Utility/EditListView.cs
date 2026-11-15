@@ -110,6 +110,7 @@ public class EditListView
         // 自訂按鈕欄位：執行SQL、開啟畫面用那一列的值，SQL 執行成功後重新載入清單
         GridCells.HookCustomColumns(Grid, (c, row) =>
         {
+            if (c.IsLink && editing) return;                 // 「點擊開啟」：輸入明細時點格子是要輸入
             bool? done = ButtonRunner.RunRowButton(c.Button, row, fallback, sourcePath, owner, connectionString);
             if (done == null) MessageBox.Show("明細清單上的按鈕只能用「執行SQL」、「開啟畫面」或「列印報表」。", "提醒");
             else if (done == true) Reload(lastValueOf);
@@ -121,6 +122,7 @@ public class EditListView
         Grid.CellDoubleClick += (s, e) =>
         {
             if (e.RowIndex < 0 || Grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
+            if (GridCells.LinkOf(Grid, e.ColumnIndex) != null) return;   // 「點擊開啟」的欄位點一下就開了
             var row = view.Row;
             ButtonRunner.OpenForm(button, sourcePath, owner, name => row.Table.Columns.Contains(name) ? row[name] : fallback(name),
                                   connectionString: connectionString);

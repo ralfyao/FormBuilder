@@ -624,6 +624,7 @@ public static class GridCells
     {
         static GridColumnDefinition CustomOf(DataGridViewColumn col) => col.Tag is GridColumnDefinition { IsCustom: true } c ? c : null;
         var custom = grid.Columns.Cast<DataGridViewColumn>().Select(CustomOf).Where(c => c != null).ToList();
+        HookLinks(grid, onButton);
         if (custom.Count == 0) return;
         // 按鈕有「執行前檢查」：不符合的列畫成灰色、按了沒反應。符合的列每個按鈕算一次記起來，資料有變動再重算
         // 有「詢問是否繼續」的條件時不畫灰：要讓使用者按下去選擇要不要繼續
@@ -720,6 +721,59 @@ public static class GridCells
             if (Resolve(c) == GridCellKind.按鈕 || RowAt(grid.CurrentCell.RowIndex) is not { } row || !row.Table.Columns.Contains(c.Column)) return;
             SetCustomValue(row, c.Column, Resolve(c) == GridCellKind.勾選框 ? false : DBNull.Value);
             e.Handled = true;                                  // 不要變成刪除這一列
+        };
+    }
+
+    /// <summary>設了「點擊開啟」的一般欄位（見 GridColumnDefinition.IsLink）；不是的話回傳 null</summary>
+    public static GridColumnDefinition LinkOf(DataGridView grid, int columnIndex) =>
+        columnIndex >= 0 && columnIndex < grid.Columns.Count && grid.Columns[columnIndex].Tag is GridColumnDefinition { IsLink: true } c ? c : null;
+
+    /// <summary>
+    /// 「點擊開啟」的欄位：文字畫成藍色底線，滑鼠移上去變手指，點一下有值的格子就把那一列交給 onClick（跟自訂按鈕欄位同一個處理）。
+    /// 這一欄的雙擊不再開編輯視窗 / 雙擊開啟畫面（見 LinkOf），才不會點一下開兩個畫面
+    /// </summary>
+    private static void HookLinks(DataGridView grid, Action<GridColumnDefinition, DataRow> onClick)
+    {
+        if (!grid.Columns.Cast<DataGridViewColumn>().Any(col => col.Tag is GridColumnDefinition { IsLink: true })) return;
+        Font underline = null;
+        bool HasValue(int column, int row) =>
+            row >= 0 && row < grid.Rows.Count && !grid.Rows[row].IsNewRow && Convert.ToString(grid[column, row].FormattedValue)?.Trim() is { Length: > 0 };
+        grid.CellFormatting += (s, e) =>
+        {
+            if (e.RowIndex < 0 || LinkOf(grid, e.ColumnIndex) == null) return;
+            var font = e.CellStyle.Font ?? grid.Font;
+            if (underline == null || !underline.FontFamily.Equals(font.FontFamily) || underline.Size != font.Size)
+                underline = new Font(font, font.Style | FontStyle.Underline);
+            e.CellStyle.Font = underline;
+            e.CellStyle.ForeColor = Color.FromArgb(0, 102, 204);
+        };
+        grid.CellMouseEnter += (s, e) =>
+        {
+            if (LinkOf(grid, e.ColumnIndex) != null && HasValue(e.ColumnIndex, e.RowIndex)) grid.Cursor = Cursors.Hand;
+        };
+        grid.CellMouseLeave += (s, e) =>
+        {
+            if (grid.Cursor == Cursors.Hand) grid.Cursor = Cursors.Default;
+        };
+        grid.CellContentClick += (s, e) =>
+        {
+            if (LinkOf(grid, e.ColumnIndex) is not { } c || !HasValue(e.ColumnIndex, e.RowIndex)) return;
+            if (grid.Rows[e.RowIndex].DataBoundItem is DataRowView v) onClick?.Invoke(c, v.Row);
+        };
+    }
+
+    /// <summary>欄位設定清單上「點擊開啟」欄顯示的說明</summary>
+    public static string LinkSummary(ButtonDefinition b)
+    {
+        if (b == null) return null;
+        int cases = ButtonRunner.ParseFormCases(b.TargetFormCases).Count();
+        return b.Action switch
+        {
+            ButtonAction.開啟畫面 when string.IsNullOrWhiteSpace(b.TargetForm) => cases > 0 ? $"依條件開啟（{cases} 個條件）" : "開啟畫面（還沒設定畫面）",
+            ButtonAction.開啟畫面 => "開啟 " + Path.GetFileName(b.TargetForm.Trim()) + (cases > 0 ? $"，依條件 {cases} 個" : ""),
+            ButtonAction.執行SQL => "執行 SQL",
+            ButtonAction.列印報表 => "列印 " + Path.GetFileName(b.PrintTemplate ?? ""),
+            _ => b.Action.ToString(),
         };
     }
 

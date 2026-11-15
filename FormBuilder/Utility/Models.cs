@@ -203,10 +203,10 @@ public class FormDefinition
         foreach (var c in Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))) c.EditPickerForm = Fix(c.EditPickerForm);
     }
 
-    /// <summary>Grid（含編輯視窗的明細清單）上自訂按鈕欄位的按鈕</summary>
+    /// <summary>Grid（含編輯視窗的明細清單）上自訂按鈕欄位的按鈕，與一般欄位的「點擊開啟」</summary>
     public IEnumerable<ButtonDefinition> ColumnButtons() =>
         Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))
-             .Where(c => c.IsCustom && c.Button != null).Select(c => c.Button);
+             .Where(c => c.Button != null).Select(c => c.Button);
 
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
 
@@ -1520,8 +1520,15 @@ public class GridColumnDefinition
     /// </summary>
     public string ValueSql { get; set; }
 
-    /// <summary>自訂按鈕欄位按下去要做的事（同畫面上的按鈕；Grid 上支援 執行SQL、開啟畫面，其他動作照畫面按鈕執行）</summary>
+    /// <summary>
+    /// 自訂按鈕欄位按下去要做的事（同畫面上的按鈕；Grid 上支援 執行SQL、開啟畫面，其他動作照畫面按鈕執行）。
+    /// 一般欄位（不是自訂欄位）設了就是「點擊開啟」：Grid 上這一欄的文字變成藍色底線，點一下就用那一列的值執行（通常是開啟畫面）
+    /// </summary>
     public ButtonDefinition Button { get; set; }
+
+    /// <summary>一般欄位設了「點擊開啟」（見 Button）</summary>
+    [JsonIgnore]
+    public bool IsLink => !IsCustom && Button != null;
 
     // ---- 雙擊 Grid 開啟的編輯視窗版面 ----
     /// <summary>編輯視窗是否顯示這個欄位；null = 跟 Grid 的「顯示」一樣</summary>

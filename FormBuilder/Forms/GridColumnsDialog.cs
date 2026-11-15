@@ -83,7 +83,9 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("PickForm", typeof(string));             // 開窗選取（同編輯視窗的開窗設定）
         columnTable.Columns.Add("PickParams", typeof(string));
         columnTable.Columns.Add("PickReturn", typeof(string));
+        columnTable.Columns.Add("Click", typeof(string));                // 點擊開啟的說明（顯示用，設定在 editedButtons / 欄位的 Button）
         foreach (var c in workColumns) AddColumnRow(c);
+        dgvColumns.Columns.Add(colClick);
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
 
@@ -131,6 +133,13 @@ public partial class GridColumnsDialog : Form
         {
             if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
             var c = ColumnAt(e.RowIndex);
+            if (e.ColumnIndex == colClick.Index && c is { IsCustom: false })
+            {
+                dgvColumns.CurrentCell = dgvColumns[e.ColumnIndex, e.RowIndex];
+                miClearClick.Enabled = ClickButtonOf(c) != null;
+                ctxClick.Show(Cursor.Position);
+                return;
+            }
             if (c == null || !c.IsJoin && !c.IsCustom) return;
             dgvColumns.CurrentCell = dgvColumns[e.ColumnIndex, e.RowIndex];
             if (c.IsCustom)
@@ -151,6 +160,10 @@ public partial class GridColumnsDialog : Form
         miRemoveCustom.Click += (s, e) => RemoveCustom(CurrentColumn());
         miEditValueSql.Click += (s, e) => EditValueSql(CurrentColumn());
         ctxCustom.Items.AddRange(new ToolStripItem[] { miEditButton, miEditValueSql, miRemoveCustom });
+        // ---- 點擊開啟：一般欄位點一下就用那一列的值開啟畫面（雙擊設定、右鍵清除）----
+        miEditClick.Click += (s, e) => EditClick(CurrentColumn());
+        miClearClick.Click += (s, e) => ClearClick(CurrentColumn());
+        ctxClick.Items.AddRange(new ToolStripItem[] { miEditClick, miClearClick });
         dgvColumns.CurrentCellDirtyStateChanged += (s, e) =>
         {
             if (dgvColumns.IsCurrentCellDirty && dgvColumns.CurrentCell?.ColumnIndex == colCellType.Index)
@@ -177,6 +190,11 @@ public partial class GridColumnsDialog : Form
             if (e.RowIndex >= 0 && e.ColumnIndex == colAfterSelect.Index)
             {
                 EditAfterSelect(e.RowIndex);
+                return;
+            }
+            if (e.RowIndex >= 0 && e.ColumnIndex == colClick.Index && ColumnAt(e.RowIndex) is { IsCustom: false } lc)
+            {
+                EditClick(lc);
                 return;
             }
             if (e.RowIndex >= 0 && ColumnAt(e.RowIndex) is { IsCustom: true, CellType: GridCellKind.按鈕 } c && e.ColumnIndex != colHeader.Index && e.ColumnIndex != colCellOptions.Index)
@@ -351,6 +369,47 @@ public partial class GridColumnsDialog : Form
         if (edited != null) editedButtons[c] = edited;
     }
 
+    private readonly DataGridViewTextBoxColumn colClick = new()
+    {
+        DataPropertyName = "Click",
+        HeaderText = "點擊開啟",
+        ReadOnly = true,
+        Width = 180,
+        ToolTipText = "雙擊設定：執行時這一欄的文字變成藍色底線，點一下就用那一列的值開啟畫面（可以依條件開不同畫面）；右鍵清除",
+    };
+    private readonly ContextMenuStrip ctxClick = new();
+    private readonly ToolStripMenuItem miEditClick = new("設定點擊開啟…");
+    private readonly ToolStripMenuItem miClearClick = new("清除點擊開啟");
+
+    /// <summary>一般欄位目前的點擊動作（改過還沒按「確定」的優先）</summary>
+    private ButtonDefinition ClickButtonOf(GridColumnDefinition c) => editedButtons.TryGetValue(c, out var b) ? b : c.Button;
+
+    private void SetClickText(GridColumnDefinition c)
+    {
+        var row = columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => r.RowState != DataRowState.Deleted && (string)r["Column"] == c.Column);
+        if (row != null) row["Click"] = (object)GridCells.LinkSummary(ClickButtonOf(c)) ?? DBNull.Value;
+    }
+
+    /// <summary>點擊開啟：跟按鈕動作同一個設定視窗，預設是開啟畫面（傳入參數用 @欄位 取那一列的值）</summary>
+    private void EditClick(GridColumnDefinition c)
+    {
+        if (c is not { IsCustom: false }) return;
+        dgvColumns.EndEdit();
+        var rowColumns = workColumns.Where(x => !(x.IsCustom && x.CellType == GridCellKind.按鈕)).Select(x => x.Column);
+        var edited = CustomColumnDialog.EditButton(this, ClickButtonOf(c) ?? new ButtonDefinition { Action = ButtonAction.開啟畫面 },
+                                                   $"點擊「{c.Header ?? c.Column}」", rowColumns);
+        if (edited == null) return;
+        editedButtons[c] = edited;
+        SetClickText(c);
+    }
+
+    private void ClearClick(GridColumnDefinition c)
+    {
+        if (c is not { IsCustom: false }) return;
+        editedButtons[c] = null;
+        SetClickText(c);
+    }
+
     /// <summary>公式編輯視窗：左邊列出同一列的其他欄位（按鈕欄位除外）</summary>
     private void EditFormula(int rowIndex)
     {
@@ -414,6 +473,7 @@ public partial class GridColumnsDialog : Form
                              c.EditPickerForm, c.EditPickerParams, c.EditPickerReturn);
         var added = columnTable.Rows[columnTable.Rows.Count - 1];
         if (IsPickerKind(added)) ShowPickerSummary(added);
+        if (!c.IsCustom) added["Click"] = (object)GridCells.LinkSummary(ClickButtonOf(c)) ?? DBNull.Value;
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -551,6 +611,7 @@ public partial class GridColumnsDialog : Form
             bool thousands = row["Thousands"] is true;
             c.Thousands = thousands == TypeHelper.UsesThousands(c.DataType, c.IsKey) ? null : thousands;
             if (c.IsCustom && c.Button != null) c.Button.Text = GridCells.ButtonText(c);     // 確認訊息、錯誤提醒的標題用按鈕文字
+            if (c.IsLink) c.Button.Text = c.Header;                                          // 點擊開啟：提醒的標題用欄位標題
         }
         // 已經設計過編輯視窗版面時，新帶進來的欄位預設不放進編輯視窗（不然會全部疊在左上角），要用的話到版面設計器拖進去
         if (grid.HasEditLayout)

@@ -1111,6 +1111,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     private void RunRowButton(GridColumnDefinition c, DataRow row, Action reload)
     {
         var b = c.Button;
+        if (c.IsLink && (mode != Mode.Browse || pickMode)) return;    // 「點擊開啟」：輸入中點格子是要輸入；選取視窗點一下是選取
         if (mode != Mode.Browse)
         {
             MessageBox.Show("輸入中不能按清單上的按鈕，請先按「確定」或「取消」。", "提醒");
@@ -1259,6 +1260,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         grid.CellDoubleClick += (s, e) =>
         {
             if (e.RowIndex < 0 || pickMode) return;                  // 選取視窗：雙擊是選取帶回（SetupPickMode）
+            if (GridCells.LinkOf(grid, e.ColumnIndex) != null) return;   // 「點擊開啟」的欄位點一下就開了
             if (grid.Rows[e.RowIndex].DataBoundItem is not DataRowView view) return;
             var row = view.Row;
             if (editable)
@@ -2555,7 +2557,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// </summary>
     private void HookEditDialog(DataGridView grid, Action<int> edit)
     {
-        grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) edit(e.RowIndex); };
+        grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0 && GridCells.LinkOf(grid, e.ColumnIndex) == null) edit(e.RowIndex); };   // 「點擊開啟」的欄位點一下就開了
         grid.KeyDown += (s, e) =>
         {
             if (e.KeyCode != Keys.Enter || mode == Mode.Detail || grid.CurrentRow == null) return;
