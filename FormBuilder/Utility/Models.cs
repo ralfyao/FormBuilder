@@ -1460,6 +1460,11 @@ public class GridColumnDefinition
     public bool IsIdentity { get; set; }
     public bool IsKey { get; set; }
     public string Header { get; set; }
+    /// <summary>
+    /// 群組標題（兩層標題的上面一層）：相鄰的欄位填一樣的名稱，執行時合併成一格橫跨這幾欄（例如「設計」底下有模組數、已開工、進度）。
+    /// 空白 = 這一欄的標題佔滿上下兩層；整個 Grid 都沒填就維持一層標題
+    /// </summary>
+    public string HeaderGroup { get; set; }
     public int Width { get; set; } = 100;
     public bool Visible { get; set; } = true;
     /// <summary>只顯示，不能輸入，也不寫回資料庫</summary>

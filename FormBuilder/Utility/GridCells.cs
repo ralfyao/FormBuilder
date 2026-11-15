@@ -724,6 +724,138 @@ public static class GridCells
         };
     }
 
+    private static string HeaderGroupOf(DataGridViewColumn col) =>
+        col.Tag is GridColumnDefinition { HeaderGroup: { } g } && g.Trim().Length > 0 ? g.Trim() : null;
+
+    /// <summary>
+    /// 兩層標題：有填「群組標題」的欄位，上面一層畫群組名稱（相鄰同名的欄位合併成一格），下面一層畫原本的欄位標題；
+    /// 沒填的欄位標題佔滿兩層。整個 Grid 都沒填就不動。欄寬、欄位順序、左右捲動、字型改了都重畫
+    /// </summary>
+    public static void HookHeaderGroups(DataGridView grid)
+    {
+        if (!grid.Columns.Cast<DataGridViewColumn>().Any(c => HeaderGroupOf(c) != null)) return;
+        Font HeaderFont() => grid.ColumnHeadersDefaultCellStyle.Font ?? grid.Font;
+        int Band() => TextRenderer.MeasureText("國Ag", HeaderFont()).Height + 10;   // 上面一層（群組）的高度
+        const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
+        const int SortGlyph = 12;                          // 排序三角形佔的寬度
+        int top = Band();
+        // 下面一層的字可以換行：高度取有群組的欄位裡，標題換行後最高的那一個（至少一層）
+        int LowerHeight()
+        {
+            var font = HeaderFont();
+            int lineHeight = TextRenderer.MeasureText("國Ag", font).Height;
+            int max = Band();
+            foreach (DataGridViewColumn c in grid.Columns)
+            {
+                if (!c.Visible || HeaderGroupOf(c) == null || string.IsNullOrEmpty(c.HeaderText)) continue;
+                int width = Math.Max(lineHeight, c.Width - 6 - (c.SortMode == DataGridViewColumnSortMode.NotSortable ? 0 : SortGlyph));
+                max = Math.Max(max, TextRenderer.MeasureText(c.HeaderText, font, new Size(width, int.MaxValue), Wrap).Height + 10);
+            }
+            return max;
+        }
+        grid.EnableHeadersVisualStyles = false;            // 標題用同一個底色畫，上下兩層才接得起來
+        grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        void Resize()
+        {
+            top = Band();
+            int height = top + LowerHeight();
+            if (grid.ColumnHeadersHeight != height)
+            {
+                grid.ColumnHeadersHeight = height;
+            }
+        }
+        Resize();
+        void InvalidateHeader() => grid.Invalidate(new Rectangle(0, 0, grid.Width, grid.ColumnHeadersHeight + 2));
+        // 欄寬改變的事件裡不能改標題高度（填滿模式重新分配欄寬時會丟 InvalidOperationException）：等這一輪處理完再調，多次只調一次
+        bool pending = false;
+        void ResizeLater()
+        {
+            if (pending || grid.IsDisposed) return;
+            if (!grid.IsHandleCreated) return;             // 還沒顯示：HandleCreated 時會調
+            pending = true;
+            grid.BeginInvoke(() =>
+            {
+                pending = false;
+                if (grid.IsDisposed) return;
+                Resize();
+                InvalidateHeader();
+            });
+        }
+        grid.HandleCreated += (s, e) => ResizeLater();
+        grid.FontChanged += (s, e) => ResizeLater();
+        grid.DataBindingComplete += (s, e) => ResizeLater();    // 欄寬依內容調整後
+        grid.Scroll += (s, e) => { if (e.ScrollOrientation == ScrollOrientation.HorizontalScroll) InvalidateHeader(); };
+        grid.ColumnWidthChanged += (s, e) => { ResizeLater(); InvalidateHeader(); };
+        grid.ColumnDisplayIndexChanged += (s, e) => InvalidateHeader();
+        grid.ColumnStateChanged += (s, e) => { ResizeLater(); InvalidateHeader(); };
+
+        static TextFormatFlags Align(DataGridViewContentAlignment a) =>
+            Wrap | (a.ToString().EndsWith("Center") ? TextFormatFlags.HorizontalCenter : a.ToString().EndsWith("Right") ? TextFormatFlags.Right : TextFormatFlags.Left);
+
+        // 有群組的欄位：背景照常畫滿，標題字畫在下面一層（上面一層由 Paint 畫群組）
+        grid.CellPainting += (s, e) =>
+        {
+            if (e.RowIndex != -1 || e.ColumnIndex < 0 || HeaderGroupOf(grid.Columns[e.ColumnIndex]) == null) return;
+            e.PaintBackground(e.ClipBounds, false);
+            var lower = new Rectangle(e.CellBounds.X + 3, e.CellBounds.Y + top, e.CellBounds.Width - 6, e.CellBounds.Height - top);
+            var col = grid.Columns[e.ColumnIndex];
+            if (col.HeaderCell.SortGlyphDirection != SortOrder.None)
+            {
+                // 排序方向的小三角形：畫在右邊，字就不要壓到
+                int cx = lower.Right - 6, cy = lower.Y + lower.Height / 2;
+                var tri = col.HeaderCell.SortGlyphDirection == SortOrder.Ascending
+                    ? new[] { new Point(cx - 4, cy + 2), new Point(cx + 4, cy + 2), new Point(cx, cy - 3) }
+                    : new[] { new Point(cx - 4, cy - 2), new Point(cx + 4, cy - 2), new Point(cx, cy + 3) };
+                using (var brush = new SolidBrush(SystemColors.ControlDarkDark)) e.Graphics.FillPolygon(brush, tri);
+                lower.Width -= SortGlyph;
+            }
+            // 換行的字 DrawText 不會垂直置中：先量高度再置中
+            string text = Convert.ToString(e.FormattedValue);
+            var font = e.CellStyle.Font ?? HeaderFont();
+            int textHeight = Math.Min(lower.Height, TextRenderer.MeasureText(text, font, new Size(Math.Max(1, lower.Width), int.MaxValue), Wrap).Height);
+            var textRect = new Rectangle(lower.X, lower.Y + (lower.Height - textHeight) / 2, lower.Width, textHeight);
+            TextRenderer.DrawText(e.Graphics, text, font, textRect, e.CellStyle.ForeColor, Align(e.CellStyle.Alignment));
+            e.Handled = true;
+        };
+
+        // 上面一層：照畫面上的欄位順序，相鄰同名的群組合併成一格
+        grid.Paint += (s, e) =>
+        {
+            int band = top;
+            var style = grid.ColumnHeadersDefaultCellStyle;
+            var columns = grid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex).ToList();
+            using var back = new SolidBrush(style.BackColor.IsEmpty ? SystemColors.Control : style.BackColor);
+            using var pen = new Pen(grid.GridColor);
+            for (int i = 0; i < columns.Count;)
+            {
+                string group = HeaderGroupOf(columns[i]);
+                int j = i + 1;
+                if (group != null)
+                    while (j < columns.Count && HeaderGroupOf(columns[j]) == group) j++;
+                if (group != null)
+                {
+                    var rect = Rectangle.Empty;
+                    for (int k = i; k < j; k++)
+                    {
+                        var r = grid.GetCellDisplayRectangle(columns[k].Index, -1, false);
+                        if (r.Width > 0) rect = rect.IsEmpty ? r : Rectangle.Union(rect, r);
+                    }
+                    if (!rect.IsEmpty)
+                    {
+                        var top = new Rectangle(rect.X, rect.Y, rect.Width - 1, band - 1);
+                        e.Graphics.FillRectangle(back, top);
+                        e.Graphics.DrawLine(pen, top.Left, top.Bottom, top.Right, top.Bottom);      // 群組和欄位標題之間的線
+                        e.Graphics.DrawLine(pen, top.Right, top.Top, top.Right, top.Bottom);        // 群組右邊的線
+                        TextRenderer.DrawText(e.Graphics, group, HeaderFont(), top,
+                                              style.ForeColor.IsEmpty ? SystemColors.ControlText : style.ForeColor,
+                                              TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                    }
+                }
+                i = j;
+            }
+        };
+    }
+
     /// <summary>設了「點擊開啟」的一般欄位（見 GridColumnDefinition.IsLink）；不是的話回傳 null</summary>
     public static GridColumnDefinition LinkOf(DataGridView grid, int columnIndex) =>
         columnIndex >= 0 && columnIndex < grid.Columns.Count && grid.Columns[columnIndex].Tag is GridColumnDefinition { IsLink: true } c ? c : null;

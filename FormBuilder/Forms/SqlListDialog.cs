@@ -38,7 +38,9 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Width", typeof(int));
         columnTable.Columns.Add("Source", typeof(string));
         columnTable.Columns.Add("Click", typeof(string));       // 點擊開啟的說明（顯示用，設定在 clickButtons）
+        columnTable.Columns.Add("HeaderGroup", typeof(string)); // 群組標題（兩層標題的上面一層）
         foreach (var c in grid.Columns.Where(c => c.IsLink)) clickButtons[c.Column] = c.Button;
+        foreach (var c in grid.Columns.Where(c => !string.IsNullOrWhiteSpace(c.HeaderGroup))) headerGroups[c.Column] = c.HeaderGroup;
         workJoins = grid.Joins.Select(j => j.Clone()).ToList();
         foreach (var c in grid.Columns.Where(c => c.IsJoin && workJoins.Any(j => j.Alias == c.JoinAlias))) joinColumns[c.Column] = c;
         foreach (var c in grid.Columns.Where(c => c.IsCustom)) customColumns[c.Column] = c;
@@ -51,7 +53,15 @@ public partial class SqlListDialog : Form
             ToolTipText = "雙擊設定：執行時這一欄的文字變成藍色底線，點一下就用那一列的值開啟畫面（可以依條件開不同畫面）；右鍵清除",
         };
         dgvColumns.Columns.Add(colClick);
-        RefreshClickText();
+        var colHeaderGroup = new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = "HeaderGroup", HeaderText = "群組標題", Width = 90,
+            ToolTipText = "兩層標題的上面一層：相鄰的欄位填一樣的名稱（例如「設計」），執行時合併成一格橫跨這幾欄；空白 = 標題佔滿上下兩層",
+        };
+        dgvColumns.Columns.Add(colHeaderGroup);
+        var colHeaderText = dgvColumns.Columns.Cast<DataGridViewColumn>().FirstOrDefault(x => x.DataPropertyName == "Header");
+        if (colHeaderText != null) colHeaderGroup.DisplayIndex = colHeaderText.DisplayIndex;   // 放在「標題」前面
+        RefreshClickText(keep: false);
         dgvColumns.DataSource = columnTable;
         // 點擊開啟：右鍵清除
         var ctxClick = new ContextMenuStrip();
@@ -160,6 +170,7 @@ public partial class SqlListDialog : Form
         var old = columnTable.Rows.Cast<DataRow>()
             .GroupBy(r => (string)r["Column"], StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (Visible: g.First()["Visible"], Header: g.First()["Header"], Width: g.First()["Width"]), StringComparer.OrdinalIgnoreCase);
+        KeepHeaderGroups();
         columnTable.Clear();
         foreach (var c in columns.Where(c => !joinColumns.ContainsKey(c.Column) && !customColumns.ContainsKey(c.Column)))
         {
@@ -173,7 +184,7 @@ public partial class SqlListDialog : Form
             else columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
         }
         readColumns = columns;
-        RefreshClickText();
+        RefreshClickText(keep: false);
         return true;
     }
 
@@ -207,8 +218,10 @@ public partial class SqlListDialog : Form
         grid.Columns = columnTable.Rows.Cast<DataRow>().Select(r =>
         {
             string name = (string)r["Column"];
+            string group = Convert.ToString(r["HeaderGroup"]).Trim() is { Length: > 0 } hg ? hg : null;
             if (customColumns.TryGetValue(name, out var custom))
             {
+                custom.HeaderGroup = group;
                 custom.Visible = r["Visible"] is true;
                 custom.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
                 custom.Width = r["Width"] is int cw && cw > 0 ? Math.Clamp(cw, 30, 600) : 90;
@@ -223,6 +236,7 @@ public partial class SqlListDialog : Form
             c.Visible = r["Visible"] is true;
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
+            c.HeaderGroup = group;
             c.Button = clickButtons.TryGetValue(name, out var click) ? click : null;   // 點擊開啟
             if (c.Button != null) c.Button.Text = c.Header;
             return c;
@@ -300,12 +314,32 @@ public partial class SqlListDialog : Form
         RefreshClickText();
     }
 
-    /// <summary>清單的「點擊開啟」欄：依 clickButtons 重新顯示（讀取欄位會重建清單）</summary>
-    private void RefreshClickText()
+    /// <summary>群組標題（欄位名稱 → 群組）：讀取欄位重建清單時保留</summary>
+    private readonly Dictionary<string, string> headerGroups = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>清單上改過的群組標題記到 headerGroups（重建清單前呼叫）</summary>
+    private void KeepHeaderGroups()
     {
         foreach (DataRow r in columnTable.Rows)
             if (r.RowState != DataRowState.Deleted)
+            {
+                string name = (string)r["Column"];
+                if (Convert.ToString(r["HeaderGroup"]).Trim() is { Length: > 0 } g) headerGroups[name] = g;
+                else headerGroups.Remove(name);
+            }
+    }
+
+    /// <summary>清單的「點擊開啟」、「群組標題」欄：依 clickButtons、headerGroups 重新顯示（讀取欄位會重建清單）</summary>
+    /// <param name="keep">true = 先把清單上改過的群組標題記下來（清單是重建前的那一份）；剛重建、還沒填值時傳 false</param>
+    private void RefreshClickText(bool keep = true)
+    {
+        if (keep) KeepHeaderGroups();
+        foreach (DataRow r in columnTable.Rows)
+            if (r.RowState != DataRowState.Deleted)
+            {
                 r["Click"] = clickButtons.TryGetValue((string)r["Column"], out var b) ? GridCells.LinkSummary(b) : DBNull.Value;
+                r["HeaderGroup"] = headerGroups.TryGetValue((string)r["Column"], out var g) ? g : DBNull.Value;
+            }
     }
 
     private void RemoveCustom(GridColumnDefinition c)

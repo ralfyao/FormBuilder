@@ -84,8 +84,11 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("PickParams", typeof(string));
         columnTable.Columns.Add("PickReturn", typeof(string));
         columnTable.Columns.Add("Click", typeof(string));                // 點擊開啟的說明（顯示用，設定在 editedButtons / 欄位的 Button）
+        columnTable.Columns.Add("HeaderGroup", typeof(string));          // 群組標題（兩層標題的上面一層）
         foreach (var c in workColumns) AddColumnRow(c);
         dgvColumns.Columns.Add(colClick);
+        dgvColumns.Columns.Add(colHeaderGroup);
+        colHeaderGroup.DisplayIndex = colHeader.DisplayIndex;            // 放在「標題」前面：上層、下層由左到右
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
 
@@ -377,6 +380,13 @@ public partial class GridColumnsDialog : Form
         Width = 180,
         ToolTipText = "雙擊設定：執行時這一欄的文字變成藍色底線，點一下就用那一列的值開啟畫面（可以依條件開不同畫面）；右鍵清除",
     };
+    private readonly DataGridViewTextBoxColumn colHeaderGroup = new()
+    {
+        DataPropertyName = "HeaderGroup",
+        HeaderText = "群組標題",
+        Width = 90,
+        ToolTipText = "兩層標題的上面一層：相鄰的欄位填一樣的名稱（例如「設計」），執行時合併成一格橫跨這幾欄；空白 = 標題佔滿上下兩層",
+    };
     private readonly ContextMenuStrip ctxClick = new();
     private readonly ToolStripMenuItem miEditClick = new("設定點擊開啟…");
     private readonly ToolStripMenuItem miClearClick = new("清除點擊開啟");
@@ -474,6 +484,7 @@ public partial class GridColumnsDialog : Form
         var added = columnTable.Rows[columnTable.Rows.Count - 1];
         if (IsPickerKind(added)) ShowPickerSummary(added);
         if (!c.IsCustom) added["Click"] = (object)GridCells.LinkSummary(ClickButtonOf(c)) ?? DBNull.Value;
+        added["HeaderGroup"] = (object)c.HeaderGroup ?? DBNull.Value;
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -588,6 +599,7 @@ public partial class GridColumnsDialog : Form
             var c = workColumns.First(x => x.Column == (string)row["Column"]);
             c.Visible = (bool)row["Visible"];
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(row["Header"])) ? c.Column : (string)row["Header"];
+            c.HeaderGroup = Convert.ToString(row["HeaderGroup"]).Trim() is { Length: > 0 } hg ? hg : null;
             c.Width = Math.Clamp(row["Width"] is int w ? w : 100, 30, 800);
             // JOIN 帶進來的欄位一律只顯示、不是主鍵（不能寫回關聯資料表）
             // 自訂欄位一律不存檔、類型不變
