@@ -150,6 +150,31 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         var btnJoin = new Button { Text = "JOIN 其他資料表…", Dock = DockStyle.Bottom, Height = 28 };
         btnJoin.Click += (s, e) => AddJoin();
         tabColumns.Controls.Add(btnJoin);
+        // 篩選：輸入部分文字只列出標題或欄位名稱有這段字的欄位（不分大小寫），Esc 清除
+        txtFilter = new TextBox { Dock = DockStyle.Top, PlaceholderText = "篩選欄位（標題或欄位名稱）", Margin = new Padding(0, 2, 0, 2) };
+        txtFilter.TextChanged += (s, e) => RefreshAvailable();
+        txtFilter.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Escape && txtFilter.Text.Length > 0)
+            {
+                txtFilter.Clear();
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Down && lstAvailable.Items.Count > 0)
+            {
+                lstAvailable.Focus();                      // 往下鍵進清單選欄位
+                lstAvailable.ClearSelected();
+                lstAvailable.SelectedIndex = 0;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Enter && lstAvailable.Items.Count == 1)
+            {
+                PlaceColumns(new List<GridColumnDefinition> { (GridColumnDefinition)lstAvailable.Items[0] }, NextFreePoint());   // 只剩一個時 Enter 直接加入
+                e.SuppressKeyPress = true;
+            }
+        };
+        tabColumns.Controls.Add(txtFilter);
+        txtFilter.BringToFront();                          // 排在說明文字下面、清單上面
         lstAvailable.BringToFront();                       // Fill 最後排版，才不會被按鈕蓋住
         // JOIN 帶進來的欄位按右鍵可以移除（確定時從 Grid 拿掉）
         var availableMenu = new ContextMenuStrip();
@@ -1298,12 +1323,19 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         lblHint.Text = $"  已移除 JOIN 欄位「{c.Header}」，按「確定」或「儲存」才會從 Grid 拿掉";
     }
 
-    /// <summary>左邊清單 = 還沒放上版面的欄位，依原本欄位順序</summary>
+    /// <summary>左邊「欄位」頁籤上方的篩選框</summary>
+    private TextBox txtFilter;
+
+    /// <summary>左邊清單 = 還沒放上版面的欄位，依原本欄位順序；有輸入篩選文字時只列出標題或欄位名稱有這段字的</summary>
     private void RefreshAvailable()
     {
+        string filter = txtFilter?.Text.Trim() ?? "";
+        bool Matches(GridColumnDefinition c) => filter.Length == 0
+            || (c.Header ?? "").Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || (c.Column ?? "").Contains(filter, StringComparison.OrdinalIgnoreCase);
         lstAvailable.BeginUpdate();
         lstAvailable.Items.Clear();
-        foreach (var c in columns.Where(c => !placed.ContainsKey(c) && !removedColumns.Contains(c))) lstAvailable.Items.Add(c);
+        foreach (var c in columns.Where(c => !placed.ContainsKey(c) && !removedColumns.Contains(c) && Matches(c))) lstAvailable.Items.Add(c);
         lstAvailable.EndUpdate();
     }
 
