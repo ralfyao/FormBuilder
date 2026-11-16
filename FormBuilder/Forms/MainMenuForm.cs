@@ -864,13 +864,19 @@ public partial class MainMenuForm : Form
             SysDb.RenameForm(SysContext.Connection, oldKey, newKey, title);
             Audit.Write(newKey, null, "重新命名", "FormKey=" + oldKey, $"「{item.Title ?? oldKey}」（{oldKey}）→「{title}」（{newKey}）");
             string note = RenameLocalFile(oldKey, newKey, title);
-            var refs = newKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase) ? new List<string>() : FormsReferencing(oldKey, published);
+            // 改了代號：其他畫面（含自己）的按鈕、點擊開啟、開窗選取指到舊代號的，自動改成新代號並重新發布
+            var problems = new List<string>();
+            var updated = newKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase) ? new List<string>()
+                        : UpdateReferences(oldKey, newKey, title, published, problems);
             SysContext.ReloadPermissions();
             LoadMenu();
-            if (note != null || refs.Count > 0)
-                MessageBox.Show("已重新命名。" + (note == null ? "" : Environment.NewLine + Environment.NewLine + note)
-                                + (refs.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + $"這些畫面的按鈕或開窗選取還指到舊代號「{oldKey}」，請到畫面設計改成「{newKey}」後重新發布："
-                                                          + Environment.NewLine + string.Join(Environment.NewLine, refs.Select(r => "　" + r))),
+            string nl = Environment.NewLine;
+            if (note != null || updated.Count > 0 || problems.Count > 0)
+                MessageBox.Show("已重新命名。" + (note == null ? "" : nl + nl + note)
+                                + (updated.Count == 0 ? "" : nl + nl + $"這些畫面原本指到舊代號「{oldKey}」，已自動改成「{newKey}」並重新發布："
+                                                             + nl + string.Join(nl, updated.Select(r => "　" + r)))
+                                + (problems.Count == 0 ? "" : nl + nl + $"這些畫面沒辦法自動更新，請到畫面設計把「{oldKey}」改成「{newKey}」後重新發布："
+                                                              + nl + string.Join(nl, problems.Select(r => "　" + r))),
                                 "重新命名");
         }
         catch (Exception ex)
@@ -973,6 +979,51 @@ public partial class MainMenuForm : Form
         {
             return $"本機的畫面定義檔 {oldPath} 沒有跟著改：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// 改代號後：已發布的畫面（含改名的這個）裡指到舊代號的地方改成新代號，重新發布；本機 Forms 資料夾裡同代號的畫面定義檔也一起改（不發布本機的修改）。
+    /// 回傳有更新的畫面「名稱（代號）：幾處」；讀不出來、發布失敗的寫進 problems
+    /// </summary>
+    private static List<string> UpdateReferences(string oldKey, string newKey, string newTitle, List<PublishedItem> published, List<string> problems)
+    {
+        var updated = new List<string>();
+        foreach (var p in published)
+        {
+            bool self = p.FormKey.Equals(oldKey, StringComparison.OrdinalIgnoreCase);
+            string key = self ? newKey : p.FormKey;           // 改名的畫面在系統裡已經是新代號
+            string title = self ? newTitle : p.Title ?? key;
+            try
+            {
+                string json = SysDb.LoadContent(SysContext.Connection, key);
+                if (json == null) continue;
+                var def = FormDefinition.FromJson(json);
+                int n = def.RenameFormReferences(oldKey, newKey);
+                if (n > 0)
+                {
+                    int version = SysDb.Publish(SysContext.Connection, key, "form", title, def.ToJson(), SysContext.User.UserId);
+                    Audit.Write(key, def.TableName, "發布", "FormKey=" + key, $"第 {version} 版（「{oldKey}」改代號為「{newKey}」，自動更新 {n} 處）");
+                    updated.Add($"{title}（{key}）：{n} 處");
+                }
+            }
+            catch (Exception ex)
+            {
+                problems.Add($"{title}（{key}）：{ex.Message}");
+            }
+            // 本機的畫面定義檔（設計中、可能還沒發布的版本）也一起改，下次設計、發布時才不會又指回舊代號
+            string local = Path.Combine(FormDefinition.DefaultFolder, key + ".json");
+            if (!File.Exists(local)) continue;
+            try
+            {
+                var def = FormDefinition.Load(local);
+                if (def.RenameFormReferences(oldKey, newKey) > 0) def.Save(local);
+            }
+            catch (Exception ex)
+            {
+                problems.Add($"本機 {local}：{ex.Message}");
+            }
+        }
+        return updated;
     }
 
     /// <summary>已發布的其他畫面裡，按鈕「開啟畫面」或欄位「開窗選取」指到這個代號的（回傳「名稱（代號）」）</summary>

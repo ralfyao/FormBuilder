@@ -58,7 +58,8 @@ public class FieldBox : DesignBox
         // 有設提示文字就顯示提示文字（跟執行時看到的一樣），沒有就顯示欄位名稱
         // 計算欄位顯示公式（沒有欄位名稱可以看）；資料表欄位設了公式就標 [公式]
         // 文字標籤靠右時變數名稱放前面，標籤文字才會貼著右緣（跟執行時的位置一樣）
-        input.Text = Field.IsTextLabel ? (Field.TextAlignment == LabelAlign.靠右 ? $"[{Field.Column}]  {Field.Label}" : $"{Field.Label}  [{Field.Column}]") : (Field.IsCalculated ? "= " + (Field.HasFormula ? Field.Formula : "（還沒設公式）")
+        input.Text = Field.IsTextLabel ? (Field.TextAlignment == LabelAlign.靠右 ? $"[{Field.Column}]  {Field.Label}" : $"{Field.Label}  [{Field.Column}]") : Field.IsVariable && !Field.HasFormula ? $"[{Field.Column}] 自建"
+                      : (Field.IsCalculated ? "= " + (Field.HasFormula ? Field.Formula : "（還沒設公式）")
                       : string.IsNullOrEmpty(Field.Placeholder) ? Field.Column : Field.Placeholder)
                    + (Field.HasFormula && !Field.IsCalculated ? " [公式]" : "")
                    + (Field.IsKey ? " [鍵]" : "") + (Field.IsJoin ? " [JOIN]" : Field.NoEntry ? " [只顯示]" : "") + (Field.IsReadOnly ? " [唯讀]" : "")

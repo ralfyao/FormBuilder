@@ -208,6 +208,39 @@ public class FormDefinition
         Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))
              .Where(c => c.Button != null).Select(c => c.Button);
 
+    /// <summary>
+    /// 畫面改代號（檔名）時：這個畫面裡指到舊代號的地方改成新代號（保留資料夾與副檔名），回傳改了幾處。
+    /// 包含按鈕 / 點擊開啟 / 清單按鈕的「開啟畫面」與「依條件開啟」、欄位的開窗畫面、清單的雙擊開啟畫面、Grid 欄位的開窗畫面
+    /// </summary>
+    public int RenameFormReferences(string oldKey, string newKey)
+    {
+        int count = 0;
+        string Fix(string file)
+        {
+            if (string.IsNullOrWhiteSpace(file)) return file;
+            string text = file.Trim();
+            if (!Path.GetFileNameWithoutExtension(text).Equals(oldKey, StringComparison.OrdinalIgnoreCase)) return file;
+            count++;
+            string dir = Path.GetDirectoryName(text), ext = Path.GetExtension(text);
+            return string.IsNullOrEmpty(dir) ? newKey + ext : Path.Combine(dir, newKey + ext);
+        }
+        foreach (var b in Buttons.Concat(Grids.SelectMany(g => g.EditButtons)).Concat(ColumnButtons())
+                                 .Concat(Grids.Where(g => g.EditPrint != null).Select(g => g.EditPrint))
+                                 .Concat(Grids.SelectMany(g => g.EditPrintMenu?.Buttons ?? new List<ButtonDefinition>())))
+        {
+            b.TargetForm = Fix(b.TargetForm);
+            if (string.IsNullOrWhiteSpace(b.TargetFormCases)) continue;
+            int before = count;
+            string cases = string.Join(Environment.NewLine, ButtonRunner.ParseFormCases(b.TargetFormCases).Select(c => ButtonRunner.FormatFormCase(c.Condition, Fix(c.File), c.Params)));
+            if (count > before) b.TargetFormCases = cases;     // 沒改到就不動（不重新排版使用者寫的文字）
+        }
+        foreach (var f in Fields) f.PickerForm = Fix(f.PickerForm);
+        foreach (var g in Grids) g.OpenForm = Fix(g.OpenForm);
+        foreach (var l in Grids.SelectMany(g => g.EditLists)) l.OpenForm = Fix(l.OpenForm);
+        foreach (var c in Grids.SelectMany(g => g.Columns.Concat(g.EditLists.SelectMany(l => l.Columns)))) c.EditPickerForm = Fix(c.EditPickerForm);
+        return count;
+    }
+
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
 
     public static FormDefinition FromJson(string json) => JsonSerializer.Deserialize<FormDefinition>(json, JsonOptions);
@@ -370,6 +403,13 @@ public class FieldDefinition : IPickerField
     [Category("計算"), DisplayName("計算欄位"), ReadOnly(true),
      Description("True = 工具箱加入的計算欄位，不對應資料表的欄位，只顯示公式算出來的值，不會存檔。資料表本身的欄位也可以設公式，算出來的值會存進資料庫")]
     public bool IsCalculated { get; set; }
+
+    /// <summary>自建欄位（工具箱加入、不對應資料表）：一直可以輸入，不查詢、不存檔，值給 SQL 的 @變數名稱 當參數</summary>
+    [Category("計算"), DisplayName("自建欄位"), ReadOnly(true),
+     Description("True = 工具箱加入的自建欄位，不對應資料表：沒連線也可以加，執行時一直可以輸入，不會存檔；"
+               + "SQL 清單、按鈕的 SQL、自訂查詢用 @變數名稱 取它的值（例如當查詢參數），改了值離開時有用到它的 SQL 清單會重查。"
+               + "開啟畫面時傳入同名的參數會帶進來當預設值")]
+    public bool IsVariable { get; set; }
 
     [Category("計算"), DisplayName("公式"),
      Description("用畫面上的欄位名稱和數字做 + - * /，可以用括號，例如：(達成客戶要求的能力 + 提升經營效能的企圖) * 0.5。"

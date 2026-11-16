@@ -156,6 +156,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             RoundedStyle.Place(body, input, new Rectangle(f.X + f.LabelWidth + 4, f.Y, Math.Max(f.Width, 30), Math.Max(f.Height, FieldDefinition.DefaultHeight)));   // 圓角外觀
             inputs[f] = input;
         }
+        HookVariables();
         focusOrder = InputHelper.ApplyFocusOrder(inputs);    // Tab / Enter 照畫面位置由左而右、由上而下
         // 欄位的開窗選取：瀏覽時不開（跟選取視窗按鈕一樣，輸入中、查詢中才能用）
         ButtonRunner.AttachPickers(inputs, b => { if (mode != Mode.Browse) OpenOtherForm(b); });
@@ -260,6 +261,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 + string.Join(Environment.NewLine, afterChangeProblems), "執行後動作", MessageBoxButtons.OK, MessageBoxIcon.Warning));
         // 停靠在下方的 Grid：WinForms 是「後加入的先停靠（最外側）」，所以倒著加，
         // 讓先放的 Grid 在最下面，跟設計畫面一樣
+        (GridDefinition Def, Control Host) topBottom = default;     // 最上面那個停靠在下方的 Grid（倒著加，第一個遇到的就是）
         foreach (var g in def.Grids.AsEnumerable().Reverse())
         {
             DataGridView grid = details.FirstOrDefault(p => p.Def == g)?.Grid ?? (g == listDef ? listGrid : sqlGrids.FirstOrDefault(x => x.Def == g).Grid);
@@ -269,7 +271,23 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 grid.Dock = DockStyle.Bottom;
                 grid.Height = g.Height;
             }
-            body.Controls.Add(RoundedGridHost.Wrap(grid));      // 圓角外框（位置、停靠方式由外框接手）
+            var host = RoundedGridHost.Wrap(grid);              // 圓角外框（位置、停靠方式由外框接手）
+            body.Controls.Add(host);
+            if (g.Dock == GridDock.Bottom && topBottom.Host == null) topBottom = (g, host);
+        }
+        // 視窗比設計時高（例如開在 ERP 系統的分頁、放大視窗）：最上面那個停靠在下方的 Grid 往上長，
+        // 上緣留在設計時的位置，不會整個掉到最下面、上面空一大塊；視窗比設計時矮就照設計的高度（捲動）
+        if (topBottom.Host != null)
+        {
+            var (bottomDef, bottomHost) = topBottom;
+            void FitBottom()
+            {
+                int extra = body.ClientSize.Height - def.Height;
+                int height = bottomDef.Height + Math.Max(0, extra);
+                if (bottomHost.Height != height) bottomHost.Height = height;
+            }
+            body.SizeChanged += (s, e) => FitBottom();
+            FitBottom();
         }
 
         ClientSize = new Size(Math.Max(def.Width + 20, 820), def.Height + 40 + statusStrip.Height);
@@ -601,7 +619,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var f in def.Fields.Where(f => !f.IsTextLabel))        // 文字標籤一直是顯示文字，不用切換能不能輸入
         {
             // 查詢時每個欄位都能下條件（計算欄位除外）；新增、修改時 NOENTRY、唯讀、自動編號、單頭 JOIN 與有公式的欄位不能輸入（唯讀、公式的值照樣存檔），修改時主鍵也不能改
-            bool editable = mode switch
+            bool editable = f.IsVariable && !f.HasFormula ? !f.IsReadOnly && !f.NoEntry : mode switch   // 自建欄位一直可以輸入
             {
                 Mode.Query => !f.IsCalculated,
                 Mode.Insert => !f.NoEntry && !f.IsIdentity && !f.IsReadOnly && !f.IsJoin && !f.HasFormula && !f.QueryOnly,
@@ -2131,8 +2149,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             // 自訂查詢的 SELECT 不一定有每個欄位，沒有的就空白
             // 只當查詢條件的欄位不顯示資料
-            foreach (var f in def.Fields.Where(f => !f.IsTextLabel))    // 文字標籤另外用執行後動作帶出
-                SetValue(f, !f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
+            foreach (var f in def.Fields.Where(f => !f.IsTextLabel && !(f.IsVariable && !results.Columns.Contains(f.Column))))    // 文字標籤另外用執行後動作帶出；自建欄位保留輸入的值
+                SetValue(f,!f.QueryOnly && results.Columns.Contains(f.Column) ? results.Rows[current][f.Column] : null);
             object ValueOf(string name)
             {
                 var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -2155,10 +2173,40 @@ public partial class RuntimeForm : Form, IRecordNavigator
         SyncList();
     }
 
-    /// <summary>重查 SQL 清單：@名稱 先取目前這筆單頭的值，再找畫面上的欄位、開啟時的傳入參數</summary>
-    private void LoadSqlLists()
+    /// <summary>
+    /// 自建欄位（不對應資料表的輸入欄位）：開啟時傳入同名的參數當預設值；
+    /// 值改了、離開欄位時，SQL 用到 @這個欄位 的 SQL 清單重查（當查詢參數用）
+    /// </summary>
+    private void HookVariables()
     {
-        foreach (var (g, grid) in sqlGrids)
+        foreach (var f in def.Fields.Where(f => f.IsVariable && !f.HasFormula))
+        {
+            if (openParams.TryGetValue(f.Column, out var value) && value != null && value != DBNull.Value) SetValue(f, value);
+            var input = inputs[f];
+            string last = Convert.ToString(GetValue(f));
+            void Changed()
+            {
+                string now = Convert.ToString(GetValue(f));
+                if (now == last) return;
+                last = now;
+                var uses = sqlGrids.Where(x => !string.IsNullOrWhiteSpace(x.Def.Sql) && ButtonRunner.ParameterNames(x.Def.Sql).Any(n => n.Equals(f.Column, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (uses.Count > 0) LoadSqlLists(uses);
+            }
+            input.Leave += (s, e) => Changed();
+            // 下拉選單、勾選框、日期、選項按鈕：選了就算數，不用等離開
+            if (input is ComboBox { DropDownStyle: ComboBoxStyle.DropDownList } cb) cb.SelectionChangeCommitted += (s, e) => Changed();
+            else if (input is CheckBox chk) chk.CheckedChanged += (s, e) => { if (chk.Focused) Changed(); };
+            else if (input is DateTimePicker dtp) dtp.CloseUp += (s, e) => Changed();
+            if (input is TextBox tb) tb.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) Changed(); };
+        }
+    }
+
+    /// <summary>重查 SQL 清單：@名稱 先取目前這筆單頭的值，再找畫面上的欄位、開啟時的傳入參數</summary>
+    private void LoadSqlLists() => LoadSqlLists(sqlGrids);
+
+    private void LoadSqlLists(IEnumerable<(GridDefinition Def, DataGridView Grid)> which)
+    {
+        foreach (var (g, grid) in which.ToList())
         {
             try
             {
@@ -2184,7 +2232,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void ClearInputs()
     {
-        foreach (var f in def.Fields.Where(f => !f.IsTextLabel)) SetValue(f, null);     // 文字標籤保留文字
+        foreach (var f in def.Fields.Where(f => !f.IsTextLabel && !f.IsVariable)) SetValue(f, null);     // 文字標籤保留文字，自建欄位保留輸入的值（查詢參數）
     }
 
     /// <summary>開啟時帶進來的參數填到同名的單頭欄位（JOIN、計算欄位除外）；有填到任何欄位回傳 true</summary>

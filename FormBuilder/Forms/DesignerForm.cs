@@ -129,6 +129,7 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
         btnReconnect.Click += (s, e) => Connect();
 
         // ---- 左上「工具箱」頁籤 ----
+        toolbox.AddEntry("Input", "自建欄位（不對應資料表）");
         toolbox.AddEntry("SqlList", "SQL 清單（唯讀明細）");
         toolbox.AddEntry("Calc", "計算欄位（公式）");
         toolbox.AddEntry("Label", "文字標籤 (Label)");
@@ -935,16 +936,44 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
         else if (kind == "SqlList") AddSqlList(location);
         else if (kind == "Calc") AddCalcField(location);
         else if (kind == "Label") AddTextLabel(location);
+        else if (kind == "Input") AddVariableField(location, InputKind.自動);
+    }
+
+    /// <summary>
+    /// 加入自建欄位：不對應資料表（沒連線、沒有單頭也可以加），執行時一直可以輸入、不存檔，
+    /// SQL 用 @變數名稱 取它的值（例如當 SQL 清單、自訂查詢的參數）；kind = 輸入方式（日期選擇、下拉選單…）
+    /// </summary>
+    private void AddVariableField(Point location, InputKind kind)
+    {
+        var (name, tip, minWidth) = kind == InputKind.自動 ? ("自建欄位", "", 0) : KindInfo(kind);
+        string prefix = kind == InputKind.自動 ? "參數" : name;
+        int n = 1;
+        var used = new HashSet<string>(UsedFieldNames(), StringComparer.OrdinalIgnoreCase);
+        while (used.Contains($"{prefix}{n}")) n++;
+        var field = new FieldDefinition
+        {
+            Column = $"{prefix}{n}",
+            DataType = kind switch { InputKind.日期選擇 => "date", InputKind.勾選框 => "bit", _ => "nvarchar" },
+            MaxLength = -1,
+            IsNullable = true,
+            IsCalculated = true,                                     // 不是資料表的欄位：不查詢、不存檔、不當條件
+            IsVariable = true,                                       // 但一直可以輸入
+            InputType = kind,
+            Label = name,
+            X = location.X,
+            Y = location.Y,
+            Width = Math.Max(160, minWidth),
+        };
+        def.Fields.Add(field);
+        SelectBox(AddNewFieldBox(field));
+        ApplyCanvasSize();
+        UpdateStatus($"已加入{name}「{field.Column}」：在屬性面板改「標籤」與「變數名稱」，SQL 用 @{field.Column} 取它的值"
+                     + (tip == "" ? "" : "；" + tip));
     }
 
     /// <summary>加入計算欄位：不對應資料表的欄位，依公式（畫面欄位、數字做加減乘除）算出來顯示，不會存檔</summary>
     private void AddCalcField(Point location)
     {
-        if (def.TableName == null)
-        {
-            MessageBox.Show("請先把單頭資料表的欄位拖到畫面上（決定單頭），再加入計算欄位。", "提醒");
-            return;
-        }
         using var dlg = new FormulaDialog(null, def.Fields);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         int n = 1;
@@ -1051,7 +1080,7 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
         var (name, tip, minWidth) = KindInfo(kind);
         if (def.TableName == null)
         {
-            MessageBox.Show($"請先把單頭資料表的欄位拖到畫面上（決定單頭），再加入{name}。", "提醒");
+            AddVariableField(location, kind);        // 還沒有單頭（或沒連線）：建自建欄位，可以當 SQL 的參數
             return;
         }
         var columns = (defTableColumns.Count > 0 ? defTableColumns : GetColumnsCached(def.TableSchema, def.TableName) ?? new List<ColumnInfo>())
@@ -1643,26 +1672,32 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
             {
                 // 先存檔（存失敗就不發布，免得發布出舊版），存完重找一次：剛存的畫面可能又多開了別的畫面
                 foreach (var (relatedKey, designer) in unsaved)
+                {
                     if (!designer.SaveForm(false))
                     {
                         MessageBox.Show($"畫面「{relatedKey}」存檔失敗，這次沒有發布。", "發布", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return false;
                     }
+                }
                 related = RelatedForms(def, currentFilePath, notes);
             }
             else
+            {
                 RelatedForms(def, currentFilePath, notes);                  // 只收集「找不到畫面定義檔」之類的提醒
+            }
             if (!withRelated)
                 notes.AddRange(unsaved.Select(u => $"畫面「{u.Key}」在畫面設計裡還有沒存的修改，沒有儲存也沒有發布"));
 
             int version = PublishOne(cs, key, def, currentFilePath, notes);
             var done = new List<string> { $"「{PublishTitle(def, key)}」（{key}）第 {version} 版" };
             if (withRelated)
+            {
                 foreach (var r in related)
                 {
                     done.Add($"「{PublishTitle(r.Def, r.Key)}」（{r.Key}）第 {PublishOne(cs, r.Key, r.Def, r.Path, notes)} 版");
                     if (OpenDesignerOf(r.Path) is { } designer) designer.publishedJson = designer.PublishComparable(designer.def);   // 那個設計視窗關閉時不用再問要不要發布
                 }
+            }
             else if (related.Count > 0)
             {
                 var published = SysDb.LoadPublished(cs, "form").Select(p => p.FormKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
