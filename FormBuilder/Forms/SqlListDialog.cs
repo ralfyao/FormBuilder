@@ -126,6 +126,13 @@ public partial class SqlListDialog : Form
         var btnJoin = new Button { Text = "JOIN 其他資料表…", AutoSize = true, Height = 30 };
         btnJoin.Click += (s, e) => AddJoin();
         bottomPanel.Controls.Add(btnJoin);
+        // 標題顏色（同 Grid 屬性的標題底色、群組標題底色、標題文字顏色），按確定才寫回
+        headerBack = grid.HeaderBackColor;
+        headerGroupBack = grid.HeaderGroupBackColor;
+        headerFore = grid.HeaderForeColor;
+        AddColorButton("標題文字顏色", () => headerFore, c => headerFore = c, isText: true);
+        AddColorButton("群組標題底色", () => headerGroupBack, c => headerGroupBack = c, isText: false);
+        AddColorButton("標題底色", () => headerBack, c => headerBack = c, isText: false);
         btnReadColumns.Click += (s, e) => ReadColumns();
         btnOk.Click += (s, e) => Apply();
         if (allowLayout)
@@ -252,6 +259,9 @@ public partial class SqlListDialog : Form
         }).Concat(grid.Columns.Where(c => c.ScreenOnly && !c.IsCustom && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
           .ToList();                                       // 編輯視窗的畫面欄位保留（SQL 有同名欄位時就用 SQL 的）
         grid.Joins = workJoins.Where(j => grid.Columns.Any(c => c.JoinAlias == j.Alias)).ToList();
+        grid.HeaderBackColor = headerBack;
+        grid.HeaderGroupBackColor = headerGroupBack;
+        grid.HeaderForeColor = headerFore;
         return true;
     }
 
@@ -322,6 +332,47 @@ public partial class SqlListDialog : Form
         clickButtons[name] = edited;
         RefreshClickText();
     }
+
+    private Color headerBack, headerGroupBack, headerFore;
+
+    /// <summary>
+    /// 下方的標題顏色按鈕：按鈕本身顯示目前的顏色（底色畫在按鈕底色、文字顏色畫在字上），
+    /// 按下去選「選擇顏色…」或「恢復預設」
+    /// </summary>
+    private void AddColorButton(string text, Func<Color> get, Action<Color> set, bool isText)
+    {
+        var button = new Button { Text = text, AutoSize = true, Height = 30, UseVisualStyleBackColor = true };
+        void Show()
+        {
+            var color = get();
+            if (isText) button.ForeColor = color.IsEmpty ? SystemColors.ControlText : color;
+            else
+            {
+                button.UseVisualStyleBackColor = color.IsEmpty;
+                button.BackColor = color.IsEmpty ? SystemColors.Control : color;
+                button.ForeColor = color.IsEmpty ? SystemColors.ControlText : ButtonLook.Contrast(color);
+            }
+            toolTip.SetToolTip(button, $"{text}：{(color.IsEmpty ? "預設" : ColorText.Format(color))}（按一下選顏色或恢復預設）");
+        }
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("選擇顏色…", null, (s, e) =>
+        {
+            using var dlg = new ColorDialog { FullOpen = true, Color = get().IsEmpty ? (isText ? Color.Black : SystemColors.Control) : get() };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            set(dlg.Color);
+            Show();
+        });
+        menu.Items.Add("恢復預設", null, (s, e) =>
+        {
+            set(Color.Empty);
+            Show();
+        });
+        button.Click += (s, e) => menu.Show(button, new Point(0, button.Height));
+        Show();
+        bottomPanel.Controls.Add(button);
+    }
+
+    private readonly ToolTip toolTip = new();
 
     /// <summary>群組標題（欄位名稱 → 群組）：讀取欄位重建清單時保留</summary>
     private readonly Dictionary<string, string> headerGroups = new(StringComparer.OrdinalIgnoreCase);

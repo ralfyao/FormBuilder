@@ -1140,7 +1140,11 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
     /// <summary>設定 SQL 清單的 SQL 與欄位（沿用畫面設計的 SQL 清單設定視窗）；按確定回傳 true</summary>
     private bool EditSqlList(EditListDefinition l)
     {
-        var temp = new GridDefinition { Title = l.Title, Sql = l.Sql, Columns = l.Columns, Joins = l.Joins };
+        var temp = new GridDefinition
+        {
+            Title = l.Title, Sql = l.Sql, Columns = l.Columns, Joins = l.Joins,
+            HeaderBackColorHtml = l.HeaderBackColorHtml, HeaderGroupBackColorHtml = l.HeaderGroupBackColorHtml, HeaderForeColorHtml = l.HeaderForeColorHtml,
+        };
         // 可以用的 @參數：編輯視窗的欄位；有上層清單時是上層清單的欄位
         var parent = ParentListOf(l);
         var names = parent != null ? parent.Columns.Select(c => c.Column) : columns.Select(c => c.Column);
@@ -1150,6 +1154,9 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         l.Sql = temp.Sql;
         l.Columns = temp.Columns;
         l.Joins = temp.Joins;
+        l.HeaderBackColorHtml = temp.HeaderBackColorHtml;            // 標題顏色
+        l.HeaderGroupBackColorHtml = temp.HeaderGroupBackColorHtml;
+        l.HeaderForeColorHtml = temp.HeaderForeColorHtml;
         return true;
     }
 
