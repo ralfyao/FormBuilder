@@ -1144,6 +1144,7 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         {
             Title = l.Title, Sql = l.Sql, Columns = l.Columns, Joins = l.Joins,
             HeaderBackColorHtml = l.HeaderBackColorHtml, HeaderGroupBackColorHtml = l.HeaderGroupBackColorHtml, HeaderForeColorHtml = l.HeaderForeColorHtml,
+            AfterChange = l.AfterChange,
         };
         // 可以用的 @參數：編輯視窗的欄位；有上層清單時是上層清單的欄位
         var parent = ParentListOf(l);
@@ -1157,6 +1158,7 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         l.HeaderBackColorHtml = temp.HeaderBackColorHtml;            // 標題顏色
         l.HeaderGroupBackColorHtml = temp.HeaderGroupBackColorHtml;
         l.HeaderForeColorHtml = temp.HeaderForeColorHtml;
+        l.AfterChange = temp.AfterChange;                            // 執行後動作
         return true;
     }
 

@@ -126,6 +126,17 @@ public partial class SqlListDialog : Form
         var btnJoin = new Button { Text = "JOIN 其他資料表…", AutoSize = true, Height = 30 };
         btnJoin.Click += (s, e) => AddJoin();
         bottomPanel.Controls.Add(btnJoin);
+        // 執行後動作（同 Grid 屬性的「執行後動作」）：清單載入、變動後計算，結果填進畫面上的欄位或文字標籤
+        afterChange = grid.AfterChange;
+        masterNames = names;
+        var btnAfter = new Button { AutoSize = true, Height = 30 };
+        void ShowAfter() => btnAfter.Text = string.IsNullOrWhiteSpace(afterChange) ? "執行後動作…" : "執行後動作（已設定）…";
+        ShowAfter();
+        btnAfter.Click += (s, e) =>
+        {
+            if (EditAfterChange()) ShowAfter();
+        };
+        bottomPanel.Controls.Add(btnAfter);
         // 標題顏色（同 Grid 屬性的標題底色、群組標題底色、標題文字顏色），按確定才寫回
         headerBack = grid.HeaderBackColor;
         headerGroupBack = grid.HeaderGroupBackColor;
@@ -259,6 +270,7 @@ public partial class SqlListDialog : Form
         }).Concat(grid.Columns.Where(c => c.ScreenOnly && !c.IsCustom && !columnTable.Rows.Cast<DataRow>().Any(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))))
           .ToList();                                       // 編輯視窗的畫面欄位保留（SQL 有同名欄位時就用 SQL 的）
         grid.Joins = workJoins.Where(j => grid.Columns.Any(c => c.JoinAlias == j.Alias)).ToList();
+        grid.AfterChange = string.IsNullOrWhiteSpace(afterChange) ? null : afterChange.Trim();
         grid.HeaderBackColor = headerBack;
         grid.HeaderGroupBackColor = headerGroupBack;
         grid.HeaderForeColor = headerFore;
@@ -334,6 +346,77 @@ public partial class SqlListDialog : Form
     }
 
     private Color headerBack, headerGroupBack, headerFore;
+    private string afterChange;
+    private readonly List<string> masterNames;
+
+    /// <summary>
+    /// 執行後動作：一行一組「畫面欄位=公式」，例如 AMOUNT=SUM(金額)、標籤8=AVG(單價)；
+    /// 清單的資料載入或變動就計算，結果填進畫面上的欄位或文字標籤。按確定回傳 true
+    /// </summary>
+    private bool EditAfterChange()
+    {
+        dgvColumns.EndEdit();
+        using var form = new Form
+        {
+            Text = $"執行後動作：{(string.IsNullOrWhiteSpace(txtTitle.Text) ? "SQL 清單" : txtTitle.Text.Trim())}",
+            Font = new Font("Microsoft JhengHei UI", 9F),
+            Size = new Size(640, 440),
+            MinimumSize = new Size(480, 300),
+            StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+        };
+        var box = new TextBox { Dock = DockStyle.Fill, Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical,
+                                Font = new Font("Consolas", 10F), Text = (afterChange ?? "").ReplaceLineEndings() };
+        // 插入清單欄位：包成 SUM(欄位)（可以改成 AVG / COUNT / MAX / MIN）；插入畫面欄位：放在等號左邊當結果要填的地方
+        var cboList = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+        cboList.Items.Add("插入清單欄位 SUM(…)");
+        cboList.Items.AddRange(columnTable.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Deleted)
+                                          .Select(r => (object)(string)r["Column"]).ToArray());
+        cboList.SelectedIndex = 0;
+        cboList.SelectedIndexChanged += (s, e) =>
+        {
+            if (cboList.SelectedIndex <= 0) return;
+            box.SelectedText = $"SUM({cboList.SelectedItem})";
+            cboList.SelectedIndex = 0;
+            box.Focus();
+        };
+        var cboScreen = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+        cboScreen.Items.Add("插入畫面欄位 / 文字標籤…");
+        cboScreen.Items.AddRange(masterNames.Distinct(StringComparer.OrdinalIgnoreCase).Cast<object>().ToArray());
+        cboScreen.SelectedIndex = 0;
+        cboScreen.SelectedIndexChanged += (s, e) =>
+        {
+            if (cboScreen.SelectedIndex <= 0) return;
+            box.SelectedText = cboScreen.SelectedItem.ToString();
+            cboScreen.SelectedIndex = 0;
+            box.Focus();
+        };
+        var hint = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 70,
+            ForeColor = SystemColors.GrayText,
+            Text = "清單的資料載入、變動就計算，結果填進畫面上的欄位或文字標籤。一行一組「畫面欄位=公式」，例如：\n"
+                 + "AMOUNT=SUM(金額)        標籤8=AVG(單價)\n"
+                 + "可以用 SUM、AVG、COUNT、MAX、MIN、STD、STDP，括號裡是清單的欄位；也可以用畫面上的欄位和數字做 + - * /。清空 = 不計算。",
+        };
+        var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(4) };
+        top.Controls.AddRange(new Control[] { cboScreen, cboList });
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 40, Padding = new Padding(4) };
+        var btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 80 };
+        var btnOk = new Button { Text = "確定", DialogResult = DialogResult.OK, Width = 80 };
+        bottom.Controls.AddRange(new Control[] { btnCancel, btnOk });
+        form.Controls.Add(box);
+        form.Controls.Add(top);
+        form.Controls.Add(hint);
+        form.Controls.Add(bottom);
+        form.CancelButton = btnCancel;
+        form.Shown += (s, e) => { box.SelectionStart = box.TextLength; box.SelectionLength = 0; };   // 不要整段選取，一打字就蓋掉
+        if (form.ShowDialog(this) != DialogResult.OK) return false;
+        afterChange = string.IsNullOrWhiteSpace(box.Text) ? null : box.Text.Trim().ReplaceLineEndings("\r\n");
+        return true;
+    }
 
     /// <summary>
     /// 下方的標題顏色按鈕：按鈕本身顯示目前的顏色（底色畫在按鈕底色、文字顏色畫在字上），

@@ -970,7 +970,8 @@ public static class GridCells
         return b.Action switch
         {
             ButtonAction.開啟畫面 when string.IsNullOrWhiteSpace(b.TargetForm) => cases > 0 ? $"依條件開啟（{cases} 個條件）" : "開啟畫面（還沒設定畫面）",
-            ButtonAction.開啟畫面 => "開啟 " + Path.GetFileName(b.TargetForm.Trim()) + (cases > 0 ? $"，依條件 {cases} 個" : ""),
+            ButtonAction.開啟畫面 => "開啟 " + Path.GetFileName(b.TargetForm.Trim()) + (b.OpenAsEditWindow ? " 的編輯視窗" : "")
+                                     + (cases > 0 ? $"，依條件 {cases} 個" : ""),
             ButtonAction.執行SQL => "執行 SQL",
             ButtonAction.列印報表 => "列印 " + Path.GetFileName(b.PrintTemplate ?? ""),
             _ => b.Action.ToString(),

@@ -238,6 +238,7 @@ public class CustomColumnDialog : Form
         var chkNewWindow = new CheckBox { Text = "開新視窗（獨立的視窗，不開在 ERP 外框的分頁）", AutoSize = true };
         var chkInsert = new CheckBox { Text = "開啟後直接新增（傳入參數填進同名欄位）", AutoSize = true };
         var chkRefresh = new CheckBox { Text = "存檔後關閉並重新整理這個清單", AutoSize = true };
+        var chkEditWindow = new CheckBox { Text = "直接開編輯視窗（不打開整個畫面，用傳入參數查到的那一筆開對方的編輯視窗）", AutoSize = true };
 
         var top = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true, Padding = new Padding(8, 8, 8, 0) };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -253,7 +254,7 @@ public class CustomColumnDialog : Form
         formRow.Controls.Add(txtForm);
         formRow.Controls.Add(btnBrowse);
         var options = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty };
-        options.Controls.AddRange(new Control[] { chkNewWindow, chkInsert, chkRefresh });
+        options.Controls.AddRange(new Control[] { chkEditWindow, chkNewWindow, chkInsert, chkRefresh });
         var hint = new Label
         {
             AutoSize = true,
@@ -301,9 +302,12 @@ public class CustomColumnDialog : Form
             chkNewWindow.Checked = copy.OpenInNewWindow;
             chkInsert.Checked = copy.OpenAsInsert;
             chkRefresh.Checked = copy.RefreshAfterSave;
+            chkEditWindow.Checked = copy.OpenAsEditWindow;
             bool open = copy.Action == ButtonAction.開啟畫面;
             txtSql.Enabled = copy.Action == ButtonAction.執行SQL;
-            txtForm.Enabled = btnBrowse.Enabled = txtParams.Enabled = btnParams.Enabled = chkNewWindow.Enabled = chkInsert.Enabled = chkRefresh.Enabled = open;
+            txtForm.Enabled = btnBrowse.Enabled = txtParams.Enabled = btnParams.Enabled = chkEditWindow.Enabled = open;
+            // 直接開編輯視窗：不開整個畫面，開新視窗、直接新增、存檔後關閉都用不到（關閉編輯視窗後一律重新讀取）
+            chkNewWindow.Enabled = chkInsert.Enabled = chkRefresh.Enabled = open && !copy.OpenAsEditWindow;
             txtTemplate.Text = copy.PrintTemplate ?? "（還沒有設計）";
             txtTemplate.Enabled = btnTemplate.Enabled = copy.Action == ButtonAction.列印報表;
             loading = false;
@@ -330,6 +334,7 @@ public class CustomColumnDialog : Form
         chkNewWindow.CheckedChanged += (s, e) => Changed(() => copy.OpenInNewWindow = chkNewWindow.Checked);
         chkInsert.CheckedChanged += (s, e) => Changed(() => copy.OpenAsInsert = chkInsert.Checked);
         chkRefresh.CheckedChanged += (s, e) => Changed(() => copy.RefreshAfterSave = chkRefresh.Checked);
+        chkEditWindow.CheckedChanged += (s, e) => Changed(() => copy.OpenAsEditWindow = chkEditWindow.Checked);
         grid.PropertyValueChanged += (s, e) => LoadSimple();
         btnTemplate.Click += (s, e) =>
         {

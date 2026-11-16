@@ -1374,8 +1374,10 @@ public class ButtonDefinition
                + "對方畫面沒有新增權限時照一般方式打開。有回傳對應（選取視窗）時沒有作用")]
     public bool OpenAsInsert { get; set; }
 
-    /// <summary>清單「雙擊開啟畫面」設了「直接開編輯視窗」：對方畫面不顯示，用傳入參數查到的第一筆直接開它的編輯視窗</summary>
-    [Browsable(false), JsonIgnore]
+    /// <summary>直接開編輯視窗：對方畫面不顯示，用傳入參數查到的第一筆直接開它的編輯視窗（清單「雙擊開啟畫面」的同名設定也是用這個）</summary>
+    [Category("開啟畫面"), DisplayName("直接開編輯視窗"), DefaultValue(false),
+     Description("True = 不打開整個畫面，用傳入參數查到的第一筆直接開對方畫面的編輯視窗（雙擊清單開的那個單筆視窗），關閉後這邊重新讀取；"
+               + "對方畫面要有單頭清單。有回傳對應（選取視窗）時沒有作用")]
     public bool OpenAsEditWindow { get; set; }
 
     [Category("開啟畫面"), DisplayName("開新視窗"),
