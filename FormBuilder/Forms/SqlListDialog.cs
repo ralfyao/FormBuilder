@@ -40,6 +40,9 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Click", typeof(string));       // 點擊開啟的說明（顯示用，設定在 clickButtons）
         columnTable.Columns.Add("HeaderGroup", typeof(string)); // 群組標題（兩層標題的上面一層）
         columnTable.Columns.Add("ForeColor", typeof(string));   // 這一欄資料的文字顏色（#RRGGBB）
+        columnTable.Columns.Add("AfterSelect", typeof(string)); // 欄位的執行後動作（SQL 摘要，顯示用；設定在 afterSelects）
+        foreach (var c in grid.Columns.Where(GridCells.HasAfterSelect))
+            afterSelects[c.Column] = (c.EditAfterSelectSql, c.EditAfterSelectParams, c.EditAfterSelectReturn);
         foreach (var c in grid.Columns.Where(c => c.IsLink)) clickButtons[c.Column] = c.Button;
         foreach (var c in grid.Columns.Where(c => !string.IsNullOrWhiteSpace(c.HeaderGroup))) headerGroups[c.Column] = c.HeaderGroup;
         foreach (var c in grid.Columns.Where(c => !string.IsNullOrWhiteSpace(c.ForeColorHtml))) foreColors[c.Column] = c.ForeColorHtml;
@@ -63,6 +66,12 @@ public partial class SqlListDialog : Form
         dgvColumns.Columns.Add(colHeaderGroup);
         var colHeaderText = dgvColumns.Columns.Cast<DataGridViewColumn>().FirstOrDefault(x => x.DataPropertyName == "Header");
         if (colHeaderText != null) colHeaderGroup.DisplayIndex = colHeaderText.DisplayIndex;   // 放在「標題」前面
+        dgvColumns.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = "AfterSelect", HeaderText = "執行後動作", ReadOnly = true, Width = 200,
+            ToolTipText = "雙擊設定：執行時這一欄可以輸入（淡黃底），輸入完離開格子就執行 SQL（@欄位 取那一列的值，可以 UPDATE 資料表），"
+                        + "SQL 查出來的第一筆依回傳對應帶進同一列的其他欄位",
+        });
         var colFore = GridCells.AddColorColumn(dgvColumns, "ForeColor", "文字顏色", "Grid 上這一欄資料的文字顏色：雙擊選顏色，按 Delete 清除（= 預設顏色）");
         if (colHeaderText != null) colFore.DisplayIndex = colHeaderText.DisplayIndex + 1;     // 放在「標題」後面
         RefreshClickText(keep: false);
@@ -116,6 +125,7 @@ public partial class SqlListDialog : Form
                 if (c.CellType == GridCellKind.按鈕) EditButton(c);
             }
             else if (dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "Click") EditClick(name);   // 一般欄位：設定點擊開啟
+            else if (dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "AfterSelect") EditAfterSelect(name);
         };
 
         // 自訂欄位：例如勾選框，使用者打勾的列，按「執行SQL」按鈕時只對打勾的列執行
@@ -130,7 +140,8 @@ public partial class SqlListDialog : Form
         afterChange = grid.AfterChange;
         masterNames = names;
         var btnAfter = new Button { AutoSize = true, Height = 30 };
-        void ShowAfter() => btnAfter.Text = string.IsNullOrWhiteSpace(afterChange) ? "執行後動作…" : "執行後動作（已設定）…";
+        // 跟欄位的「執行後動作」分開叫：這個是整個清單的加總計算（Grid 屬性的執行後動作）
+        void ShowAfter() => btnAfter.Text = string.IsNullOrWhiteSpace(afterChange) ? "清單加總計算…" : "清單加總計算（已設定）…";
         ShowAfter();
         btnAfter.Click += (s, e) =>
         {
@@ -264,6 +275,10 @@ public partial class SqlListDialog : Form
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
             c.HeaderGroup = group;
             c.ForeColorHtml = fore;
+            var after = afterSelects.TryGetValue(name, out var a) ? a : default;          // 欄位的執行後動作
+            c.EditAfterSelectSql = after.Sql;
+            c.EditAfterSelectParams = after.Params;
+            c.EditAfterSelectReturn = after.Return;
             c.Button = clickButtons.TryGetValue(name, out var click) ? click : null;   // 點擊開啟
             if (c.Button != null) c.Button.Text = c.Header;
             return c;
@@ -460,6 +475,29 @@ public partial class SqlListDialog : Form
     /// <summary>群組標題（欄位名稱 → 群組）：讀取欄位重建清單時保留</summary>
     private readonly Dictionary<string, string> headerGroups = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>欄位的執行後動作（欄位名稱 → SQL、傳入參數、回傳對應），按確定才寫回欄位</summary>
+    private readonly Dictionary<string, (string Sql, string Params, string Return)> afterSelects = new(StringComparer.OrdinalIgnoreCase);
+
+    private static string SqlSummary(string sql) =>
+        string.IsNullOrWhiteSpace(sql) ? null : string.Join(" ", sql.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()));
+
+    /// <summary>欄位的執行後動作：跟單身欄位設定的「執行後動作」同一個設定視窗；SQL 清空 = 取消</summary>
+    private void EditAfterSelect(string name)
+    {
+        if (name == null || customColumns.ContainsKey(name)) return;
+        dgvColumns.EndEdit();
+        var row = columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => r.RowState != DataRowState.Deleted && ((string)r["Column"]).Equals(name, StringComparison.OrdinalIgnoreCase));
+        string title = Convert.ToString(row?["Header"]) is { Length: > 0 } h ? h : name;
+        afterSelects.TryGetValue(name, out var current);
+        var rowColumns = columnTable.Rows.Cast<DataRow>().Where(r => r.RowState != DataRowState.Deleted).Select(r => (string)r["Column"])
+                                    .Where(n => !(customColumns.TryGetValue(n, out var cc) && cc.CellType == GridCellKind.按鈕));
+        using var dlg = new AfterSelectDialog(title, current.Sql, current.Params, current.Return, rowColumns);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (string.IsNullOrWhiteSpace(dlg.Sql)) afterSelects.Remove(name);
+        else afterSelects[name] = (dlg.Sql, dlg.Params, dlg.Return);
+        RefreshClickText();
+    }
+
     /// <summary>文字顏色（欄位名稱 → #RRGGBB）：讀取欄位重建清單時保留</summary>
     private readonly Dictionary<string, string> foreColors = new(StringComparer.OrdinalIgnoreCase);
 
@@ -488,6 +526,7 @@ public partial class SqlListDialog : Form
                 r["Click"] = clickButtons.TryGetValue((string)r["Column"], out var b) ? GridCells.LinkSummary(b) : DBNull.Value;
                 r["HeaderGroup"] = headerGroups.TryGetValue((string)r["Column"], out var g) ? g : DBNull.Value;
                 r["ForeColor"] = foreColors.TryGetValue((string)r["Column"], out var fc) ? fc : DBNull.Value;
+                r["AfterSelect"] = afterSelects.TryGetValue((string)r["Column"], out var a) ? SqlSummary(a.Sql) : DBNull.Value;
             }
     }
 

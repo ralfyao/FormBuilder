@@ -64,6 +64,8 @@ public class EditListView
         GridCells.HookHeaderGroups(Grid, list.HeaderGroupBackColor); // 有群組標題時顯示兩層標題
         // 輸入中：欄位的執行後動作（@名稱 先取同一列，再取編輯視窗上的欄位）
         GridCells.HookAfterSelect(Grid, connectionString, name => MasterValueOf?.Invoke(name));
+        // SQL 清單：設了執行後動作的欄位可以輸入，離開格子就執行（其他欄位唯讀）
+        if (list.IsSqlList) GridCells.EnableAfterSelectColumns(Grid);
         if (list.FillColumns) GridCells.ApplyFill(Grid);            // 欄寬依比例填滿整個清單
         else if (list.AutoFitColumns) GridCells.HookAutoFit(Grid); // 列出明細後欄寬依內容調整
         Host = RoundedGridHost.Wrap(Grid);

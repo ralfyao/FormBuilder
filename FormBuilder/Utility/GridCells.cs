@@ -376,6 +376,32 @@ public static class GridCells
         }
     }
 
+    /// <summary>欄位有設「執行後動作」（輸入完離開格子就執行 SQL）</summary>
+    public static bool HasAfterSelect(GridColumnDefinition c) =>
+        c is { IsCustom: false, HasFormula: false } && !string.IsNullOrWhiteSpace(c.EditAfterSelectSql);
+
+    /// <summary>
+    /// SQL 清單（唯讀）：設了「執行後動作」的欄位可以輸入（淡黃底），輸入完離開格子就執行（見 HookAfterSelect），
+    /// 查出來的值帶進同一列的其他欄位；其他欄位維持唯讀。沒有這種欄位回傳 false（Grid 不動）
+    /// </summary>
+    public static bool EnableAfterSelectColumns(DataGridView grid)
+    {
+        var columns = grid.Columns.Cast<DataGridViewColumn>().Where(col => col.Tag is GridColumnDefinition c && HasAfterSelect(c)).ToList();
+        if (columns.Count == 0) return false;
+        grid.ReadOnly = false;
+        foreach (DataGridViewColumn col in grid.Columns) col.ReadOnly = !columns.Contains(col);
+        foreach (var col in columns) col.DefaultCellStyle.BackColor = Color.LightYellow;
+        // 查出來的資料表欄位可能是唯讀的（例如運算式）：可以輸入的欄位、執行後動作要帶值的欄位都打開
+        grid.DataSourceChanged += (s, e) =>
+        {
+            var table = grid.DataSource as DataTable ?? (grid.DataSource as DataView)?.Table;
+            if (table == null) return;
+            foreach (var col in columns)
+                if (table.Columns.Contains(col.DataPropertyName)) table.Columns[col.DataPropertyName].ReadOnly = false;
+        };
+        return true;
+    }
+
     /// <summary>各 Grid 的執行後動作（HookAfterSelect 登記，開窗選取帶回值後依欄位執行）</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Action<int, int>> afterSelectRunners = new();
 

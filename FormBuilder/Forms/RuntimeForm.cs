@@ -206,6 +206,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             sqlGrids.Add((g, sqlGrid));
             HookSqlListOpen(g, sqlGrid);
             GridCells.HookCustomColumns(sqlGrid, (c, row) => RunRowButton(c, row, LoadSqlLists), def.ConnectionString);
+            // 欄位的執行後動作：那一欄可以輸入，輸入完離開格子就執行 SQL，查出來的值帶進同一列（@名稱 那一列沒有的取畫面上的欄位）
+            if (GridCells.EnableAfterSelectColumns(sqlGrid)) GridCells.HookAfterSelect(sqlGrid, def.ConnectionString, MasterValueOf);
         }
         listDef = def.Grids.FirstOrDefault(g => g.IsMasterList && !g.IsSqlList);
         if (listDef != null)
@@ -580,11 +582,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             bool editing = mode == Mode.Modify && perm.Modify;
             var editable = editing ? InlineEditColumns(g) : new HashSet<string>();
-            grid.ReadOnly = editable.Count == 0;
+            bool afterSelect = g.Columns.Any(GridCells.HasAfterSelect);           // 有執行後動作的欄位一直可以輸入
+            grid.ReadOnly = editable.Count == 0 && !afterSelect;
             grid.BackgroundColor = editable.Count > 0 ? SystemColors.Window : SystemColors.Control;
             foreach (DataGridViewColumn col in grid.Columns)
             {
-                bool can = col.Tag is GridColumnDefinition c && editable.Contains(c.Column);
+                bool can = col.Tag is GridColumnDefinition c && (editable.Contains(c.Column) || GridCells.HasAfterSelect(c));
                 col.ReadOnly = !can;
                 col.DefaultCellStyle.BackColor = can ? Color.LightYellow : Color.Empty;
                 if (can && grid.DataSource is DataTable t && t.Columns.Contains(col.DataPropertyName)) t.Columns[col.DataPropertyName].ReadOnly = false;
