@@ -60,7 +60,8 @@ public class EditListView
                 MessageBox.Show($"第 {e.RowIndex + 1} 列「{Grid.Columns[e.ColumnIndex].HeaderText}」的格式不正確。", "提醒");
         };
         GridCells.HookThousands(Grid);                               // 金額欄位顯示千分號
-        GridCells.HookHeaderGroups(Grid);                            // 有群組標題時顯示兩層標題
+        GridCells.ApplyHeaderColors(Grid, list.HeaderBackColor, list.HeaderForeColor);
+        GridCells.HookHeaderGroups(Grid, list.HeaderGroupBackColor); // 有群組標題時顯示兩層標題
         // 輸入中：欄位的執行後動作（@名稱 先取同一列，再取編輯視窗上的欄位）
         GridCells.HookAfterSelect(Grid, connectionString, name => MasterValueOf?.Invoke(name));
         if (list.FillColumns) GridCells.ApplyFill(Grid);            // 欄寬依比例填滿整個清單

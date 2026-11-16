@@ -39,8 +39,10 @@ public partial class SqlListDialog : Form
         columnTable.Columns.Add("Source", typeof(string));
         columnTable.Columns.Add("Click", typeof(string));       // 點擊開啟的說明（顯示用，設定在 clickButtons）
         columnTable.Columns.Add("HeaderGroup", typeof(string)); // 群組標題（兩層標題的上面一層）
+        columnTable.Columns.Add("ForeColor", typeof(string));   // 這一欄資料的文字顏色（#RRGGBB）
         foreach (var c in grid.Columns.Where(c => c.IsLink)) clickButtons[c.Column] = c.Button;
         foreach (var c in grid.Columns.Where(c => !string.IsNullOrWhiteSpace(c.HeaderGroup))) headerGroups[c.Column] = c.HeaderGroup;
+        foreach (var c in grid.Columns.Where(c => !string.IsNullOrWhiteSpace(c.ForeColorHtml))) foreColors[c.Column] = c.ForeColorHtml;
         workJoins = grid.Joins.Select(j => j.Clone()).ToList();
         foreach (var c in grid.Columns.Where(c => c.IsJoin && workJoins.Any(j => j.Alias == c.JoinAlias))) joinColumns[c.Column] = c;
         foreach (var c in grid.Columns.Where(c => c.IsCustom)) customColumns[c.Column] = c;
@@ -61,6 +63,8 @@ public partial class SqlListDialog : Form
         dgvColumns.Columns.Add(colHeaderGroup);
         var colHeaderText = dgvColumns.Columns.Cast<DataGridViewColumn>().FirstOrDefault(x => x.DataPropertyName == "Header");
         if (colHeaderText != null) colHeaderGroup.DisplayIndex = colHeaderText.DisplayIndex;   // 放在「標題」前面
+        var colFore = GridCells.AddColorColumn(dgvColumns, "ForeColor", "文字顏色", "Grid 上這一欄資料的文字顏色：雙擊選顏色，按 Delete 清除（= 預設顏色）");
+        if (colHeaderText != null) colFore.DisplayIndex = colHeaderText.DisplayIndex + 1;     // 放在「標題」後面
         RefreshClickText(keep: false);
         dgvColumns.DataSource = columnTable;
         // 點擊開啟：右鍵清除
@@ -89,6 +93,7 @@ public partial class SqlListDialog : Form
         dgvColumns.KeyDown += (s, e) =>
         {
             if (e.KeyCode != Keys.Delete || dgvColumns.IsCurrentCellInEditMode) return;
+            if (dgvColumns.CurrentCell?.OwningColumn.DataPropertyName == "ForeColor") return;   // 文字顏色欄的 Delete 是清除顏色
             if (dgvColumns.CurrentRow?.DataBoundItem is DataRowView v && joinColumns.TryGetValue((string)v.Row["Column"], out var jc))
             {
                 RemoveJoin(jc.JoinAlias);
@@ -104,6 +109,7 @@ public partial class SqlListDialog : Form
         dgvColumns.CellDoubleClick += (s, e) =>
         {
             if (e.RowIndex < 0 || dgvColumns.Rows[e.RowIndex].DataBoundItem is not DataRowView v) return;
+            if (e.ColumnIndex >= 0 && dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "ForeColor") return;   // 文字顏色欄雙擊是選顏色
             string name = (string)v.Row["Column"];
             if (customColumns.TryGetValue(name, out var c))
             {
@@ -219,9 +225,11 @@ public partial class SqlListDialog : Form
         {
             string name = (string)r["Column"];
             string group = Convert.ToString(r["HeaderGroup"]).Trim() is { Length: > 0 } hg ? hg : null;
+            string fore = Convert.ToString(r["ForeColor"]) is { Length: > 0 } fcText ? fcText : null;
             if (customColumns.TryGetValue(name, out var custom))
             {
                 custom.HeaderGroup = group;
+                custom.ForeColorHtml = fore;
                 custom.Visible = r["Visible"] is true;
                 custom.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
                 custom.Width = r["Width"] is int cw && cw > 0 ? Math.Clamp(cw, 30, 600) : 90;
@@ -237,6 +245,7 @@ public partial class SqlListDialog : Form
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(r["Header"])) ? name : Convert.ToString(r["Header"]);
             c.Width = r["Width"] is int w && w > 0 ? Math.Clamp(w, 30, 600) : 100;
             c.HeaderGroup = group;
+            c.ForeColorHtml = fore;
             c.Button = clickButtons.TryGetValue(name, out var click) ? click : null;   // 點擊開啟
             if (c.Button != null) c.Button.Text = c.Header;
             return c;
@@ -317,6 +326,9 @@ public partial class SqlListDialog : Form
     /// <summary>群組標題（欄位名稱 → 群組）：讀取欄位重建清單時保留</summary>
     private readonly Dictionary<string, string> headerGroups = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>文字顏色（欄位名稱 → #RRGGBB）：讀取欄位重建清單時保留</summary>
+    private readonly Dictionary<string, string> foreColors = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>清單上改過的群組標題記到 headerGroups（重建清單前呼叫）</summary>
     private void KeepHeaderGroups()
     {
@@ -326,6 +338,8 @@ public partial class SqlListDialog : Form
                 string name = (string)r["Column"];
                 if (Convert.ToString(r["HeaderGroup"]).Trim() is { Length: > 0 } g) headerGroups[name] = g;
                 else headerGroups.Remove(name);
+                if (Convert.ToString(r["ForeColor"]) is { Length: > 0 } fc) foreColors[name] = fc;
+                else foreColors.Remove(name);
             }
     }
 
@@ -339,6 +353,7 @@ public partial class SqlListDialog : Form
             {
                 r["Click"] = clickButtons.TryGetValue((string)r["Column"], out var b) ? GridCells.LinkSummary(b) : DBNull.Value;
                 r["HeaderGroup"] = headerGroups.TryGetValue((string)r["Column"], out var g) ? g : DBNull.Value;
+                r["ForeColor"] = foreColors.TryGetValue((string)r["Column"], out var fc) ? fc : DBNull.Value;
             }
     }
 

@@ -2276,7 +2276,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         GridCells.HookEffectiveColumn(grid);
         GridCells.HookThousands(grid);                                // 金額欄位顯示千分號
-        GridCells.HookHeaderGroups(grid);                             // 有群組標題時顯示兩層標題
+        GridCells.ApplyHeaderColors(grid, g.HeaderBackColor, g.HeaderForeColor);
+        GridCells.HookHeaderGroups(grid, g.HeaderGroupBackColor);     // 有群組標題時顯示兩層標題
         if (g.FillColumns) GridCells.ApplyFill(grid);                 // 欄寬依比例填滿整個 Grid
         else if (g.AutoFitColumns) GridCells.HookAutoFit(grid);      // 查出資料後欄寬依內容調整
         grid.DataError += (s, e) =>

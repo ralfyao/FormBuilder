@@ -715,6 +715,23 @@ public class GridDefinition
                + "設了這個「欄寬符合資料」就不作用")]
     public bool FillColumns { get; set; }
 
+    // 標題顏色存成文字（#RRGGBB 或顏色名稱）；空白 = 系統預設
+    [Browsable(false)] public string HeaderBackColorHtml { get; set; }
+    [Browsable(false)] public string HeaderGroupBackColorHtml { get; set; }
+    [Browsable(false)] public string HeaderForeColorHtml { get; set; }
+
+    [JsonIgnore, Category("標題"), DisplayName("標題底色"), DefaultValue(typeof(Color), ""),
+     Description("欄位標題的底色；沒設定（Empty）= 系統預設的灰色。在屬性上按右鍵選「重設」可以還原")]
+    public Color HeaderBackColor { get => ColorText.Parse(HeaderBackColorHtml); set => HeaderBackColorHtml = ColorText.Format(value); }
+
+    [JsonIgnore, Category("標題"), DisplayName("群組標題底色"), DefaultValue(typeof(Color), ""),
+     Description("兩層標題上面那一層（群組標題）的底色；沒設定 = 跟「標題底色」一樣。群組標題在欄位設定的「群組標題」欄填")]
+    public Color HeaderGroupBackColor { get => ColorText.Parse(HeaderGroupBackColorHtml); set => HeaderGroupBackColorHtml = ColorText.Format(value); }
+
+    [JsonIgnore, Category("標題"), DisplayName("標題文字顏色"), DefaultValue(typeof(Color), ""),
+     Description("欄位標題（含群組標題）的文字顏色；沒設定 = 黑色")]
+    public Color HeaderForeColor { get => ColorText.Parse(HeaderForeColorHtml); set => HeaderForeColorHtml = ColorText.Format(value); }
+
     /// <summary>單身資料表的全部欄位（Visible 決定是否顯示在 Grid 上）；JOIN 帶進來的欄位也在這裡（JoinAlias 不是空的）</summary>
     [Browsable(false)]
     public List<GridColumnDefinition> Columns { get; set; } = new();
@@ -1048,6 +1065,23 @@ public class EditListDefinition
      Description("True = 欄位寬度依設計時的欄寬比例伸縮，剛好填滿整個清單（跟 DataGridView 的 AutoSizeColumnsMode = Fill 一樣），視窗變寬變窄時跟著調整；"
                + "設了這個「欄寬符合資料」就不作用")]
     public bool FillColumns { get; set; }
+
+    // 標題顏色（同 GridDefinition）
+    [Browsable(false)] public string HeaderBackColorHtml { get; set; }
+    [Browsable(false)] public string HeaderGroupBackColorHtml { get; set; }
+    [Browsable(false)] public string HeaderForeColorHtml { get; set; }
+
+    [JsonIgnore, Category("標題"), DisplayName("標題底色"), DefaultValue(typeof(Color), ""),
+     Description("欄位標題的底色；沒設定（Empty）= 系統預設的灰色。在屬性上按右鍵選「重設」可以還原")]
+    public Color HeaderBackColor { get => ColorText.Parse(HeaderBackColorHtml); set => HeaderBackColorHtml = ColorText.Format(value); }
+
+    [JsonIgnore, Category("標題"), DisplayName("群組標題底色"), DefaultValue(typeof(Color), ""),
+     Description("兩層標題上面那一層（群組標題）的底色；沒設定 = 跟「標題底色」一樣")]
+    public Color HeaderGroupBackColor { get => ColorText.Parse(HeaderGroupBackColorHtml); set => HeaderGroupBackColorHtml = ColorText.Format(value); }
+
+    [JsonIgnore, Category("標題"), DisplayName("標題文字顏色"), DefaultValue(typeof(Color), ""),
+     Description("欄位標題（含群組標題）的文字顏色；沒設定 = 黑色")]
+    public Color HeaderForeColor { get => ColorText.Parse(HeaderForeColorHtml); set => HeaderForeColorHtml = ColorText.Format(value); }
 
     /// <summary>明細資料表的全部欄位（Visible 決定是否顯示在清單上）；JOIN 帶進來的欄位也在這裡</summary>
     [Browsable(false)]
@@ -1465,6 +1499,13 @@ public class GridColumnDefinition
     /// 空白 = 這一欄的標題佔滿上下兩層；整個 Grid 都沒填就維持一層標題
     /// </summary>
     public string HeaderGroup { get; set; }
+
+    /// <summary>這一欄資料的文字顏色（#RRGGBB 或顏色名稱）；空白 = 預設（點擊開啟的欄位是藍色）</summary>
+    public string ForeColorHtml { get; set; }
+
+    [JsonIgnore]
+    public Color ForeColor => ColorText.Parse(ForeColorHtml);
+
     public int Width { get; set; } = 100;
     public bool Visible { get; set; } = true;
     /// <summary>只顯示，不能輸入，也不寫回資料庫</summary>

@@ -85,10 +85,13 @@ public partial class GridColumnsDialog : Form
         columnTable.Columns.Add("PickReturn", typeof(string));
         columnTable.Columns.Add("Click", typeof(string));                // 點擊開啟的說明（顯示用，設定在 editedButtons / 欄位的 Button）
         columnTable.Columns.Add("HeaderGroup", typeof(string));          // 群組標題（兩層標題的上面一層）
+        columnTable.Columns.Add("ForeColor", typeof(string));            // 這一欄資料的文字顏色（#RRGGBB）
         foreach (var c in workColumns) AddColumnRow(c);
         dgvColumns.Columns.Add(colClick);
         dgvColumns.Columns.Add(colHeaderGroup);
         colHeaderGroup.DisplayIndex = colHeader.DisplayIndex;            // 放在「標題」前面：上層、下層由左到右
+        var colFore = GridCells.AddColorColumn(dgvColumns, "ForeColor", "文字顏色", "Grid 上這一欄資料的文字顏色：雙擊選顏色，按 Delete 清除（= 預設顏色）");
+        colFore.DisplayIndex = colHeader.DisplayIndex + 1;               // 放在「標題」後面
         dgvColumns.DataSource = columnTable;
         dgvColumns.DataError += (s, e) => { MessageBox.Show("寬度請輸入數字。", "提醒"); e.Cancel = true; };
 
@@ -180,6 +183,7 @@ public partial class GridColumnsDialog : Form
         };
         dgvColumns.CellDoubleClick += (s, e) =>
         {
+            if (e.ColumnIndex >= 0 && dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "ForeColor") return;   // 文字顏色欄雙擊是選顏色
             if (e.RowIndex >= 0 && e.ColumnIndex == colCellOptions.Index && IsPickerRow(e.RowIndex))
             {
                 EditPicker(e.RowIndex);
@@ -485,6 +489,7 @@ public partial class GridColumnsDialog : Form
         if (IsPickerKind(added)) ShowPickerSummary(added);
         if (!c.IsCustom) added["Click"] = (object)GridCells.LinkSummary(ClickButtonOf(c)) ?? DBNull.Value;
         added["HeaderGroup"] = (object)c.HeaderGroup ?? DBNull.Value;
+        added["ForeColor"] = (object)c.ForeColorHtml ?? DBNull.Value;
     }
 
     /// <summary>JOIN 其他資料表：選資料表、關聯條件、要帶進來的欄位，帶進來的欄位加到清單最後面</summary>
@@ -600,6 +605,7 @@ public partial class GridColumnsDialog : Form
             c.Visible = (bool)row["Visible"];
             c.Header = string.IsNullOrWhiteSpace(Convert.ToString(row["Header"])) ? c.Column : (string)row["Header"];
             c.HeaderGroup = Convert.ToString(row["HeaderGroup"]).Trim() is { Length: > 0 } hg ? hg : null;
+            c.ForeColorHtml = Convert.ToString(row["ForeColor"]) is { Length: > 0 } fc ? fc : null;
             c.Width = Math.Clamp(row["Width"] is int w ? w : 100, 30, 800);
             // JOIN 帶進來的欄位一律只顯示、不是主鍵（不能寫回關聯資料表）
             // 自訂欄位一律不存檔、類型不變

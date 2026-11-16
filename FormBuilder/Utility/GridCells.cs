@@ -34,6 +34,7 @@ public static class GridCells
         col.HeaderText = c.Header;
         col.Width = c.Width;
         col.Tag = c;
+        if (!c.ForeColor.IsEmpty) col.DefaultCellStyle.ForeColor = c.ForeColor;       // 欄位設定的「文字顏色」
         if (c.IsCustom) col.ReadOnly = true;                    // 自訂欄位由 HookCustomColumns 處理點擊，不進入格子編輯
         if (c.HasFormula)
         {
@@ -724,6 +725,61 @@ public static class GridCells
         };
     }
 
+    /// <summary>
+    /// 欄位設定清單上的「文字顏色」欄（對應資料表的 property 欄，存 #RRGGBB）：格子用那個顏色顯示「■ 色碼」，
+    /// 雙擊開調色盤選顏色，按 Delete 清除（= 預設顏色）
+    /// </summary>
+    public static DataGridViewTextBoxColumn AddColorColumn(DataGridView list, string property, string header, string toolTip)
+    {
+        var col = new DataGridViewTextBoxColumn { DataPropertyName = property, HeaderText = header, ReadOnly = true, Width = 90, ToolTipText = toolTip };
+        list.Columns.Add(col);
+        DataRow RowAt(int index) => index >= 0 && index < list.Rows.Count && list.Rows[index].DataBoundItem is DataRowView v ? v.Row : null;
+        list.CellFormatting += (s, e) =>
+        {
+            if (e.ColumnIndex != col.Index || e.RowIndex < 0) return;
+            var color = ColorText.Parse(Convert.ToString(e.Value));
+            if (color.IsEmpty) return;
+            e.Value = "■ " + Convert.ToString(e.Value);
+            e.CellStyle.ForeColor = color;
+            e.CellStyle.SelectionForeColor = color;
+            e.FormattingApplied = true;
+        };
+        list.CellDoubleClick += (s, e) =>
+        {
+            if (e.ColumnIndex != col.Index || RowAt(e.RowIndex) is not { } row) return;
+            using var dlg = new ColorDialog { FullOpen = true, Color = ColorText.Parse(Convert.ToString(row[property])) is { IsEmpty: false } c ? c : Color.Black };
+            if (dlg.ShowDialog(list.FindForm()) == DialogResult.OK) row[property] = ColorText.Format(dlg.Color);
+        };
+        list.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode != Keys.Delete || list.CurrentCell?.ColumnIndex != col.Index || RowAt(list.CurrentCell.RowIndex) is not { } row) return;
+            row[property] = DBNull.Value;
+            e.Handled = true;                              // 不要變成其他 Delete 動作（移除欄位、JOIN）
+        };
+        return col;
+    }
+
+    /// <summary>兩層標題的框線顏色</summary>
+    private static readonly Color HeaderBorderColor = Color.FromArgb(160, 160, 160);
+
+    /// <summary>標題底色、文字顏色（Grid 的「標題底色」「標題文字顏色」）；都是 Empty 就不動，維持系統樣式</summary>
+    public static void ApplyHeaderColors(DataGridView grid, Color back, Color fore)
+    {
+        if (back.IsEmpty && fore.IsEmpty) return;
+        grid.EnableHeadersVisualStyles = false;            // 系統樣式會蓋掉自訂的底色
+        grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+        if (!back.IsEmpty)
+        {
+            grid.ColumnHeadersDefaultCellStyle.BackColor = back;
+            grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = back;   // 點標題時不要變色
+        }
+        if (!fore.IsEmpty)
+        {
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = fore;
+            grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = fore;
+        }
+    }
+
     private static string HeaderGroupOf(DataGridViewColumn col) =>
         col.Tag is GridColumnDefinition { HeaderGroup: { } g } && g.Trim().Length > 0 ? g.Trim() : null;
 
@@ -731,9 +787,11 @@ public static class GridCells
     /// 兩層標題：有填「群組標題」的欄位，上面一層畫群組名稱（相鄰同名的欄位合併成一格），下面一層畫原本的欄位標題；
     /// 沒填的欄位標題佔滿兩層。整個 Grid 都沒填就不動。欄寬、欄位順序、左右捲動、字型改了都重畫
     /// </summary>
-    public static void HookHeaderGroups(DataGridView grid)
+    /// <param name="groupBackColor">群組（上面一層）的底色；Empty = 跟標題底色一樣</param>
+    public static void HookHeaderGroups(DataGridView grid, Color groupBackColor = default)
     {
         if (!grid.Columns.Cast<DataGridViewColumn>().Any(c => HeaderGroupOf(c) != null)) return;
+        grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;   // 標題框線跟群組的框線一樣是細線
         Font HeaderFont() => grid.ColumnHeadersDefaultCellStyle.Font ?? grid.Font;
         int Band() => TextRenderer.MeasureText("國Ag", HeaderFont()).Height + 10;   // 上面一層（群組）的高度
         const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
@@ -762,6 +820,7 @@ public static class GridCells
             if (grid.ColumnHeadersHeight != height)
             {
                 grid.ColumnHeadersHeight = height;
+                grid.Invalidate();                         // 標題變高、資料列往下移：整個重畫，才不會留下舊位置的列
             }
         }
         Resize();
@@ -792,13 +851,22 @@ public static class GridCells
         static TextFormatFlags Align(DataGridViewContentAlignment a) =>
             Wrap | (a.ToString().EndsWith("Center") ? TextFormatFlags.HorizontalCenter : a.ToString().EndsWith("Right") ? TextFormatFlags.Right : TextFormatFlags.Left);
 
-        // 有群組的欄位：背景照常畫滿，標題字畫在下面一層（上面一層由 Paint 畫群組）
+        // 標題自己畫（底色、框線、字）：有群組的欄位字畫在下面一層（上面一層由 Paint 畫群組），沒群組的字佔滿兩層
         grid.CellPainting += (s, e) =>
         {
-            if (e.RowIndex != -1 || e.ColumnIndex < 0 || HeaderGroupOf(grid.Columns[e.ColumnIndex]) == null) return;
-            e.PaintBackground(e.ClipBounds, false);
-            var lower = new Rectangle(e.CellBounds.X + 3, e.CellBounds.Y + top, e.CellBounds.Width - 6, e.CellBounds.Height - top);
+            if (e.RowIndex != -1 || e.ColumnIndex < 0) return;
             var col = grid.Columns[e.ColumnIndex];
+            bool grouped = HeaderGroupOf(col) != null;
+            using (var back = new SolidBrush(e.CellStyle.BackColor.IsEmpty ? SystemColors.Control : e.CellStyle.BackColor))
+                e.Graphics.FillRectangle(back, e.CellBounds);
+            using (var border = new Pen(HeaderBorderColor))
+            {
+                e.Graphics.DrawLine(border, e.CellBounds.Right - 1, e.CellBounds.Top, e.CellBounds.Right - 1, e.CellBounds.Bottom - 1);
+                e.Graphics.DrawLine(border, e.CellBounds.Left, e.CellBounds.Bottom - 1, e.CellBounds.Right - 1, e.CellBounds.Bottom - 1);
+                e.Graphics.DrawLine(border, e.CellBounds.Left, e.CellBounds.Top, e.CellBounds.Right - 1, e.CellBounds.Top);
+            }
+            int offset = grouped ? top : 0;
+            var lower = new Rectangle(e.CellBounds.X + 3, e.CellBounds.Y + offset, e.CellBounds.Width - 7, e.CellBounds.Height - offset - 1);
             if (col.HeaderCell.SortGlyphDirection != SortOrder.None)
             {
                 // 排序方向的小三角形：畫在右邊，字就不要壓到
@@ -824,8 +892,8 @@ public static class GridCells
             int band = top;
             var style = grid.ColumnHeadersDefaultCellStyle;
             var columns = grid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex).ToList();
-            using var back = new SolidBrush(style.BackColor.IsEmpty ? SystemColors.Control : style.BackColor);
-            using var pen = new Pen(grid.GridColor);
+            using var back = new SolidBrush(!groupBackColor.IsEmpty ? groupBackColor : style.BackColor.IsEmpty ? SystemColors.Control : style.BackColor);
+            using var pen = new Pen(HeaderBorderColor);
             for (int i = 0; i < columns.Count;)
             {
                 string group = HeaderGroupOf(columns[i]);
@@ -844,8 +912,8 @@ public static class GridCells
                     {
                         var top = new Rectangle(rect.X, rect.Y, rect.Width - 1, band - 1);
                         e.Graphics.FillRectangle(back, top);
-                        e.Graphics.DrawLine(pen, top.Left, top.Bottom, top.Right, top.Bottom);      // 群組和欄位標題之間的線
-                        e.Graphics.DrawLine(pen, top.Right, top.Top, top.Right, top.Bottom);        // 群組右邊的線
+                        e.Graphics.DrawRectangle(pen, top.X, top.Y, top.Width, top.Height);         // 群組的框線（上、下、左、右）
+                        if (top.X > 0) e.Graphics.DrawLine(pen, top.X - 1, top.Top, top.X - 1, top.Bottom);   // 接到左邊欄位的框線
                         TextRenderer.DrawText(e.Graphics, group, HeaderFont(), top,
                                               style.ForeColor.IsEmpty ? SystemColors.ControlText : style.ForeColor,
                                               TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
@@ -872,12 +940,12 @@ public static class GridCells
             row >= 0 && row < grid.Rows.Count && !grid.Rows[row].IsNewRow && Convert.ToString(grid[column, row].FormattedValue)?.Trim() is { Length: > 0 };
         grid.CellFormatting += (s, e) =>
         {
-            if (e.RowIndex < 0 || LinkOf(grid, e.ColumnIndex) == null) return;
+            if (e.RowIndex < 0 || LinkOf(grid, e.ColumnIndex) is not { } c) return;
             var font = e.CellStyle.Font ?? grid.Font;
             if (underline == null || !underline.FontFamily.Equals(font.FontFamily) || underline.Size != font.Size)
                 underline = new Font(font, font.Style | FontStyle.Underline);
             e.CellStyle.Font = underline;
-            e.CellStyle.ForeColor = Color.FromArgb(0, 102, 204);
+            e.CellStyle.ForeColor = c.ForeColor.IsEmpty ? Color.FromArgb(0, 102, 204) : c.ForeColor;   // 有設文字顏色就用設定的
         };
         grid.CellMouseEnter += (s, e) =>
         {
