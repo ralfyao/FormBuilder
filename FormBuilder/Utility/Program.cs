@@ -1,4 +1,4 @@
-namespace FormBuilder;
+﻿namespace FormBuilder;
 
 internal static class Program
 {
@@ -31,7 +31,9 @@ internal static class Program
 
         var config = SysConfig.Load();
         if (Updater.CheckAndUpdate(config)) return;          // 有新版本：關閉程式，由更新程序換檔後重新啟動
-        if (config.GetConnection() == null)
+        // 第一次使用：還沒有連線；或有連線（IT 放的 config.json、連線設定檔）但資料庫還沒初始化
+        // （資料庫不存在、沒有系統資料表、還沒有帳號）→ 系統設定精靈：建資料庫、建系統資料表、建第一個管理者
+        if (config.GetConnection() is not { } cs || SysDb.NeedsSetup(cs))
         {
             using var setup = new SysSetupForm(config);
             if (setup.ShowDialog() != DialogResult.OK) return;

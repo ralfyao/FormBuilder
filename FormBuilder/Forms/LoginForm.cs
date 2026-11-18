@@ -62,10 +62,10 @@ public partial class LoginForm : Form
         if (!VerifyAdminForSetup()) return;
         using var dlg = new ConnectionStringDialog(config.GetConnection());     // 直接改連線字串（也可以按「連線精靈」組）
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (!SysSetupForm.PrepareDatabase(this, dlg.ConnectionString)) return;     // 資料庫不存在時問要不要建、建系統資料表
         int users;
         try
         {
-            SysDb.EnsureSchema(dlg.ConnectionString);
             users = SysDb.UserCount(dlg.ConnectionString);
         }
         catch (Exception ex)

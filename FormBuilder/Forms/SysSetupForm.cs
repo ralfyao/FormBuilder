@@ -1,4 +1,4 @@
-namespace FormBuilder;
+﻿namespace FormBuilder;
 
 /// <summary>
 /// 系統設定精靈（第一次使用、或登入畫面按「系統設定」）：選系統資料庫、建立資料表、
@@ -39,15 +39,59 @@ public partial class SysSetupForm : Form
         txtConn.Text = connection == null ? "" : ConnectionDialog.Describe(connection);    // 不顯示資料庫路徑；要改按「設定連線」
         grpAdmin.Enabled = true;
         if (connection == null) return;
+        if (!PrepareDatabase(this, connection)) return;
         try
         {
-            SysDb.EnsureSchema(connection);
             if (SysDb.UserCount(connection) > 0) HideAdminGroup();
             else ShowAdminGroup();
         }
         catch (Exception ex)
         {
-            MessageBox.Show("建立系統資料表失敗（請確認帳號有建立資料表的權限）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("讀取系統帳號失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    /// <summary>
+    /// 初始化系統資料庫：連線指定的資料庫還不存在時問要不要建立（用同一組帳號在 master 建），
+    /// 再建立系統資料表（SYS_User、SYS_Role、SYS_Form、SYS_Menu、SYS_Permission、SYS_AuditLog…，已經有的不動、缺的欄位補上）。
+    /// 成功回傳 true；失敗會顯示原因
+    /// </summary>
+    public static bool PrepareDatabase(IWin32Window owner, string connection)
+    {
+        try
+        {
+            if (SysDb.MissingDatabase(connection) is { } name)
+            {
+                if (MessageBox.Show(owner, $"資料庫「{name}」還不存在，要建立嗎？{Environment.NewLine}{Environment.NewLine}"
+                                           + "建立後會接著建立系統需要的資料表（帳號、角色、權限、畫面、選單、稽核紀錄）。",
+                                    "初始化系統資料庫", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return false;
+                try
+                {
+                    SysDb.CreateDatabase(connection);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(owner, $"建立資料庫「{name}」失敗（請確認帳號有建立資料庫的權限，或請 DBA 先建好）：" + ex.Message,
+                                    "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(owner, "連不到系統資料庫：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+        try
+        {
+            SysDb.EnsureSchema(connection);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(owner, "建立系統資料表失敗（請確認帳號有建立資料表的權限）：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
 
@@ -83,9 +127,9 @@ public partial class SysSetupForm : Form
             MessageBox.Show("請先設定系統資料庫連線。", Text);
             return;
         }
+        if (!PrepareDatabase(this, connection)) return;
         try
         {
-            SysDb.EnsureSchema(connection);
             if (SysDb.UserCount(connection) == 0)
             {
                 string id = txtAdminId.Text.Trim(), name = txtAdminName.Text.Trim();
@@ -108,7 +152,8 @@ public partial class SysSetupForm : Form
                 SysDb.WriteAudit(connection, id, null, "SYS_User", "新增帳號", "UserId=" + id, "系統設定精靈建立的第一個管理者");
                 config.LastUser = id;
             }
-            config.SetConnection(connection);
+            // 連線是 IT 的設定檔給的、沒有改：不寫進本機（照樣從原本的地方讀）
+            if (connection != config.GetConnection()) config.SetConnection(connection);
             config.UpdateSource = string.IsNullOrWhiteSpace(txtUpdate.Text) ? null : txtUpdate.Text.Trim();
             config.Save();
             DialogResult = DialogResult.OK;

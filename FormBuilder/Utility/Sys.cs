@@ -564,6 +564,52 @@ public static class SysDb
 
     public static int UserCount(string cs) => Convert.ToInt32(Query(cs, "SELECT COUNT(*) FROM dbo.SYS_User").Rows[0][0]);
 
+    /// <summary>連線字串指定的資料庫還不存在（SQL Server 錯誤 4060）時回傳資料庫名稱；存在回傳 null，其他連線錯誤照樣丟出</summary>
+    public static string MissingDatabase(string cs)
+    {
+        string name = new SqlConnectionStringBuilder(cs).InitialCatalog;
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        try
+        {
+            using var conn = Open(cs);
+            return null;
+        }
+        catch (SqlException ex) when (ex.Number == 4060)
+        {
+            return name;
+        }
+    }
+
+    /// <summary>用同一組帳號密碼連到 master 建立連線字串指定的資料庫（帳號要有建立資料庫的權限）</summary>
+    public static void CreateDatabase(string cs)
+    {
+        var b = new SqlConnectionStringBuilder(cs);
+        string name = b.InitialCatalog;
+        b.InitialCatalog = "master";
+        using (var conn = Open(b.ConnectionString))
+        using (var cmd = new SqlCommand($"CREATE DATABASE [{name.Replace("]", "]]")}]", conn))
+            cmd.ExecuteNonQuery();
+        SqlConnection.ClearAllPools();                     // 剛才連不上的連線不要留在連線池
+    }
+
+    /// <summary>
+    /// 這個系統資料庫還要初始化嗎：資料庫不存在、沒有系統資料表、或還沒有任何帳號 = true；
+    /// 連不上（伺服器、帳號密碼錯）回傳 false，交給登入畫面顯示錯誤
+    /// </summary>
+    public static bool NeedsSetup(string cs)
+    {
+        try
+        {
+            if (MissingDatabase(cs) != null) return true;
+            if (Query(cs, "SELECT OBJECT_ID('dbo.SYS_User')").Rows[0][0] == DBNull.Value) return true;
+            return UserCount(cs) == 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     // ================= 使用者 =================
 
     /// <summary>
