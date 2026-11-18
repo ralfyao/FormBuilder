@@ -16,12 +16,12 @@ public class GridPickerDialog : Form, IPickerHost
 
     /// <param name="rowColumns">同一列的欄位（回傳值可以填進去的）</param>
     /// <param name="masterColumns">單頭（或編輯視窗）的欄位：傳入參數也可以用</param>
-    public GridPickerDialog(string column, string header, string form, string parameters, string returnMap,
+    public GridPickerDialog(string column, string header, string form, string parameters, string returnMap, bool multi,
                             IEnumerable<string> rowColumns, IEnumerable<string> masterColumns)
     {
         this.rowColumns = rowColumns.ToList();
         paramColumns = this.rowColumns.Concat(masterColumns ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        Settings = new PickerSettings { Column = column, PickerForm = form, PickerParams = parameters, PickerReturn = returnMap };
+        Settings = new PickerSettings { Column = column, PickerForm = form, PickerParams = parameters, PickerReturn = returnMap, PickerMulti = multi };
         Text = $"開窗選取：{header}";
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = MaximizeBox = false;
@@ -32,7 +32,7 @@ public class GridPickerDialog : Form, IPickerHost
 
         var hint = new Label
         {
-            Text = "執行時點格子右邊的「…」或按 F4 開啟選取視窗，選一筆後依回傳對應把值帶回同一列。編輯視窗上的這個欄位也用同一個設定。",
+            Text = "執行時點格子右邊的「…」或按 F4 開啟選取視窗，選好後依回傳對應把值帶回同一列（可以多選時，其他筆各新增一列）。編輯視窗上的這個欄位也用同一個設定。",
             Dock = DockStyle.Top, Height = 38, ForeColor = SystemColors.GrayText,
         };
         propertyGrid.SelectedObject = Settings;
@@ -56,6 +56,7 @@ public class GridPickerDialog : Form, IPickerHost
         btnClear.Click += (s, e) =>
         {
             Settings.PickerForm = Settings.PickerParams = Settings.PickerReturn = null;
+            Settings.PickerMulti = false;
             propertyGrid.Refresh();
         };
     }
@@ -85,5 +86,10 @@ public class GridPickerDialog : Form, IPickerHost
          Description("選好後帶回哪些值：「這一列的欄位=對方欄位」，可以一次帶回多個欄位，例如：沖帳碼=單號, 原幣收帳金額=未沖金額。"
                    + "空白 = 只帶回這個欄位（對方畫面同名的欄位）；只寫對方的欄位名稱 = 把它帶回這個欄位")]
         public string PickerReturn { get; set; }
+
+        [DisplayName("4. 可以多選"),
+         Description("True = 選取視窗可以一次選多筆（Ctrl / Shift 點選）：第一筆帶回目前這一列，其他每一筆各新增一列，同樣依回傳對應帶值、有執行後動作的照樣執行。"
+                   + "單頭清單要打開「允許直接新增」才能新增列。編輯視窗上的這個欄位還是只選一筆")]
+        public bool PickerMulti { get; set; }
     }
 }

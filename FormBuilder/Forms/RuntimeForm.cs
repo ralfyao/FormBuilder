@@ -3205,9 +3205,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (e.RowIndex < listGrid.Rows.Count && listGrid.Rows[e.RowIndex].IsNewRow) return;      // 空白的新增列（沒輸入任何東西）
             if (ListRowView(e.RowIndex) is not { } view || !IsPendingRow(view.Row)) return;
             listGrid.EndEdit();
-            var missing = listDef.Columns.Where(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.IsJoin && !c.NoEntry
-                                                     && results.Columns.Contains(c.Column) && view.Row[c.Column] == DBNull.Value)
-                                         .Select(c => c.Header ?? c.Column).ToList();
+            var missing = MissingRequired(view.Row);
             if (missing.Count > 0)
             {
                 MessageBox.Show($"請輸入：{string.Join("、", missing)}（不新增請按 Esc）", "新增");
@@ -3220,6 +3218,52 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 開始在新增列輸入：工具列的「確定」（馬上新增）、「取消」可以按
         listGrid.CurrentCellDirtyStateChanged += (s, e) => UpdateListEditButtons();
         listGrid.UserAddedRow += (s, e) => UpdateListEditButtons();
+        // 開窗多選帶回好幾筆（每筆一列）：馬上全部新增
+        GridCells.OnPickedRowsAdded(listGrid, () => BeginInvoke(() => InsertPendingListRows()));
+    }
+
+    /// <summary>新增列還沒填的必填欄位（顯示的標題）</summary>
+    private List<string> MissingRequired(DataRow row) =>
+        listDef.Columns.Where(c => c.Visible && !c.IsNullable && !c.IsIdentity && !c.IsJoin && !c.NoEntry
+                                   && results.Columns.Contains(c.Column) && row[c.Column] == DBNull.Value)
+                       .Select(c => c.Header ?? c.Column).ToList();
+
+    /// <summary>
+    /// 清單上還沒新增的列（開窗多選帶進來的、正在輸入的）全部 INSERT；必填沒填的停在那一列提醒，回傳 false
+    /// </summary>
+    private bool InsertPendingListRows()
+    {
+        if (listGrid == null || listDef?.AllowInsert != true) return true;
+        try
+        {
+            listGrid.EndEdit();
+            if (listGrid.BindingContext?[results] is CurrencyManager cm) cm.EndCurrentEdit();
+        }
+        catch (InvalidOperationException) { }
+        foreach (var row in results.Rows.Cast<DataRow>().Where(IsPendingRow).ToList())
+        {
+            if (row.Table != results || !IsPendingRow(row)) continue;
+            var missing = MissingRequired(row);
+            if (missing.Count > 0)
+            {
+                MessageBox.Show($"請輸入：{string.Join("、", missing)}（不新增請按「取消」）", "新增");
+                var gridRow = listGrid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => r.DataBoundItem is DataRowView v && v.Row == row);
+                try
+                {
+                    if (gridRow != null) listGrid.CurrentCell = gridRow.Cells.Cast<DataGridViewCell>().FirstOrDefault(c => !c.ReadOnly && c.Visible);
+                }
+                catch (InvalidOperationException) { }
+                UpdateListEditButtons();
+                return false;
+            }
+            if (!InsertListRow(row))
+            {
+                UpdateListEditButtons();
+                return false;
+            }
+        }
+        UpdateListEditButtons();
+        return true;
     }
 
     // ================= 單頭清單：在清單上直接修改 =================
@@ -3349,6 +3393,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             listGrid.CurrentCell = null;                   // 離開那一列：觸發新增（必填沒填會提醒，留在那一列）
         }
         catch (InvalidOperationException) { }
+        // 其他還沒新增的列（開窗多選帶進來的）也一起新增；正在輸入那一列沒通過必填時先不動
+        if (listGrid.CurrentCell == null) BeginInvoke(() => InsertPendingListRows());
         UpdateListEditButtons();
     }
 
@@ -3383,14 +3429,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>有還沒存的清單修改時問要不要存（是 = 存、否 = 放棄、取消 = 不做 what）；可以繼續回傳 true</summary>
     private bool ConfirmListEdits(string what)
     {
-        if (listGrid == null || listDef?.InlineEdit != true) return true;
+        if (listGrid == null || listDef == null || listDef.InlineEdit != true && !listDef.AllowInsert) return true;
         if (listGrid.IsCurrentCellInEditMode) listGrid.EndEdit();
         if (listGrid.BindingContext?[results] is CurrencyManager cm) cm.EndCurrentEdit();
-        if (listEditedRows.Count == 0) return true;
-        var answer = MessageBox.Show(this, $"清單上有 {listEditedRows.Count} 筆修改還沒存檔，要先存檔嗎？\n\n是 = 存檔後{what}　否 = 不存檔　取消 = 不要{what}",
+        int pending = listDef.AllowInsert ? results.Rows.Cast<DataRow>().Count(IsPendingRow) : 0;   // 還沒新增的列（開窗多選帶進來的）
+        if (listEditedRows.Count == 0 && pending == 0) return true;
+        string changes = string.Join("、", new[] { listEditedRows.Count > 0 ? $"{listEditedRows.Count} 筆修改" : null,
+                                                   pending > 0 ? $"{pending} 筆新增" : null }.Where(x => x != null));
+        var answer = MessageBox.Show(this, $"清單上有 {changes} 還沒存檔，要先存檔嗎？\n\n是 = 存檔後{what}　否 = 不存檔　取消 = 不要{what}",
                                      "還沒存檔", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
         if (answer == DialogResult.Cancel) return false;
-        if (answer == DialogResult.Yes) return SaveListInlineEdits();
+        if (answer == DialogResult.Yes) return SaveListInlineEdits() & InsertPendingListRows();
         DiscardListInlineEdits();
         return true;
     }
@@ -3441,19 +3490,25 @@ public partial class RuntimeForm : Form, IRecordNavigator
     }
 
     /// <summary>把清單上新輸入的一列 INSERT 到資料表；失敗時把輸入的值放回清單，讓使用者修正</summary>
-    private void InsertListRow(DataRow row)
+    private bool InsertListRow(DataRow row)
     {
-        if (row.Table != results || !IsPendingRow(row)) return;
+        if (row.Table != results || !IsPendingRow(row)) return true;
         var values = listDef.Columns
             .Where(c => !c.IsJoin && !c.IsIdentity && !c.NoEntry && results.Columns.Contains(c.Column) && row[c.Column] != DBNull.Value)
             .ToDictionary(c => c.Column, c => row[c.Column]);
+        if (values.Count == 0)
+        {
+            results.Rows.Remove(row);                           // 什麼都沒輸入的空白列（例如開窗後沒選）：不新增，直接拿掉
+            return true;
+        }
         var typed = row.ItemArray;
         results.Rows.Remove(row);
-        if (InsertValues(values, notify: false)) return;
+        if (InsertValues(values, notify: false)) return true;
         var back = results.NewRow();
         back.ItemArray = typed;
         results.Rows.Add(back);                                 // 還是「未存檔」的列，改好離開這一列會再存一次
         listGrid.CurrentCell = listGrid.Rows[results.Rows.IndexOf(back)].Cells.Cast<DataGridViewCell>().FirstOrDefault(c => !c.ReadOnly && c.Visible);
+        return false;
     }
 
     /// <summary>清單上選取的列（由上到下）；沒有清單時是空的</summary>

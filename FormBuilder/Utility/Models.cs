@@ -1647,6 +1647,8 @@ public class GridColumnDefinition
     public string EditPickerForm { get; set; }
     public string EditPickerParams { get; set; }
     public string EditPickerReturn { get; set; }
+    /// <summary>Grid 儲存格的開窗選取可以多選：第一筆帶回目前這一列，其他每一筆各新增一列（編輯視窗上的欄位還是選一筆）</summary>
+    public bool EditPickerMulti { get; set; }
     /// <summary>編輯視窗下拉選單的執行後動作（同 FieldDefinition.AfterSelectSql / AfterSelectParams / AfterSelectReturn）</summary>
     public string EditAfterSelectSql { get; set; }
     public string EditAfterSelectParams { get; set; }

@@ -27,10 +27,18 @@ public static class GridCells
             GridCellKind.下拉選單 => CreateCombo(c, connectionString),
             GridCellKind.勾選框 => CreateCheckBox(c),
             GridCellKind.日期選擇 => new CalendarColumn(c),
-            GridCellKind.按鈕 => new DataGridViewButtonColumn { Text = ButtonText(c), UseColumnTextForButtonValue = true, FlatStyle = FlatStyle.System },
+            // 自訂按鈕：顯示按鈕文字；資料表欄位的按鈕：顯示那一格的值（「選項 / 格式」有填就固定顯示那段文字），按下去執行點擊開啟
+            GridCellKind.按鈕 when c.IsCustom => new DataGridViewButtonColumn { Text = ButtonText(c), UseColumnTextForButtonValue = true, FlatStyle = FlatStyle.System },
+            GridCellKind.按鈕 => new DataGridViewButtonColumn
+            {
+                Text = c.CellOptions?.Trim(),
+                UseColumnTextForButtonValue = !string.IsNullOrWhiteSpace(c.CellOptions),
+                FlatStyle = FlatStyle.System,
+                ReadOnly = true,
+            },
             _ => CreateTextBox(c),
         };
-        if (Resolve(c) != GridCellKind.按鈕) col.DataPropertyName = c.Column;     // 按鈕只顯示按鈕文字，不對應資料
+        if (!(c.IsCustom && Resolve(c) == GridCellKind.按鈕)) col.DataPropertyName = c.Column;     // 自訂按鈕只顯示按鈕文字，不對應資料
         col.HeaderText = c.Header;
         col.Width = c.Width;
         col.Tag = c;
@@ -465,6 +473,17 @@ public static class GridCells
 
     // ================= 開窗選取 =================
 
+    /// <summary>開窗多選帶回後新增了列（單頭清單登記：新增的列馬上存進資料表）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Action> pickedRowsHandlers = new();
+
+    /// <summary>登記開窗多選新增列之後要做的事（每個 Grid 一個）</summary>
+    public static void OnPickedRowsAdded(DataGridView grid, Action handler) => pickedRowsHandlers.AddOrUpdate(grid, handler);
+
+    private static void PickedRowsAdded(DataGridView grid)
+    {
+        if (pickedRowsHandlers.TryGetValue(grid, out var handler)) handler();
+    }
+
     /// <summary>格子右邊「…」按鈕的寬度</summary>
     private const int PickerButtonWidth = 18;
 
@@ -517,9 +536,10 @@ public static class GridCells
                 if (grid.Rows[rowIndex].DataBoundItem is not DataRowView view) return;
                 var table = view.Row.Table;
                 object ValueOf(string name) => table.Columns.Contains(name) ? view[name] : fallback?.Invoke(name);
-                ButtonRunner.OpenForm(b, sourcePath, owner, ValueOf, values =>
+                var notFound = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                // 帶回的值依欄位型別放進一列（set = 寫進那一列的方法）
+                void Fill(IReadOnlyDictionary<string, object> values, Action<string, object> set)
                 {
-                    var notFound = new List<string>();
                     foreach (var (name, value) in values)
                     {
                         if (!table.Columns.Contains(name) || table.Columns[name].ReadOnly && !table.Columns[name].AllowDBNull && value is null or DBNull)
@@ -531,20 +551,62 @@ public static class GridCells
                         {
                             var column = table.Columns[name];
                             column.ReadOnly = false;
-                            view[name] = value is null or DBNull ? DBNull.Value
-                                       : column.DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
-                                       : Convert.ChangeType(value, column.DataType, CultureInfo.CurrentCulture);
+                            set(name, value is null or DBNull ? DBNull.Value
+                                    : column.DataType == typeof(string) ? Convert.ToString(value, CultureInfo.CurrentCulture)
+                                    : Convert.ChangeType(value, column.DataType, CultureInfo.CurrentCulture));
                         }
                         catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
                         {
                             notFound.Add($"{name}（型別不符）");
                         }
                     }
+                }
+                void FillCurrent(IReadOnlyDictionary<string, object> values)
+                {
+                    Fill(values, (name, value) => view[name] = value);
                     view.EndEdit();
-                    if (notFound.Count > 0) MessageBox.Show("開窗帶回來的值放不進這些欄位：" + string.Join("、", notFound), "提醒");
                     if (rowIndex < grid.Rows.Count) grid.InvalidateRow(rowIndex);
                     // 帶回的欄位有設定執行後動作（例如選了項目編號帶出項目名稱）就接著執行
                     RunAfterSelect(grid, rowIndex, values.Keys.Where(table.Columns.Contains));
+                }
+                void Report()
+                {
+                    if (notFound.Count > 0) MessageBox.Show("開窗帶回來的值放不進這些欄位：" + string.Join("、", notFound), "提醒");
+                }
+                if (c.EditPickerMulti)
+                {
+                    // 可以多選：第一筆帶回這一列，其他每一筆各新增一列
+                    var multi = new ButtonDefinition
+                    {
+                        Text = b.Text, Action = b.Action, TargetForm = b.TargetForm, OpenParams = b.OpenParams,
+                        ReturnGrid = c.Column, ReturnGridMap = b.ReturnMap,
+                    };
+                    ButtonRunner.OpenForm(multi, sourcePath, owner, ValueOf, onReturnRows: rows =>
+                    {
+                        if (rows.Count == 0) return;
+                        FillCurrent(rows[0]);
+                        foreach (var values in rows.Skip(1))
+                        {
+                            if (!grid.AllowUserToAddRows)
+                            {
+                                MessageBox.Show($"這個清單不能新增列，只帶回了第一筆（其他 {rows.Count - 1} 筆沒有帶入）。", "提醒");
+                                break;
+                            }
+                            var row = table.NewRow();              // TableNewRow：新增列的預設值、關聯欄位
+                            Fill(values, (name, value) => row[name] = value);
+                            table.Rows.Add(row);
+                            int index = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => r.DataBoundItem is DataRowView v && v.Row == row)?.Index ?? -1;
+                            if (index >= 0) RunAfterSelect(grid, index, values.Keys.Where(table.Columns.Contains));
+                        }
+                        Report();
+                        PickedRowsAdded(grid);
+                    }, connectionString: connectionString);
+                    return;
+                }
+                ButtonRunner.OpenForm(b, sourcePath, owner, ValueOf, values =>
+                {
+                    FillCurrent(values);
+                    Report();
                 }, connectionString: connectionString);
             }
             finally
@@ -1068,7 +1130,7 @@ public static class GridCells
             row >= 0 && row < grid.Rows.Count && !grid.Rows[row].IsNewRow && Convert.ToString(grid[column, row].FormattedValue)?.Trim() is { Length: > 0 };
         grid.CellFormatting += (s, e) =>
         {
-            if (e.RowIndex < 0 || LinkOf(grid, e.ColumnIndex) is not { } c) return;
+            if (e.RowIndex < 0 || LinkOf(grid, e.ColumnIndex) is not { } c || Resolve(c) == GridCellKind.按鈕) return;   // 畫成按鈕的不用藍色底線
             var font = e.CellStyle.Font ?? grid.Font;
             if (underline == null || !underline.FontFamily.Equals(font.FontFamily) || underline.Size != font.Size)
                 underline = new Font(font, font.Style | FontStyle.Underline);

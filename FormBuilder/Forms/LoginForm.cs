@@ -1,4 +1,4 @@
-namespace FormBuilder;
+﻿namespace FormBuilder;
 
 /// <summary>登入：驗證帳號密碼（錯太多次鎖定）；管理者重設過密碼、或第一次登入時要先改密碼</summary>
 public partial class LoginForm : Form
@@ -8,11 +8,12 @@ public partial class LoginForm : Form
     /// <param name="productName">登入畫面上顯示的產品名稱（後台工具是 ERP Studio，使用者端是 ERP 系統）</param>
     /// <param name="allowSetup">false = 使用者端：不顯示「系統設定」和系統資料庫的狀態</param>
     /// <param name="adminOnly">true = 只有系統管理者能登入（ERP Studio）</param>
-    public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true, bool adminOnly = false)
-        : this(config, productName, allowSetup, adminOnly, preview: null) { }
+    /// <param name="allowConnection">顯示「修改連線…」（要先通過管理者驗證）；null = 跟 allowSetup 一樣</param>
+    public LoginForm(SysConfig config, string productName = "ERP Studio", bool allowSetup = true, bool adminOnly = false, bool? allowConnection = null)
+        : this(config, productName, allowSetup, adminOnly, preview: null, allowConnection ?? allowSetup) { }
 
     /// <param name="preview">不是 null = ERP Studio 編輯企業識別時的預覽：只顯示，不能登入</param>
-    private LoginForm(SysConfig config, string productName, bool allowSetup, bool adminOnly, LoginBranding preview)
+    private LoginForm(SysConfig config, string productName, bool allowSetup, bool adminOnly, LoginBranding preview, bool allowConnection = false)
     {
         InitializeComponent();
         defaultIcon = Icon;
@@ -20,8 +21,10 @@ public partial class LoginForm : Form
         this.adminOnly = adminOnly;
         this.productName = productName;
         this.allowSetup = allowSetup;
-        lnkSetup.Visible = lblServer.Visible = lnkConnection.Visible = allowSetup;
-        lnkConnection.SetBounds(lnkSetup.Left, lnkSetup.Bottom - 2, 100, 18);
+        lnkSetup.Visible = lblServer.Visible = allowSetup;
+        lnkConnection.Visible = allowConnection;
+        // 沒有「系統設定」時（使用者端），「修改連線…」放在它的位置
+        lnkConnection.SetBounds(lnkSetup.Left, allowSetup ? lnkSetup.Bottom - 2 : lnkSetup.Top, 100, 18);
         Controls.Add(lnkConnection);
         Text = $"登入　{productName} {Updater.CurrentVersion}";
         if (preview != null)
@@ -47,7 +50,7 @@ public partial class LoginForm : Form
         ShowServer();
     }
 
-    /// <summary>「修改連線…」：直接編輯系統資料庫的連線字串（只有 ERP Studio）</summary>
+    /// <summary>「修改連線…」：直接編輯系統資料庫的連線字串（ERP Studio、ERP 系統都有）</summary>
     private readonly LinkLabel lnkConnection = new() { Text = "修改連線…", TabStop = true };
 
     /// <summary>
@@ -81,6 +84,11 @@ public partial class LoginForm : Form
             return;
         }
         ShowServer();
+        // 執行檔旁邊有 config.json 時，下次啟動會先用那一份，這次改的不會生效
+        if (File.Exists(SysConfig.AppPath))
+            MessageBox.Show($"連線已經改好（這次就用新的連線）。{Environment.NewLine}{Environment.NewLine}"
+                            + $"但是程式旁邊有 IT 放的設定檔，下次啟動會先用它：{Environment.NewLine}{SysConfig.AppPath}{Environment.NewLine}"
+                            + "要一直用新的連線，請把那個檔案刪掉或改掉。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         if (users == 0)
         {
             MessageBox.Show("這個系統資料庫還沒有帳號，接著請建立第一個管理者。", Text);

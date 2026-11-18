@@ -705,7 +705,11 @@ public static class ButtonRunner
     {
         if (string.IsNullOrWhiteSpace(f.PickerReturn)) return $"{f.Column}={f.Column}";
         bool first = true;
-        var pairs = f.PickerReturn.Split(new[] { ',', '，', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var pairs = f.PickerReturn.Split(new[] { ',', '，', ';', '；', '、', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            // 用空格隔開的也算（例如「品項編號=產品編號 品名規格=品名規格」）：一段裡有好幾個 = 時照空白切開
+            .SelectMany(part => part.Count(ch => ch == '=') > 1
+                ? System.Text.RegularExpressions.Regex.Replace(part, @"\s*=\s*", "=").Split(new[] { ' ', '\t', '　' }, StringSplitOptions.RemoveEmptyEntries)
+                : new[] { part })
             .Select(part =>
             {
                 if (part.Contains('=')) return part;
