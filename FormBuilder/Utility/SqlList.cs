@@ -67,7 +67,24 @@ public static class SqlList
         sql = WithoutTestDeclares(sql);                       // 要包成子查詢：DECLARE 不能留在裡面
         var d = DbDialect.Of(connectionString);
         var select = columns.Where(c => !c.ScreenOnly && (!c.IsJoin || joins.Any(j => j.Alias == c.JoinAlias))).ToList();
-        return GridSql.Select(d, Subquery(d, sql), select, joins);
+        var (cte, body) = SplitCte(sql);                     // WITH … AS (…) 要放在整句最前面，只把最後的 SELECT 包成子查詢
+        return cte + GridSql.Select(d, Subquery(d, body), select, joins);
+    }
+
+    /// <summary>
+    /// WITH 開頭的 SQL 拆成「WITH … AS (…)」（CTE，結尾換行）和後面真正查資料的 SELECT；
+    /// 外層要包子查詢時 CTE 放在整句最前面。不是 WITH 開頭時 CTE 是空字串
+    /// </summary>
+    public static (string Cte, string Body) SplitCte(string sql)
+    {
+        string text = (sql ?? "").Trim().TrimEnd(';').TrimEnd();
+        string top = TopLevel(text);                          // 括號裡（CTE 的內容）換成空白，找最外層的 SELECT
+        var with = Regex.Match(top, @"^\s*WITH\b", RegexOptions.IgnoreCase);
+        if (!with.Success) return ("", text);
+        var select = Regex.Match(top[with.Length..], @"\bSELECT\b", RegexOptions.IgnoreCase);
+        if (!select.Success) return ("", text);
+        int at = with.Length + select.Index;
+        return (text[..at].TrimEnd() + "\n", text[at..]);
     }
 
     /// <summary>
@@ -78,7 +95,7 @@ public static class SqlList
     {
         string inner = sql.Trim().TrimEnd(';').TrimEnd();
         if (Regex.IsMatch(inner, @"^\s*WITH\b", RegexOptions.IgnoreCase))
-            throw new InvalidOperationException("SQL 用 WITH 開頭時不能當子查詢（外層要再 JOIN 或加查詢條件），請改寫成 SELECT 開頭。");
+            throw new InvalidOperationException("SQL 用 WITH 開頭時不能直接當子查詢，請先用 SplitCte 把 WITH 拆到最前面。");
         string outer = TopLevel(inner);
         if (d.Kind == DbKind.SqlServer && Regex.IsMatch(outer, @"\bORDER\s+BY\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(outer, @"^\s*SELECT\s+(ALL\s+|DISTINCT\s+)?TOP\b", RegexOptions.IgnoreCase)

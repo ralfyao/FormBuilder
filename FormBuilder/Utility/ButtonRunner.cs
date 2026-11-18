@@ -180,8 +180,16 @@ public static class ButtonRunner
         foreach (var (f, input) in inputs)
         {
             if (string.IsNullOrWhiteSpace(f.AfterSelectSql)) continue;
+            string before = null;                      // 文字框、日期：上次執行時的值（沒改就不重複執行）
             void Run()
             {
+                before = Convert.ToString(InputHelper.GetValue(f, input));
+                if (string.IsNullOrWhiteSpace(connectionString))
+                {
+                    MessageBox.Show($"「{f.Label ?? f.Column}」的執行後動作要連線資料庫才能執行（這個畫面沒有設定連線）。"
+                                    + "日期加減天數請改在目標欄位設「公式」，例如：日期選擇1 + 7", "提醒");
+                    return;
+                }
                 try
                 {
                     ExecuteSql(f.AfterSelectSql, f.AfterSelectParams, connectionString, new Func<string, object>[] { valueOf }, out var row);
@@ -201,6 +209,18 @@ public static class ButtonRunner
             }
             afterSelectActions.AddOrUpdate(input, Run);
             if (input is ComboBox combo) combo.SelectionChangeCommitted += (s, e) => Run();
+            else if (input is CheckBox check) check.Click += (s, e) => Run();
+            else if (input is TextBox or DateTimePicker)
+            {
+                // 文字框、日期：值改了、離開欄位時執行（日期選完下拉月曆也執行）
+                input.Enter += (s, e) => before = Convert.ToString(InputHelper.GetValue(f, input));
+                void RunIfChanged()
+                {
+                    if (Convert.ToString(InputHelper.GetValue(f, input)) != before) Run();
+                }
+                input.Leave += (s, e) => RunIfChanged();
+                if (input is DateTimePicker picker) picker.CloseUp += (s, e) => RunIfChanged();
+            }
         }
     }
 

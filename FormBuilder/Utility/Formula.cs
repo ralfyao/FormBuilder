@@ -42,12 +42,11 @@ public static class Formula
     /// </summary>
     public static decimal Aggregate(string function, IEnumerable<object> values)
     {
-        var numbers = values.Where(v => v is not (null or DBNull) && !(v is string s && s.Trim() == "")).Select(ToNumber).ToList();
-        switch (function.ToUpperInvariant())
-        {
-            case "SUM": return numbers.Sum();
-            case "COUNT": return numbers.Count;
-        }
+        var present = values.Where(v => v is not (null or DBNull) && !(v is string s && s.Trim() == "")).ToList();
+        // COUNT 只算有值的列數：日期、文字欄位也可以數，不用轉成數字
+        if (function.Equals("COUNT", StringComparison.OrdinalIgnoreCase)) return present.Count;
+        var numbers = present.Select(ToNumber).ToList();
+        if (function.Equals("SUM", StringComparison.OrdinalIgnoreCase)) return numbers.Sum();
         if (numbers.Count == 0) throw new FormatException($"{function} 沒有資料");
         switch (function.ToUpperInvariant())
         {

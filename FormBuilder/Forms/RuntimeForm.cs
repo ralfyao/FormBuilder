@@ -219,7 +219,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetupListBatchMenu();
             SetupListSort();
             listGrid.SelectionChanged += (s, e) => OnListSelectionChanged();
-            HookEditDialog(listGrid, EditMasterRow);
+            HookEditDialog(listGrid, EditMasterRow, () => ListInlineEnabled);
             GridCells.HookCustomColumns(listGrid, (c, row) =>
             {
                 int index = results.Rows.IndexOf(row);
@@ -231,6 +231,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 });
             }, def.ConnectionString);
             if (listDef.AllowInsert) SetupListInsert();
+            if (listDef.InlineEdit) SetupListInlineEdit();
             GridCells.HookPickers(listGrid, MasterValueOf, def.SourcePath, this, def.ConnectionString);
             // 空白處雙擊（還沒有資料時）也能開編輯視窗，才有地方按「新增」
             listGrid.DoubleClick += (s, e) =>
@@ -246,9 +247,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
             }
         }
         // Grid 的執行後動作：資料有變動就重算（例如 AMOUNT=SUM(金額)、標籤8=SUM(金額)）
-        foreach (var (g, grid) in AllGrids()) 
-        { 
-            GridCells.HookDataChanged(grid, () => RunGridAfterChange(g, grid)); 
+        // 畫面欄位的公式有 SUM(清單欄位) 這類彙總：清單資料變動也重算
+        bool fieldAggregates = def.Fields.Any(f => f.HasFormula && Formula.HasAggregate(f.Formula));
+        foreach (var (g, grid) in AllGrids())
+        {
+            GridCells.HookDataChanged(grid, () =>
+            {
+                RunGridAfterChange(g, grid);
+                if (fieldAggregates) RecalcFormulas();
+            });
         }
         // 執行後動作的欄位名稱寫錯會一直算不出來：打開時檢查一次，有錯就提醒
         var afterChangeProblems = def.Grids.Where(g => !string.IsNullOrWhiteSpace(g.AfterChange))
@@ -302,6 +309,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                     item.Visible = false;
         }
         ApplyToolbarSetting();
+        HookHeaderParams();
 
         if (pickMode) SetupPickMode();
         if (conditionMode) SetupConditionMode(matchAny);
@@ -333,6 +341,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 else if (HasMasterTable)
                     RunQuery();
                 if (EditWindowOnly) OpenEditWindowOnly();
+                RunAllGridAfterChanges();                   // 清單加總計算：畫面顯示出來後再算一次，文字標籤一定會帶出結果
+                if (def.Fields.Any(f => f.HasFormula && Formula.HasAggregate(f.Formula))) RecalcFormulas();   // 公式裡的 SUM(清單欄位)
             };
     }
 
@@ -613,7 +623,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         btnFirst.Enabled = btnPrevious.Enabled = browsing && current > 0;
         btnNext.Enabled = btnLast.Enabled = browsing && current < results.Rows.Count - 1;
-        btnOk.Enabled = btnCancel.Enabled = !browsing;
+        btnOk.Enabled = btnCancel.Enabled = !browsing || HasUnsavedListChanges;   // 清單上直接改了還沒存：確定 = 存檔、取消 = 放棄
         btnExit.Enabled = browsing;
 
         foreach (var f in def.Fields.Where(f => !f.IsTextLabel))        // 文字標籤一直是顯示文字，不用切換能不能輸入
@@ -713,6 +723,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
 
     private void Accept()
     {
+        if (mode == Mode.Browse && listGrid != null && HasUnsavedListChanges)
+        {
+            // 清單上直接改的資料存檔、正在輸入的新增列新增
+            if (listEditedRows.Count > 0) SaveListInlineEdits();
+            if (listDef.AllowInsert) CommitListInsert();
+            return;
+        }
         switch (mode)
         {
             case Mode.Query when conditionMode: ReturnConditions(); break;
@@ -727,6 +744,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>取消：放棄輸入，回到原本顯示的那筆</summary>
     private void CancelEdit()
     {
+        if (mode == Mode.Browse && listGrid != null && HasUnsavedListChanges) { DiscardListInlineEdits(); return; }   // 清單上直接改的資料不存，還原
         if (conditionMode)                                 // 查詢條件畫面：取消 = 不查詢，關閉
         {
             DialogResult = DialogResult.Cancel;
@@ -774,12 +792,13 @@ public partial class RuntimeForm : Form, IRecordNavigator
         // 清單沒顯示的 JOIN 欄位先不查（條件有用到的 JOIN 照樣 JOIN），開編輯視窗時再補讀
         var skip = ListOnlyJoins().Where(a => !where.Contains(Dialect.Quote(a) + ".")).ToHashSet();
         // 單頭清單有「清單 SQL」：資料來自自己寫的 SELECT（當子查詢，別名 T0），查詢條件、排序、JOIN 套在外層
-        string listFrom = null;
+        string listFrom = null, listCte = "";
         if (!string.IsNullOrWhiteSpace(listDef?.ListSql))
         {
             try
             {
                 var (prepared, parameters) = Dialect.PrepareUserSql(listDef.ListSql);
+                (listCte, prepared) = SqlList.SplitCte(prepared);      // WITH … AS (…) 放在整句最前面
                 listFrom = SqlList.Subquery(Dialect, prepared);
                 var valueOf = SysParams.With(name =>
                 {
@@ -801,7 +820,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             var missing = ListSqlMissingJoins();
             skip = def.Joins.Select(j => j.Alias).Where(a => !where.Contains(Dialect.Quote(a) + ".") && !missing.Contains(a)).ToHashSet();
         }
-        cmd.CommandText = $"SELECT {Dialect.Top(5000)}{SelectColumns(skip, listFrom != null)} FROM {MasterFrom(skip, listFrom)}"
+        cmd.CommandText = listCte + $"SELECT {Dialect.Top(5000)}{SelectColumns(skip, listFrom != null)} FROM {MasterFrom(skip, listFrom)}"
                         + (where != "" ? " WHERE " + where : "")
                         + (orderColumns.Count > 0 ? " ORDER BY " + string.Join(", ", orderColumns) : "")
                         + Dialect.Limit(5000);
@@ -1589,7 +1608,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (inputs[f] is DateTimePicker dtp) dtp.ValueChanged += changed;
             if (inputs[f] is CheckBox cb) cb.CheckedChanged += changed;
         }
-        var used = def.Fields.Where(f => f.HasFormula).SelectMany(f => SafeNames(f.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var used = def.Fields.Where(f => f.HasFormula)
+            .SelectMany(f => DateFormula.IsDateField(f) ? DateFormula.Names(f.Formula) : SafeNames(f.Formula)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (used.Count == 0) return;
         foreach (var f in def.Fields.Where(f => used.Contains(f.Column)))
         {
@@ -1617,17 +1637,41 @@ public partial class RuntimeForm : Form, IRecordNavigator
         try
         {
             bool editing = mode is Mode.Insert or Mode.Modify;
-            bool showing = editing || (mode == Mode.Browse && HasCurrent && listGrid == null);
+            // 只放自建欄位、SQL 清單的畫面（沒有單頭）瀏覽時也算
+            bool showing = editing || (mode == Mode.Browse && (HasCurrent && listGrid == null || !HasMasterTable));
+            // 日期欄位的公式（日期選擇1 + 7、DATEADD(...)）先算，用到其他日期公式欄位時先算它
+            var dates = new Dictionary<FieldDefinition, DateTime?>();
+            DateTime? ComputeDate(FieldDefinition f, HashSet<FieldDefinition> visiting)
+            {
+                if (dates.TryGetValue(f, out var done)) return done;
+                if (!visiting.Add(f)) throw new FormatException("日期公式循環參照");
+                var result = DateFormula.Evaluate(f.Formula, name =>
+                {
+                    var source = def.Fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase))
+                                 ?? throw new FormatException($"公式裡的欄位「{name}」不在畫面上");
+                    return DateFormula.IsDateField(source) && (source.IsCalculated || editing) ? ComputeDate(source, visiting) : GetValue(source);
+                }, f.DateFormat);
+                dates[f] = result;
+                return result;
+            }
+            foreach (var f in def.Fields.Where(f => DateFormula.IsDateField(f) && (f.IsCalculated || editing)))
+            {
+                DateTime? value = null;
+                try { value = showing ? ComputeDate(f, new HashSet<FieldDefinition>()) : null; }
+                catch (FormatException) { }                      // 寫法不對、循環參照：維持空白
+                if (value == null) SetValue(f, null);
+                else DefaultValue.Apply(f, inputs[f], value.Value);      // 日期選擇直接設日期；文字欄位依日期格式
+            }
             var cache = new Dictionary<FieldDefinition, decimal?>();
             // 數字公式先算，文字公式（& 串接）再用算好的值接起來
-            foreach (var f in def.Fields.Where(f => f.HasFormula && (f.IsCalculated || editing)).OrderBy(f => Formula.IsText(f.Formula)))
+            foreach (var f in def.Fields.Where(f => f.HasFormula && !DateFormula.IsDateField(f) && (f.IsCalculated || editing)).OrderBy(f => Formula.IsText(f.Formula)))
             {
                 int decimals = f.DataType is "int" or "bigint" or "smallint" or "tinyint" ? 0 : f.Decimals;
                 if (Formula.IsText(f.Formula))
                 {
                     SetValue(f, showing ? Formula.EvaluateText(f.Formula, name =>
                         def.Fields.FirstOrDefault(x => x.Column.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } source
-                            ? GetValue(source) : throw new FormatException($"公式裡的欄位「{name}」不在畫面上"), decimals) : null);
+                            ? GetValue(source) : throw new FormatException($"公式裡的欄位「{name}」不在畫面上"), decimals, GridAggregate) : null);
                     continue;
                 }
                 decimal? value = showing ? Compute(f, cache, new HashSet<FieldDefinition>()) : null;
@@ -1652,9 +1696,17 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (source.HasFormula && (source.IsCalculated || mode is Mode.Insert or Mode.Modify))
                 return Compute(source, cache, visiting) ?? throw new FormatException("算不出來");
             return GetValue(source);
-        });
+        }, GridAggregate);
         cache[f] = result;
         return result;
+    }
+
+    /// <summary>畫面欄位（計算欄位、文字標籤）的公式用 SUM / COUNT / AVG / MAX / MIN(欄位)：加總畫面上第一個有這個欄位的 Grid</summary>
+    private decimal GridAggregate(string function, string column)
+    {
+        var grid = AllGrids().Select(x => x.Grid).FirstOrDefault(x => GridCells.HasColumn(x, column));
+        if (grid == null) throw new FormatException($"畫面上的清單沒有「{column}」");
+        return GridCells.Aggregate(grid, function, column);
     }
 
     // ================= 單頭 JOIN：關聯欄位改了，重新帶出 JOIN 欄位 =================
@@ -2179,7 +2231,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// </summary>
     private void HookVariables()
     {
-        foreach (var f in def.Fields.Where(f => f.IsVariable && !f.HasFormula))
+        // 自建欄位不會「新增」，預設值在開啟時就帶入（傳入同名參數時以參數為準）
+        var variables = def.Fields.Where(f => f.IsVariable && !f.HasFormula).ToList();
+        DefaultValue.FillInputs(variables.Where(f => !string.IsNullOrWhiteSpace(f.DefaultValue)).ToDictionary(f => f, f => inputs[f]), def.ConnectionString);
+        foreach (var f in variables)
         {
             if (openParams.TryGetValue(f.Column, out var value) && value != null && value != DBNull.Value) SetValue(f, value);
             var input = inputs[f];
@@ -2199,6 +2254,32 @@ public partial class RuntimeForm : Form, IRecordNavigator
             else if (input is DateTimePicker dtp) dtp.CloseUp += (s, e) => Changed();
             if (input is TextBox tb) tb.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) Changed(); };
         }
+    }
+
+    /// <summary>
+    /// Grid 的標題、群組標題寫 @名稱（例如 @D0）：顯示畫面上那個欄位的值（再找目前這筆、開啟時的傳入參數）；
+    /// 畫面上任何欄位的值改了（輸入、公式重算、切換資料）就重新帶入
+    /// </summary>
+    private void HookHeaderParams()
+    {
+        var grids = AllGrids().Select(x => x.Grid).Where(GridCells.HasHeaderParams).ToList();
+        if (grids.Count == 0) return;
+        object ValueOf(string name)
+        {
+            var field = def.Fields.FirstOrDefault(f => f.Column.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (field != null) return GetValue(field);
+            if (HasCurrent && results.Columns.Contains(name)) return results.Rows[current][name];
+            return openParams.TryGetValue(name, out var v) ? v : null;
+        }
+        foreach (var grid in grids) GridCells.UseHeaderParams(grid, ValueOf);
+        void Refresh(object s, EventArgs e) { foreach (var grid in grids) GridCells.RefreshHeaderParams(grid); }
+        foreach (var input in inputs.Values)
+        {
+            input.TextChanged += Refresh;
+            if (input is DateTimePicker dtp) dtp.ValueChanged += Refresh;
+            if (input is CheckBox cb) cb.CheckedChanged += Refresh;
+        }
+        Shown += Refresh;                                   // 預設值、傳入參數、公式都帶好之後再帶一次
     }
 
     /// <summary>重查 SQL 清單：@名稱 先取目前這筆單頭的值，再找畫面上的欄位、開啟時的傳入參數</summary>
@@ -2221,6 +2302,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 string sql = SqlList.Compose(def.ConnectionString, g.Sql, g.Columns, g.Joins);
                 grid.DataSource = Loading.Run(this, $"讀取「{g.Title}」…",
                     () => SqlList.Load(def.ConnectionString, sql, name => values.TryGetValue(name, out var v) ? v : null));
+                RunGridAfterChange(g, grid);                // 清單加總計算（資料換了一定重算）
             }
             catch (Exception ex)
             {
@@ -2291,11 +2373,36 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 var source = GridCells.HasColumn(grid, column) ? grid
                            : AllGrids().Select(x => x.Grid).FirstOrDefault(x => GridCells.HasColumn(x, column));
-                if (source == null) throw new FormatException($"Grid 沒有「{column}」");
+                if (source == null)
+                {
+                    if (grid.DataSource == null) throw new OperationCanceledException();   // 清單還沒有資料：等資料進來再算
+                    throw new FormatException($"清單沒有「{column}」這個欄位");
+                }
                 return GridCells.Aggregate(source, function, column);
             });
         }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            // 算不出來時說明原因（每個畫面只提醒一次），不要默默留白
+            if (!afterChangeWarned)
+            {
+                afterChangeWarned = true;
+                string message = $"「{g.Title}」的清單加總計算失敗：{ex.Message}{Environment.NewLine}{Environment.NewLine}{g.AfterChange}";
+                void Show() => MessageBox.Show(this, message, "清單加總計算", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (IsHandleCreated) BeginInvoke(Show);
+                else Shown += (s, e) => BeginInvoke(Show);      // 畫面還沒建好（開啟時就查）：顯示出來再提醒
+            }
+        }
         finally { runningGridAfterChange = false; }
+    }
+
+    private bool afterChangeWarned;
+
+    /// <summary>每個 Grid 的清單加總計算都再算一次（SQL 清單重查後、畫面顯示出來後）</summary>
+    private void RunAllGridAfterChanges()
+    {
+        foreach (var (g, grid) in AllGrids()) RunGridAfterChange(g, grid);
     }
 
     private static bool IsLinkColumn(DetailPart part, string detailColumn) =>
@@ -2608,12 +2715,19 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 雙擊某一列、或選好列後按 Enter，開啟單筆編輯視窗。
     /// 單擊保留給選取 / 切換單頭，才不會每點一下就跳出視窗
     /// </summary>
-    private void HookEditDialog(DataGridView grid, Action<int> edit)
+    /// <param name="cellsEdit">回傳 true = 清單在格子裡直接修改：雙擊格子是編輯那一格，只有雙擊列標題（最左邊那格）才開編輯視窗，Enter 照一般 Grid 移到下一列</param>
+    private void HookEditDialog(DataGridView grid, Action<int> edit, Func<bool> cellsEdit = null)
     {
-        grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0 && GridCells.LinkOf(grid, e.ColumnIndex) == null) edit(e.RowIndex); };   // 「點擊開啟」的欄位點一下就開了
+        grid.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex < 0 || GridCells.LinkOf(grid, e.ColumnIndex) != null) return;   // 「點擊開啟」的欄位點一下就開了
+            if (e.ColumnIndex >= 0 && cellsEdit?.Invoke() == true) return;
+            edit(e.RowIndex);
+        };
+        grid.RowHeaderMouseDoubleClick += (s, e) => { if (e.RowIndex >= 0 && cellsEdit?.Invoke() == true) edit(e.RowIndex); };
         grid.KeyDown += (s, e) =>
         {
-            if (e.KeyCode != Keys.Enter || mode == Mode.Detail || grid.CurrentRow == null) return;
+            if (e.KeyCode != Keys.Enter || mode == Mode.Detail || grid.CurrentRow == null || cellsEdit?.Invoke() == true) return;
             e.SuppressKeyPress = true;                     // 不要讓 Enter 跳到下一列
             edit(grid.CurrentRow.Index);                   // 單頭清單選了多筆時，EditMasterRow 會每筆各開一個視窗
         };
@@ -3002,6 +3116,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 GridCells.FillEmptyFormulas(results, listDef.Columns, MasterValueOf);   // 公式欄位資料庫沒存值（例如 金額2 = 數量2 * 單價2）：讀進來就算出來顯示
                 GridCells.HookFormulas(results, listDef.Columns);     // 直接新增的那一列：公式欄位跟著重算
+                if (listDef.InlineEdit)
+                {
+                    listEditedRows.Clear();                           // 換了查詢結果：舊資料的修改不算了（換之前已經問過要不要存）
+                    results.ColumnChanged -= OnListColumnChanged;
+                    results.ColumnChanged += OnListColumnChanged;     // 清單上直接修改：記下改過的列
+                }
                 listGrid.DataSource = results;
                 // 排序箭頭（換 DataSource 時 Grid 會清掉，要重新標）
                 foreach (DataGridViewColumn c in listGrid.Columns)
@@ -3057,7 +3177,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         listGrid.CellBeginEdit += (s, e) =>
         {
             if (e.RowIndex >= 0 && e.RowIndex < listGrid.Rows.Count && listGrid.Rows[e.RowIndex].IsNewRow) return;
-            if (ListRowView(e.RowIndex) is not { } v || !IsPendingRow(v.Row)) e.Cancel = true;
+            if (ListRowView(e.RowIndex) is not { } v || !IsPendingRow(v.Row))
+                if (!ListInlineEditable(listGrid.Columns[e.ColumnIndex].DataPropertyName)) e.Cancel = true;   // 已經存在的列：在清單上直接修改的欄位才能改
         };
         listGrid.RowValidating += (s, e) =>
         {
@@ -3074,8 +3195,218 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 return;
             }
             var row = view.Row;
-            BeginInvoke(() => InsertListRow(row));                // 等 Grid 把這一列交給 DataTable 後再存
+            BeginInvoke(() => { InsertListRow(row); UpdateListEditButtons(); });   // 等 Grid 把這一列交給 DataTable 後再存
         };
+        // 開始在新增列輸入：工具列的「確定」（馬上新增）、「取消」可以按
+        listGrid.CurrentCellDirtyStateChanged += (s, e) => UpdateListEditButtons();
+        listGrid.UserAddedRow += (s, e) => UpdateListEditButtons();
+    }
+
+    // ================= 單頭清單：在清單上直接修改 =================
+
+    /// <summary>單頭清單可以在格子裡直接修改的欄位（SetupListInlineEdit 決定）</summary>
+    private HashSet<string> listInlineColumns = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>現在可以在清單上直接修改：後台勾了「在清單上直接修改」、有修改權限、畫面有主鍵、瀏覽中（不是選取視窗、查詢條件畫面）</summary>
+    private bool ListInlineEnabled =>
+        listDef?.InlineEdit == true && listInlineColumns.Count > 0 && perm.Modify && HasKey && !pickMode && !conditionMode && mode == Mode.Browse;
+
+    private bool ListInlineEditable(string column) => ListInlineEnabled && column != null && listInlineColumns.Contains(column);
+
+    /// <summary>
+    /// 單頭清單「在清單上直接修改」：單頭資料表的欄位（主鍵、自動編號、JOIN、公式、只顯示的欄位除外；有設「可修改的欄位」就只開放那幾個）
+    /// 淡黃底，可以直接在格子裡改；離開那一列時把改過的欄位用主鍵 UPDATE 回單頭資料表，再重讀那一筆
+    /// </summary>
+    private void SetupListInlineEdit()
+    {
+        var only = (listDef.InlineEditColumns ?? "").Split(new[] { ',', '，', '、' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var keys = def.MasterKeys.Select(k => k.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        listInlineColumns = listDef.Columns
+            .Where(c => !c.IsJoin && !c.IsIdentity && !c.NoEntry && !c.HasFormula && !c.ScreenOnly && !c.IsCustom && !c.FromListSql
+                        && !(c.DataType?.ToLowerInvariant() is "timestamp" or "rowversion")      // 資料庫自己維護的版本戳記（例如 SSMA_TimeStamp）不能寫
+                        && !c.Column.Equals("SSMA_TimeStamp", StringComparison.OrdinalIgnoreCase)
+                        && !keys.Contains(c.Column) && (only.Count == 0 || only.Contains(c.Column)))
+            .Select(c => c.Column).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (listInlineColumns.Count == 0) return;
+        listGrid.ReadOnly = false;
+        bool canModify = perm.Modify && HasKey;
+        foreach (DataGridViewColumn col in listGrid.Columns)
+        {
+            bool inline = listInlineColumns.Contains(col.DataPropertyName);
+            if (!listDef.AllowInsert) col.ReadOnly = !inline;          // 有「允許直接新增」時，新增列的欄位由 SetupListInsert 決定
+            else if (inline) col.ReadOnly = false;
+            if (inline && canModify) col.DefaultCellStyle.BackColor = Color.LightYellow;
+        }
+        listGrid.CellBeginEdit += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (e.RowIndex < listGrid.Rows.Count && listGrid.Rows[e.RowIndex].IsNewRow) return;     // 新增列交給「允許直接新增」
+            if (ListRowView(e.RowIndex) is { } pending && IsPendingRow(pending.Row)) return;
+            string column = listGrid.Columns[e.ColumnIndex].DataPropertyName;
+            if (!ListInlineEditable(column)) { e.Cancel = true; return; }
+            if (results.Columns.Contains(column)) results.Columns[column].ReadOnly = false;   // 查詢帶回來的欄位可能是唯讀的
+        };
+        // 雙擊可以修改的格子：開始編輯（整列選取的清單單擊只會選列）
+        listGrid.CellDoubleClick += (s, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && ListInlineEditable(listGrid.Columns[e.ColumnIndex].DataPropertyName))
+                listGrid.BeginEdit(true);
+        };
+        // 勾選框、下拉選單一選就送出（不用等離開格子）
+        listGrid.CurrentCellDirtyStateChanged += (s, e) =>
+        {
+            if (listGrid.IsCurrentCellDirty && listGrid.CurrentCell?.OwningColumn is DataGridViewCheckBoxColumn or DataGridViewComboBoxColumn
+                && ListInlineEditable(listGrid.CurrentCell.OwningColumn.DataPropertyName))
+                listGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        // 離開那一列：改過的欄位存回資料表
+        listGrid.RowValidated += (s, e) =>
+        {
+            if (ListRowView(e.RowIndex) is not { } view || !listEditedRows.Contains(view.Row)) return;
+            var row = view.Row;
+            BeginInvoke(() => { SaveListInlineRow(row); UpdateListEditButtons(); });   // 等 Grid 把這一列交給 DataTable 後再存
+        };
+        // 關閉畫面前：有還沒存的修改，問要不要存
+        FormClosing += (s, e) => { if (!ConfirmListEdits("關閉畫面")) e.Cancel = true; };
+    }
+
+    /// <summary>使用者在清單上直接改過、還沒存的列</summary>
+    private readonly HashSet<DataRow> listEditedRows = new();
+
+    /// <summary>重讀資料時改到清單的值（不是使用者改的，不算修改）</summary>
+    private bool listLoading;
+
+    /// <summary>
+    /// 清單資料的值改了：使用者在格子裡改的、開窗選取帶回來的都算（重讀資料時不算）。
+    /// 在 SyncList 換資料時掛上，記下改過的列，工具列的「確定」「取消」就可以按
+    /// </summary>
+    private void OnListColumnChanged(object sender, DataColumnChangeEventArgs e)
+    {
+        if (listLoading || e.Row.Table != results || IsPendingRow(e.Row) || !listInlineColumns.Contains(e.Column.ColumnName)) return;
+        if (listEditedRows.Add(e.Row)) UpdateListEditButtons();
+        // 馬上存：等這一輪處理完（開窗一次帶回好幾個欄位、Grid 把值交給資料表）再存，同一列只排一次
+        var row = e.Row;
+        if (!listSaveQueued.Add(row)) return;
+        BeginInvoke(() =>
+        {
+            listSaveQueued.Remove(row);
+            if (!listEditedRows.Contains(row) || row.Table != results) return;
+            try
+            {
+                if (listGrid.IsCurrentCellInEditMode) listGrid.EndEdit();
+                if (listGrid.BindingContext?[results] is CurrencyManager cm) cm.EndCurrentEdit();   // 結束這一列的編輯，值才會變成目前的值
+            }
+            catch (InvalidOperationException) { return; }          // 格子的值不合法：等使用者改好
+            SaveListInlineRow(row);
+            UpdateListEditButtons();
+        });
+    }
+
+    /// <summary>已經排了「馬上存」的列</summary>
+    private readonly HashSet<DataRow> listSaveQueued = new();
+
+    /// <summary>瀏覽中有還沒存的清單修改：「確定」存檔、「取消」放棄</summary>
+    private void UpdateListEditButtons()
+    {
+        if (mode == Mode.Browse) btnOk.Enabled = btnCancel.Enabled = HasUnsavedListChanges;
+    }
+
+    /// <summary>清單上有還沒存的修改，或正在輸入、還沒新增的列</summary>
+    private bool HasUnsavedListChanges =>
+        listEditedRows.Count > 0
+        || listDef?.AllowInsert == true && listGrid != null
+           && (listGrid.CurrentRow is { } current && (current.IsNewRow && listGrid.IsCurrentRowDirty
+                                                       || ListRowView(current.Index) is { } v && IsPendingRow(v.Row))   // 正在輸入的列（還沒加進資料表）
+               || results.Rows.Cast<DataRow>().Any(IsPendingRow));
+
+    /// <summary>「確定」：正在輸入的新增列馬上新增（離開那一列 → 檢查必填 → INSERT）</summary>
+    private void CommitListInsert()
+    {
+        try
+        {
+            listGrid.EndEdit();
+            listGrid.CurrentCell = null;                   // 離開那一列：觸發新增（必填沒填會提醒，留在那一列）
+        }
+        catch (InvalidOperationException) { }
+        UpdateListEditButtons();
+    }
+
+    /// <summary>「確定」：清單上直接改過的每一列都存回資料表</summary>
+    private bool SaveListInlineEdits()
+    {
+        listGrid.EndEdit();
+        if (listGrid.BindingContext?[results] is CurrencyManager cm) cm.EndCurrentEdit();
+        bool ok = true;
+        foreach (var row in listEditedRows.ToList()) ok &= SaveListInlineRow(row);
+        UpdateListEditButtons();
+        return ok;
+    }
+
+    /// <summary>「取消」：清單上直接改過、還沒存的列都還原成原本的值</summary>
+    private void DiscardListInlineEdits()
+    {
+        listGrid.CancelEdit();
+        listGrid.EndEdit();
+        listLoading = true;
+        try
+        {
+            foreach (var row in listEditedRows) if (row.RowState == DataRowState.Modified) row.RejectChanges();
+            foreach (var row in results.Rows.Cast<DataRow>().Where(IsPendingRow).ToList()) results.Rows.Remove(row);   // 還沒新增的列不要了
+        }
+        finally { listLoading = false; }
+        listEditedRows.Clear();
+        UpdateListEditButtons();
+        listGrid.Invalidate();
+    }
+
+    /// <summary>有還沒存的清單修改時問要不要存（是 = 存、否 = 放棄、取消 = 不做 what）；可以繼續回傳 true</summary>
+    private bool ConfirmListEdits(string what)
+    {
+        if (listGrid == null || listDef?.InlineEdit != true) return true;
+        if (listGrid.IsCurrentCellInEditMode) listGrid.EndEdit();
+        if (listGrid.BindingContext?[results] is CurrencyManager cm) cm.EndCurrentEdit();
+        if (listEditedRows.Count == 0) return true;
+        var answer = MessageBox.Show(this, $"清單上有 {listEditedRows.Count} 筆修改還沒存檔，要先存檔嗎？\n\n是 = 存檔後{what}　否 = 不存檔　取消 = 不要{what}",
+                                     "還沒存檔", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (answer == DialogResult.Cancel) return false;
+        if (answer == DialogResult.Yes) return SaveListInlineEdits();
+        DiscardListInlineEdits();
+        return true;
+    }
+
+    /// <summary>把清單上改過的一列存回單頭資料表（只寫改過、可以直接修改的欄位），存好重讀那一筆；失敗時還原這一列，回傳 false</summary>
+    private bool SaveListInlineRow(DataRow row)
+    {
+        if (!listEditedRows.Remove(row) || row.Table != results || row.RowState != DataRowState.Modified) return true;
+        var changed = listInlineColumns.Where(c => results.Columns.Contains(c)
+                                                   && !Equals(row[c, DataRowVersion.Original], row[c, DataRowVersion.Current])).ToList();
+        if (changed.Count == 0) { row.AcceptChanges(); return true; }
+        var key = def.MasterKeys.ToDictionary(k => k.Column, k => row[k.Column, DataRowVersion.Original]);
+        try
+        {
+            using var conn = Dialect.Open(def.ConnectionString);
+            using var cmd = Dialect.CreateCommand(conn);
+            var sets = changed.Select((c, i) =>
+            {
+                Dialect.AddParam(cmd, $"p{i}", row[c] ?? DBNull.Value);
+                return $"{Dialect.Quote(c)} = {Dialect.Param($"p{i}")}";
+            }).ToList();
+            cmd.CommandText = $"UPDATE {def.FullTableName} SET {string.Join(", ", sets)} WHERE " + AddKeyCondition(cmd, key);
+            int n = cmd.ExecuteNonQuery();
+            if (n != 1) throw new InvalidOperationException(n == 0 ? "找不到這一筆（可能已被其他人刪除）。" : $"主鍵對到 {n} 筆，沒有存檔，請檢查畫面的主鍵設定。");
+            Audit.Write(def.FormKey, def.TableName, "修改", Audit.KeyText(key), "清單直接修改：" + string.Join("、", changed));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("存檔失敗，這一列的修改已還原：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            row.RejectChanges();
+            return false;
+        }
+        row.AcceptChanges();
+        int index = results.Rows.IndexOf(row);
+        if (index >= 0) RefreshRows(new[] { index });           // 讀回資料庫的值（觸發器、預設值、JOIN 欄位跟著更新）
+        return true;
     }
 
     /// <summary>
@@ -3306,6 +3637,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// <summary>用主鍵重讀查詢結果裡的這幾筆（批次處理後清單顯示最新的值），選取的列維持不變</summary>
     private void RefreshRows(IEnumerable<int> rows)
     {
+        bool wasLoading = listLoading;
+        listLoading = true;                                // 重讀的值不算使用者在清單上的修改
         try
         {
             foreach (int row in rows)
@@ -3313,12 +3646,15 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 DataRow fresh = LoadRowByKey(KeyOf(row), results.Rows[row]);
                 if (fresh == null) continue;
                 CopyFreshValues(results.Rows[row], fresh);
+                // 重讀的值就是資料庫的值（不算修改）；清單上還沒存的修改不動
+                if (results.Rows[row].RowState == DataRowState.Modified && !listEditedRows.Contains(results.Rows[row])) results.Rows[row].AcceptChanges();
             }
         }
         catch (Exception ex)
         {
             MessageBox.Show("重新讀取資料失敗：" + ex.Message, "提醒");
         }
+        finally { listLoading = wasLoading; }
         LoadDetail();
     }
 

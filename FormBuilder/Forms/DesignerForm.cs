@@ -134,6 +134,10 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
         toolbox.AddEntry("Calc", "計算欄位（公式）");
         toolbox.AddEntry("Label", "文字標籤 (Label)");
         FormulaEditor.Fields = () => def.Fields;                // 屬性面板「公式」的編輯視窗列出畫面上的欄位
+        // 也列出畫面上 Grid（單身、SQL 清單、單頭清單）的欄位：雙擊插入 SUM(欄位)，可以改成 COUNT、AVG、MAX、MIN
+        FormulaEditor.DetailFields = () => def.Grids.SelectMany(g => g.Columns)
+            .Where(c => !(c.IsCustom && c.CellType == GridCellKind.按鈕))
+            .Select(c => (c.Column, c.Header ?? c.Column)).DistinctBy(c => c.Column, StringComparer.OrdinalIgnoreCase);
         toolbox.ItemActivated += kind => AddToolboxItem(kind, NextFreePoint());
 
         // 分隔線位置要等視窗有實際大小後才能設定
@@ -813,7 +817,9 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
 
     /// <summary>單頭資料表的全部欄位（JOIN 關聯條件左邊的選項）</summary>
     private List<ColumnInfo> MasterTableColumns() =>
-        defTableColumns.Count > 0 ? defTableColumns : GetColumnsCached(def.TableSchema, def.TableName) ?? new List<ColumnInfo>();
+        defTableColumns.Count > 0 ? defTableColumns
+        : string.IsNullOrWhiteSpace(def.TableName) || string.IsNullOrWhiteSpace(connectionString) ? new List<ColumnInfo>()   // 還沒有單頭或沒連線（例如只放自建欄位）：不讀資料庫
+        : GetColumnsCached(def.TableSchema, def.TableName) ?? new List<ColumnInfo>();
 
     /// <summary>單頭已經用掉的欄位名稱（畫面欄位、單頭資料表欄位、單頭清單欄位），JOIN 帶進來的欄位不能重複</summary>
     private List<string> UsedFieldNames() =>
@@ -1452,7 +1458,8 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
             if (def.MasterKeys.Count == 0) notes.Add("注意：單頭欄位與單頭清單都沒有主鍵，使用者只能新增，不能修改、刪除");
             foreach (var f in def.Fields.Where(f => f.HasFormula))
             {
-                string error = Formula.Check(f.Formula, def.Fields.Where(x => x != f).Select(x => x.Column));
+                var others = def.Fields.Where(x => x != f).Select(x => x.Column);
+                string error = DateFormula.IsDateField(f) ? DateFormula.Check(f.Formula, others) : Formula.Check(f.Formula, others);
                 if (error != null) notes.Add($"注意：「{f.Label}」的{error}");
             }
             foreach (var g in def.Grids.Where(g => !g.IsMasterList && !g.IsSqlList))

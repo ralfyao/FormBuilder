@@ -128,6 +128,25 @@ public partial class SqlListDialog : Form
             else if (dgvColumns.Columns[e.ColumnIndex].DataPropertyName == "AfterSelect") EditAfterSelect(name);
         };
 
+        // 欄位順序：▲ 上移 / ▼ 下移，或選好欄位按 Alt+↑ / Alt+↓（由上到下 = 清單由左到右）
+        dgvColumns.KeyDown += (s, e) =>
+        {
+            if (!e.Alt || e.KeyCode is not (Keys.Up or Keys.Down)) return;
+            MoveRow(e.KeyCode == Keys.Up ? -1 : 1);
+            e.Handled = true;
+        };
+        var btnDown = new Button { Text = "▼ 下移", Dock = DockStyle.Top, Height = 30 };
+        btnDown.Click += (s, e) => MoveRow(1);
+        var btnUp = new Button { Text = "▲ 上移", Dock = DockStyle.Top, Height = 30 };
+        btnUp.Click += (s, e) => MoveRow(-1);
+        toolTip.SetToolTip(btnUp, "選的欄位往上移（清單上往左）；也可以按 Alt+↑");
+        toolTip.SetToolTip(btnDown, "選的欄位往下移（清單上往右）；也可以按 Alt+↓");
+        var movePanel = new Panel { Dock = DockStyle.Right, Width = 78, Padding = new Padding(6, 0, 0, 0) };
+        movePanel.Controls.Add(btnDown);
+        movePanel.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 4 });
+        movePanel.Controls.Add(btnUp);                     // Dock Top：後加的在上面
+        columnGroup.Controls.Add(movePanel);               // 清單（Fill）佔剩下的寬度
+
         // 自訂欄位：例如勾選框，使用者打勾的列，按「執行SQL」按鈕時只對打勾的列執行
         var btnCustom = new Button { Text = "新增自訂欄位…", AutoSize = true, Height = 30 };
         btnCustom.Click += (s, e) => AddCustom();
@@ -205,19 +224,28 @@ public partial class SqlListDialog : Form
         var old = columnTable.Rows.Cast<DataRow>()
             .GroupBy(r => (string)r["Column"], StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (Visible: g.First()["Visible"], Header: g.First()["Header"], Width: g.First()["Width"]), StringComparer.OrdinalIgnoreCase);
+        // 原本的順序（上移 / 下移調整過的）：原本就有的欄位照原本的順序，新的欄位接在後面
+        var oldOrder = columnTable.Rows.Cast<DataRow>().Select((r, i) => ((string)r["Column"], i))
+            .GroupBy(x => x.Item1, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().i, StringComparer.OrdinalIgnoreCase);
         KeepHeaderGroups();
         columnTable.Clear();
+        var rows = new List<object[]>();
         foreach (var c in columns.Where(c => !joinColumns.ContainsKey(c.Column) && !customColumns.ContainsKey(c.Column)))
         {
-            if (old.TryGetValue(c.Column, out var o)) columnTable.Rows.Add(o.Visible, c.Column, o.Header, o.Width, "");
-            else columnTable.Rows.Add(true, c.Column, c.Column, c.Width, "");
+            if (old.TryGetValue(c.Column, out var o)) rows.Add(new object[] { o.Visible, c.Column, o.Header, o.Width, "" });
+            else rows.Add(new object[] { true, c.Column, c.Column, c.Width, "" });
         }
         // JOIN 帶進來的欄位、自訂欄位接在後面
         foreach (var c in joinColumns.Values.Concat(customColumns.Values))
         {
-            if (old.TryGetValue(c.Column, out var o)) columnTable.Rows.Add(o.Visible, c.Column, o.Header, o.Width, SourceText(c));
-            else columnTable.Rows.Add(c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c));
+            if (old.TryGetValue(c.Column, out var o)) rows.Add(new object[] { o.Visible, c.Column, o.Header, o.Width, SourceText(c) });
+            else rows.Add(new object[] { c.Visible, c.Column, c.Header ?? c.Column, c.Width, SourceText(c) });
         }
+        foreach (var values in rows.Select((v, i) => (v, i))
+                                   .OrderBy(x => oldOrder.TryGetValue((string)x.v[1], out int at) ? at : int.MaxValue)
+                                   .ThenBy(x => x.i)
+                                   .Select(x => x.v))
+            columnTable.Rows.Add(values);
         readColumns = columns;
         RefreshClickText(keep: false);
         return true;
@@ -537,6 +565,25 @@ public partial class SqlListDialog : Form
         customColumns.Remove(c.Column);
         columnTable.Rows.Cast<DataRow>().FirstOrDefault(r => ((string)r["Column"]).Equals(c.Column, StringComparison.OrdinalIgnoreCase))?.Delete();
         columnTable.AcceptChanges();
+    }
+
+    /// <summary>目前選的欄位上移 / 下移一列（delta = -1 / 1），移完維持選取在同一個欄位；按確定時照清單的順序存</summary>
+    private void MoveRow(int delta)
+    {
+        dgvColumns.EndEdit();
+        if (dgvColumns.CurrentRow?.DataBoundItem is not DataRowView view) return;
+        columnTable.DefaultView.Sort = "";                 // 點標題排序過的話先恢復原本順序，畫面上的列才對得上資料表的列
+        int index = columnTable.Rows.IndexOf(view.Row);
+        if (index < 0) return;
+        int target = index + delta;
+        if (target < 0 || target >= columnTable.Rows.Count) return;
+        int columnIndex = dgvColumns.CurrentCell.ColumnIndex;
+        var values = columnTable.Rows[index].ItemArray;
+        columnTable.Rows.RemoveAt(index);
+        var moved = columnTable.NewRow();
+        moved.ItemArray = values;
+        columnTable.Rows.InsertAt(moved, target);
+        dgvColumns.CurrentCell = dgvColumns[columnIndex, target];
     }
 
     /// <summary>移除一個 JOIN，連同它帶進來的欄位</summary>

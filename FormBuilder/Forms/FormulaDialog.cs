@@ -120,7 +120,7 @@ public class FormulaDialog : Form
         txtFormula.TextChanged += (s, e) => ShowCheck();
         btnOk.Click += (s, e) =>
         {
-            string error = Formula.Length == 0 ? null : FormBuilder.Formula.Check(Formula, knownNames);
+            string error = Formula.Length == 0 ? null : CheckFormula();
             if (error != null && MessageBox.Show(error + "\n\n仍要使用這個公式嗎？", "公式", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
             DialogResult = DialogResult.OK;
@@ -137,9 +137,24 @@ public class FormulaDialog : Form
         txtFormula.Focus();
     }
 
+    /// <summary>日期欄位的公式：用日期的寫法檢查（日期選擇1 + 7、DATEADD(DAY, 7, 日期選擇1)、TODAY() + 7）</summary>
+    public bool DateMode
+    {
+        get => dateMode;
+        set
+        {
+            dateMode = value;
+            if (value) Text = "日期公式：日期欄位 + 天數，例如 日期選擇1 + 7、DATEADD(WEEK, 1, 日期選擇1)、TODAY() + 7";
+            ShowCheck();
+        }
+    }
+    private bool dateMode;
+
+    private string CheckFormula() => dateMode ? DateFormula.Check(Formula, knownNames) : FormBuilder.Formula.Check(Formula, knownNames);
+
     private void ShowCheck()
     {
-        string error = Formula.Length == 0 ? null : FormBuilder.Formula.Check(Formula, knownNames);
+        string error = Formula.Length == 0 ? null : CheckFormula();
         lblCheck.ForeColor = error == null ? Color.DarkGreen : Color.Firebrick;
         lblCheck.Text = Formula.Length == 0 ? "還沒有輸入公式" : error ?? "公式格式正確";
     }
@@ -199,6 +214,8 @@ public class FormulaEditor : UITypeEditor
         var self = context?.Instance as FieldDefinition;
         using var dlg = new FormulaDialog(value as string, Fields().Where(f => f != self).Select(f => (f.Column, f.Label)),
                                           detailFields: DetailFields());
+        // 日期欄位：公式照日期算（日期選擇1 + 7、DATEADD(DAY, 7, 日期選擇1)）
+        if (self != null && (self.InputType == InputKind.日期選擇 || TypeHelper.IsDate(self.DataType))) dlg.DateMode = true;
         return dlg.ShowDialog() == DialogResult.OK ? (dlg.Formula == "" ? null : dlg.Formula) : value;
     }
 }

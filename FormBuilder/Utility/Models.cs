@@ -469,6 +469,7 @@ public class FieldDefinition : IPickerField
 
     [Category("編號"), DisplayName("預設值"),
      Description("新增時自動帶入的值（使用者仍可以改）。可以寫固定值；日期用 NOW()（現在日期時間）、TODAY()（今天），可以加減天數，例如 TODAY()+7；"
+               + "也認得 DATEADD(DAY, 7, GETDATE())（單位可以是 DAY、WEEK、MONTH、YEAR）；自建欄位在開啟畫面時就帶入預設值。"
                + "USER() = 登入帳號。也可以用 {今天} {現在} {使用者} {使用者名稱} 夾在文字裡。"
                + "也可以寫 SELECT 查資料庫，取第一筆的第一個欄位，@欄位名稱 取畫面上的值，例如：SELECT 姓名 FROM H員工清冊 WHERE 工號 = @員工編號。"
                + "文字標籤的預設值是顯示的文字，每次切換資料都會重新帶出。有設「編號規則」時以編號規則為準"),
@@ -699,12 +700,15 @@ public class GridDefinition
     public string EditKeyText { get; set; }
 
     [Category("編輯視窗"), DisplayName("在清單上直接修改"), DefaultValue(false),
-     Description("SQL 清單用，要先設「存回資料表」：True = 按「修改」後，清單上跟那張資料表同名的欄位（主鍵、自動編號除外）可以直接在清單上改，"
-               + "例如勾「結案」；按「確定」用「主鍵對應」把改過的列存回那張表，「取消」放棄。SQL 的 SELECT 要有主鍵欄位（可以不顯示）")]
+     Description("單頭清單：True = 不用雙擊進編輯視窗，清單上的欄位（主鍵、自動編號、JOIN、公式欄位除外）淡黃底可以直接改，"
+               + "改完離開那一列就存回單頭資料表（要有修改權限，畫面要有主鍵）；雙擊列標題（最左邊那格）還是可以開編輯視窗。"
+               + "SQL 清單：要先設「存回資料表」，按「修改」後清單上跟那張資料表同名的欄位可以直接改，例如勾「結案」；"
+               + "按「確定」用「主鍵對應」把改過的列存回那張表，「取消」放棄。SQL 的 SELECT 要有主鍵欄位（可以不顯示）")]
     public bool InlineEdit { get; set; }
 
     [Category("編輯視窗"), DisplayName("可修改的欄位"),
-     Description("在清單上直接修改時，哪些欄位可以改，用逗號分隔，例如：結案 或 結案, 備註；空白 = 存回資料表裡有的欄位都可以改（主鍵、自動編號除外）")]
+     Description("在清單上直接修改時，哪些欄位可以改，用逗號分隔，例如：結案 或 結案, 備註；"
+               + "空白 = 資料表的欄位都可以改（主鍵、自動編號、JOIN、公式欄位除外）")]
     public string InlineEditColumns { get; set; }
 
     [Browsable(false), JsonIgnore]

@@ -40,6 +40,23 @@ public static class DefaultValue
             if (m.Groups[3].Success) date = date.AddDays((m.Groups[4].Value == "-" ? -1 : 1) * int.Parse(m.Groups[5].Value));
             return date;
         }
+        // SQL Server 的寫法也認得：DATEADD(DAY, 7, GETDATE())；單位可以是 DAY / WEEK / MONTH / YEAR（含 DD、WK、MM、YY 等縮寫），
+        // 日期可以是 GETDATE()、NOW()、TODAY()，或 CAST(GETDATE() AS date)（= 今天）
+        var add = System.Text.RegularExpressions.Regex.Match(t,
+            @"^DATEADD\s*\(\s*(\w+)\s*,\s*([+-]?\s*\d+)\s*,\s*(?:CAST\s*\(\s*(?:GETDATE|NOW|SYSDATETIME)\s*\(\s*\)\s+AS\s+DATE\s*\)|(NOW|GETDATE|SYSDATE|SYSDATETIME|TODAY)\s*\(\s*\))\s*\)$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (add.Success)
+        {
+            var date = !add.Groups[3].Success || add.Groups[3].Value.Equals("TODAY", StringComparison.OrdinalIgnoreCase) ? DateTime.Today : DateTime.Now;
+            int n = int.Parse(add.Groups[2].Value.Replace(" ", ""), CultureInfo.InvariantCulture);
+            switch (add.Groups[1].Value.ToUpperInvariant())
+            {
+                case "DAY": case "DD": case "D": case "DAYOFYEAR": case "DY": case "Y": return date.AddDays(n);
+                case "WEEK": case "WK": case "WW": return date.AddDays(7 * n);
+                case "MONTH": case "MM": case "M": return date.AddMonths(n);
+                case "YEAR": case "YY": case "YYYY": return date.AddYears(n);
+            }
+        }
         if (t.Equals("USER()", StringComparison.OrdinalIgnoreCase)) return SysContext.User?.UserId ?? Environment.UserName;
         return t.Replace("{今天}", DateTime.Today.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture))
                 .Replace("{現在}", DateTime.Now.ToString("yyyy/MM/dd HH:mm", CultureInfo.InvariantCulture))

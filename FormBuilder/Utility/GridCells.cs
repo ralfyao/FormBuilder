@@ -809,6 +809,59 @@ public static class GridCells
     private static string HeaderGroupOf(DataGridViewColumn col) =>
         col.Tag is GridColumnDefinition { HeaderGroup: { } g } && g.Trim().Length > 0 ? g.Trim() : null;
 
+    // ---- 標題帶參數：標題、群組標題寫 @名稱（例如 @D0），顯示時換成畫面上那個欄位的值 ----
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Func<string, object>> headerParams = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridViewColumn, string> headerTemplates = new();
+    private static readonly System.Text.RegularExpressions.Regex HeaderParamPattern = new(@"(?<!@)@([\p{L}\p{N}_]+)");
+
+    /// <summary>標題或群組標題有沒有寫 @名稱</summary>
+    public static bool HasHeaderParams(DataGridView grid) =>
+        grid.Columns.Cast<DataGridViewColumn>().Any(c => HeaderParamPattern.IsMatch(c.HeaderText ?? "") || HeaderParamPattern.IsMatch(HeaderGroupOf(c) ?? ""));
+
+    /// <summary>
+    /// 標題、群組標題裡的 @名稱 換成 valueOf 取到的值（日期顯示 yyyy/MM/dd）；值改了呼叫 RefreshHeaderParams 重畫。
+    /// 沒寫 @名稱 的 Grid 不動
+    /// </summary>
+    public static void UseHeaderParams(DataGridView grid, Func<string, object> valueOf)
+    {
+        if (!HasHeaderParams(grid)) return;
+        foreach (DataGridViewColumn c in grid.Columns)
+            if (HeaderParamPattern.IsMatch(c.HeaderText ?? "") && !headerTemplates.TryGetValue(c, out _)) headerTemplates.Add(c, c.HeaderText);
+        headerParams.AddOrUpdate(grid, valueOf);
+        RefreshHeaderParams(grid);
+    }
+
+    /// <summary>畫面上的值改了：重新帶入標題裡的 @名稱</summary>
+    public static void RefreshHeaderParams(DataGridView grid)
+    {
+        if (!headerParams.TryGetValue(grid, out _)) return;
+        foreach (DataGridViewColumn c in grid.Columns)
+            if (headerTemplates.TryGetValue(c, out var template) && ExpandHeader(grid, template) is var text && c.HeaderText != text) c.HeaderText = text;
+        if (grid.IsHandleCreated) grid.Invalidate(new Rectangle(0, 0, grid.Width, grid.ColumnHeadersHeight + 2));
+        if (headerResizers.TryGetValue(grid, out var resize)) resize();
+    }
+
+    /// <summary>兩層標題的 Grid：重算標題高度（群組、標題文字換了）</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DataGridView, Action> headerResizers = new();
+
+    /// <summary>把文字裡的 @名稱 換成值；沒設定取值方式時原樣回傳</summary>
+    private static string ExpandHeader(DataGridView grid, string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('@') || !headerParams.TryGetValue(grid, out var valueOf)) return text;
+        return HeaderParamPattern.Replace(text, m =>
+        {
+            object value;
+            try { value = valueOf(m.Groups[1].Value); }
+            catch { return m.Value; }
+            return value switch
+            {
+                null or DBNull => "",
+                DateTime d => d.ToString(d.TimeOfDay == TimeSpan.Zero ? "yyyy/MM/dd" : "yyyy/MM/dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+                _ => Convert.ToString(value),
+            };
+        });
+    }
+
     /// <summary>
     /// 兩層標題：有填「群組標題」的欄位，上面一層畫群組名稱（相鄰同名的欄位合併成一格），下面一層畫原本的欄位標題；
     /// 沒填的欄位標題佔滿兩層。整個 Grid 都沒填就不動。欄寬、欄位順序、左右捲動、字型改了都重畫
@@ -819,8 +872,50 @@ public static class GridCells
         if (!grid.Columns.Cast<DataGridViewColumn>().Any(c => HeaderGroupOf(c) != null)) return;
         grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;   // 標題框線跟群組的框線一樣是細線
         Font HeaderFont() => grid.ColumnHeadersDefaultCellStyle.Font ?? grid.Font;
-        int Band() => TextRenderer.MeasureText("國Ag", HeaderFont()).Height + 10;   // 上面一層（群組）的高度
-        const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
+        // TextBoxControl：沒有空白的長字（例如 2026/11/24）也可以在字中間斷行，不然放不下時只能顯示「…」
+        const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix;
+        // 群組（上面一層）：照畫面上的欄位順序，相鄰同名的合併成一格；寬度 = 合併的欄寬加總
+        List<(string Text, int Width)> GroupSpans()
+        {
+            var spans = new List<(string, int)>();
+            var columns = grid.Columns.Cast<DataGridViewColumn>().Where(c => c.Visible).OrderBy(c => c.DisplayIndex).ToList();
+            for (int i = 0; i < columns.Count;)
+            {
+                string group = HeaderGroupOf(columns[i]);
+                int j = i + 1, width = columns[i].Width;
+                if (group != null)
+                    while (j < columns.Count && HeaderGroupOf(columns[j]) == group) width += columns[j++].Width;
+                if (group != null) spans.Add((ExpandHeader(grid, group), width));
+                i = j;
+            }
+            return spans;
+        }
+        // 群組文字：沒有空白的字（例如日期 2026/11/24）放不下時，在最靠近中間的 / - . : 後面換行（2026/ ↵ 11/24），
+        // 不要被拆成 2026/11/2 ↵ 4；有空白的文字照一般方式換行
+        string GroupText(string text, int width)
+        {
+            if (string.IsNullOrEmpty(text) || text.Any(char.IsWhiteSpace)) return text;
+            if (TextRenderer.MeasureText(text, HeaderFont(), Size.Empty, TextFormatFlags.NoPrefix).Width <= width) return text;
+            int best = -1;
+            for (int k = 0; k < text.Length - 1; k++)
+                if ("/-.:：".Contains(text[k]) && (best < 0 || Math.Abs(k + 1 - text.Length / 2.0) < Math.Abs(best + 1 - text.Length / 2.0)))
+                    best = k;
+            return best < 0 ? text : text[..(best + 1)] + "\n" + text[(best + 1)..];
+        }
+        // 上面一層（群組）的高度：群組文字放不下時換行，取換行後最高的那一個（至少一行）
+        int Band()
+        {
+            var font = HeaderFont();
+            int lineHeight = TextRenderer.MeasureText("國Ag", font).Height;
+            int max = lineHeight;
+            foreach (var (text, width) in GroupSpans())
+            {
+                if (string.IsNullOrEmpty(text)) continue;
+                int area = Math.Max(lineHeight, width - 7);         // 跟畫的時候一樣：扣框線、左右各 3
+                max = Math.Max(max, TextRenderer.MeasureText(GroupText(text, area), font, new Size(area, int.MaxValue), Wrap).Height);
+            }
+            return max + 10;
+        }
         const int SortGlyph = 12;                          // 排序三角形佔的寬度
         int top = Band();
         // 下面一層的字可以換行：高度取有群組的欄位裡，標題換行後最高的那一個（至少一層）
@@ -828,7 +923,7 @@ public static class GridCells
         {
             var font = HeaderFont();
             int lineHeight = TextRenderer.MeasureText("國Ag", font).Height;
-            int max = Band();
+            int max = lineHeight + 10;                     // 至少一行（不跟著群組換行變高）
             foreach (DataGridViewColumn c in grid.Columns)
             {
                 if (!c.Visible || HeaderGroupOf(c) == null || string.IsNullOrEmpty(c.HeaderText)) continue;
@@ -866,6 +961,7 @@ public static class GridCells
                 InvalidateHeader();
             });
         }
+        headerResizers.AddOrUpdate(grid, ResizeLater);      // 標題帶參數（@D0）換了值：文字長短變了，重算高度
         grid.HandleCreated += (s, e) => ResizeLater();
         grid.FontChanged += (s, e) => ResizeLater();
         grid.DataBindingComplete += (s, e) => ResizeLater();    // 欄寬依內容調整後
@@ -940,10 +1036,16 @@ public static class GridCells
                         e.Graphics.FillRectangle(back, top);
                         e.Graphics.DrawRectangle(pen, top.X, top.Y, top.Width, top.Height);         // 群組的框線（上、下、左、右）
                         if (top.X > 0) e.Graphics.DrawLine(pen, top.X - 1, top.Top, top.X - 1, top.Bottom);   // 接到左邊欄位的框線
-                        TextRenderer.DrawText(e.Graphics, group, HeaderFont(), top,
+                        // 群組文字放不下時換行（上面一層的高度已經依換行後的高度調好）；換行的字 DrawText 不會垂直置中，先量高度再置中
+                        // 用整個群組的寬度決定在哪裡換行（捲動到一半時只看得到一部分，換行位置不要跟著變）
+                        int fullWidth = Enumerable.Range(i, j - i).Sum(k => columns[k].Width) - 7;
+                        string text = GroupText(ExpandHeader(grid, group), Math.Max(1, fullWidth));
+                        var font = HeaderFont();
+                        var area = new Rectangle(top.X + 3, top.Y, Math.Max(1, top.Width - 6), top.Height);
+                        int textHeight = Math.Min(area.Height, TextRenderer.MeasureText(text, font, new Size(area.Width, int.MaxValue), Wrap).Height);
+                        TextRenderer.DrawText(e.Graphics, text, font, new Rectangle(area.X, area.Y + (area.Height - textHeight) / 2, area.Width, textHeight),
                                               style.ForeColor.IsEmpty ? SystemColors.ControlText : style.ForeColor,
-                                              TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-                    }
+                                              Wrap | TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);                    }
                 }
                 i = j;
             }
