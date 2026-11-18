@@ -71,6 +71,7 @@ public partial class ErpShellForm : Form
             // 一個一個關掉開著的畫面（畫面有沒存的輸入時會自己問；使用者取消就不關）
             foreach (var page in tabs.TabPages.Cast<TabPage>().Skip(1).ToList())
             {
+                if (!tabs.TabPages.Contains(page)) continue;      // 編輯分頁已經跟著開它的畫面一起關了
                 if (!CloseTab(page))
                 {
                     LoggedOut = false;
@@ -83,7 +84,15 @@ public partial class ErpShellForm : Form
 
         // 畫面上的「開啟畫面」按鈕：開在分頁裡
         ButtonRunner.OpenInShell = (def, parameters, startInsert) => OpenForm(def, parameters, startInsert);
-        FormClosed += (s, e) => ButtonRunner.OpenInShell = null;
+        // 清單點進去的編輯視窗：也開在分頁裡
+        RuntimeForm.HostEditWindow = HostEditWindow;
+        RuntimeForm.FocusHostedWindow = window => { if (PageOf(window) is { } page) tabs.SelectedTab = page; };
+        FormClosed += (s, e) =>
+        {
+            ButtonRunner.OpenInShell = null;
+            RuntimeForm.HostEditWindow = null;
+            RuntimeForm.FocusHostedWindow = null;
+        };
 
         LoadMenu();
     }
@@ -250,10 +259,47 @@ public partial class ErpShellForm : Form
         form.Show();
     }
 
+    /// <summary>
+    /// 編輯視窗放進分頁：排在開它的畫面分頁後面，分頁標題跟著視窗標題（修改：xxx、新增：xxx）；
+    /// 關掉時回到開它的畫面分頁
+    /// </summary>
+    private bool HostEditWindow(Form window, Form opener)
+    {
+        if (IsDisposed) return false;
+        var openerPage = PageOf(opener);
+        window.TopLevel = false;
+        window.FormBorderStyle = FormBorderStyle.None;
+        window.Dock = DockStyle.Fill;
+        // 瀏覽時視窗標題就是畫面名稱，跟清單分頁一樣：前面加「編輯：」才分得出來（修改中、新增中本來就有「修改：」「新增：」）
+        string Caption() => window.Text.Contains('：') ? window.Text : "編輯：" + window.Text;
+        var page = new TabPage(Caption()) { Tag = window, ToolTipText = Caption(), BackColor = SystemColors.Control };
+        page.Controls.Add(window);
+        // 排在開它的分頁後面（已經有它開的其他編輯分頁時排在那些後面）
+        int at = openerPage != null ? tabs.TabPages.IndexOf(openerPage) + 1 : tabs.TabPages.Count;
+        while (at < tabs.TabPages.Count && tabs.TabPages[at].Tag is Form f && f.Tag == opener) at++;
+        window.Tag = opener;
+        tabs.TabPages.Insert(at, page);
+        tabs.SelectedTab = page;
+        window.TextChanged += (s, e) => { page.Text = page.ToolTipText = Caption(); tabs.Invalidate(); };
+        window.FormClosed += (s, e) =>
+        {
+            bool wasSelected = tabs.SelectedTab == page;
+            if (tabs.TabPages.Contains(page)) tabs.TabPages.Remove(page);
+            page.Dispose();
+            if (wasSelected && openerPage != null && tabs.TabPages.Contains(openerPage)) tabs.SelectedTab = openerPage;
+        };
+        window.Show();
+        return true;
+    }
+
+    /// <summary>某個畫面 / 編輯視窗所在的分頁（不在分頁裡回傳 null）</summary>
+    private TabPage PageOf(Form form) =>
+        form == null ? null : tabs.TabPages.Cast<TabPage>().FirstOrDefault(p => p.Controls.Contains(form));
+
     /// <summary>關閉分頁（畫面有沒存的輸入時會先問）；回傳 true = 關掉了</summary>
     private bool CloseTab(TabPage page)
     {
-        var form = page.Controls.OfType<RuntimeForm>().FirstOrDefault();
+        var form = page.Controls.OfType<Form>().FirstOrDefault();
         if (form == null)
         {
             tabs.TabPages.Remove(page);

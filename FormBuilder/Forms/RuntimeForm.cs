@@ -357,7 +357,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             if (!dialog.IsDisposed)
             {
                 e.Cancel = true;
-                dialog.Activate();
+                FocusEditWindow(dialog);
                 return;
             }
         }
@@ -2798,9 +2798,12 @@ public partial class RuntimeForm : Form, IRecordNavigator
             Close();
             return;
         }
-        dlg.StartPosition = FormStartPosition.Manual;
-        var area = Screen.FromPoint(MousePosition).WorkingArea;           // 這個畫面在看不到的地方：編輯視窗放在滑鼠所在螢幕的中間
-        dlg.Location = new Point(area.Left + Math.Max(0, (area.Width - dlg.Width) / 2), area.Top + Math.Max(0, (area.Height - dlg.Height) / 2));
+        if (dlg.TopLevel)
+        {
+            dlg.StartPosition = FormStartPosition.Manual;
+            var area = Screen.FromPoint(MousePosition).WorkingArea;       // 這個畫面在看不到的地方：編輯視窗放在滑鼠所在螢幕的中間
+            dlg.Location = new Point(area.Left + Math.Max(0, (area.Width - dlg.Width) / 2), area.Top + Math.Max(0, (area.Height - dlg.Height) / 2));
+        }
         dlg.FormClosed += (s, e) => BeginInvoke(Close);
     }
 
@@ -2830,7 +2833,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         var existing = editWindows.FirstOrDefault(w => row != null && w.Cursor.CurrentRow == row && !w.Dialog.IsDisposed);
         if (existing.Dialog != null)
         {
-            existing.Dialog.Activate();
+            FocusEditWindow(existing.Dialog);
             return;
         }
         listDef.EnsureEditLayout();                         // 沒設計過版面時排成一欄
@@ -2857,7 +2860,24 @@ public partial class RuntimeForm : Form, IRecordNavigator
         dlg.Location = new Point(Math.Min(origin.X + open * 28, area.Right - dlg.Width), Math.Min(origin.Y + open * 28, area.Bottom - dlg.Height));
         editWindows.Add((dlg, cursor));
         dlg.FormClosed += (s, e) => editWindows.RemoveAll(w => w.Dialog == dlg);
+        if (HostEditWindow?.Invoke(dlg, this) == true) return;      // ERP 系統：開在分頁裡
         dlg.Show(owner);
+    }
+
+    /// <summary>
+    /// 使用者端的 ERP 外框設定這個，清單點進去的編輯視窗就開成外框裡的分頁（傳入編輯視窗與開它的畫面，回傳 true = 已放進分頁）；
+    /// 沒設定（ERP Studio 預覽）= 開成獨立視窗
+    /// </summary>
+    public static Func<Form, Form, bool> HostEditWindow { get; set; }
+
+    /// <summary>切到分頁裡的編輯視窗（由 ERP 外框設定）</summary>
+    public static Action<Form> FocusHostedWindow { get; set; }
+
+    /// <summary>把編輯視窗叫到前面：獨立視窗用 Activate，放在分頁裡的切到那個分頁</summary>
+    private static void FocusEditWindow(RecordNavigatorDialog dialog)
+    {
+        if (dialog.TopLevel) dialog.Activate();
+        else FocusHostedWindow?.Invoke(dialog);
     }
 
     /// <summary>
