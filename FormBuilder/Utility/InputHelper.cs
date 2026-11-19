@@ -39,6 +39,22 @@ public class RadioGroup : FlowLayoutPanel
 /// <summary>下拉選單的一個選項：存進資料庫的值，以及顯示的文字</summary>
 public record ComboItem(string Value, string Text)
 {
+    /// <summary>選項 SQL 查出來的欄位名稱與這一列的值（多欄清單顯示、選取回傳對應用）；固定選項、空白選項 = null</summary>
+    public IReadOnlyList<string> Columns { get; init; }
+    public object[] Cells { get; init; }
+
+    /// <summary>這一列的值（key = SQL 欄位名稱，不分大小寫）</summary>
+    public Dictionary<string, object> Row
+    {
+        get
+        {
+            var row = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            if (Columns != null && Cells != null)
+                for (int i = 0; i < Columns.Count && i < Cells.Length; i++) row.TryAdd(Columns[i], Cells[i]);
+            return row;
+        }
+    }
+
     public override string ToString() => Text;
 }
 
@@ -142,7 +158,8 @@ public static class InputHelper
     /// </summary>
     private static ComboBox CreateCombo(FieldDefinition f, string connectionString)
     {
-        var cb = new ComboBox { DropDownStyle = f.AllowFreeText ? ComboBoxStyle.DropDown : ComboBoxStyle.DropDownList };
+        var cb = f.ItemsGrid ? new GridComboBox() : new ComboBox();
+        cb.DropDownStyle = f.AllowFreeText ? ComboBoxStyle.DropDown : ComboBoxStyle.DropDownList;
         cb.Items.AddRange(BuildItems(f, connectionString, withBlank: f.IsNullable || f.AllowFreeText).ToArray());
         return cb;
     }
@@ -172,11 +189,16 @@ public static class InputHelper
                 foreach (var (name, parameter) in parameters)
                     d.AddParam(cmd, parameter, valueOfParam(name) ?? DBNull.Value);
                 using var reader = cmd.ExecuteReader();
+                var columns = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
                 while (reader.Read())
                 {
+                    var cells = new object[reader.FieldCount];
+                    reader.GetValues(cells);
                     string value = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
-                    string text = reader.FieldCount > 1 && !reader.IsDBNull(1) ? Convert.ToString(reader.GetValue(1)) : value;
-                    items.Add(new ComboItem(value, text));
+                    // 多欄清單：下拉選單上顯示第一欄（其他欄位在拉下來的表格裡看）；一般下拉：第二欄是顯示文字
+                    string text = f.ItemsGrid ? GridComboBox.Format(cells[0])
+                                : reader.FieldCount > 1 && !reader.IsDBNull(1) ? Convert.ToString(reader.GetValue(1)) : value;
+                    items.Add(new ComboItem(value, text) { Columns = columns, Cells = cells });
                 }
             }
             catch (Exception ex)
@@ -354,6 +376,11 @@ public static class InputHelper
                 int index = -1;
                 for (int i = 0; i < combo.Items.Count; i++)
                     if (combo.Items[i] is ComboItem item && item.Value.Trim() == s) { index = i; break; }
+                // 數字欄位：45800 和選項的 45800.00 是同一個值
+                if (index < 0 && decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var number))
+                    for (int i = 0; i < combo.Items.Count; i++)
+                        if (combo.Items[i] is ComboItem item && item.Value.Trim() != ""
+                            && decimal.TryParse(item.Value.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var n) && n == number) { index = i; break; }
                 // 開窗選取帶回來的值、連動下拉（選項跟著別的欄位變）還沒重查到的值不在選項裡：加進選項，才顯示得出來
                 if (index < 0 && s != "" && combo.DropDownStyle == ComboBoxStyle.DropDownList && (ButtonRunner.HasPicker(combo) || dependentCombos.TryGetValue(combo, out _)))
                     index = combo.Items.Add(new ComboItem(s, s));
@@ -395,6 +422,8 @@ public static class InputHelper
         Items = c.EditItems,
         ItemsSql = c.EditItemsSql,
         AllowFreeText = c.EditAllowFreeText,
+        ItemsGrid = c.EditItemsGrid,
+        ItemsReturn = c.EditItemsReturn,
         PickerForm = c.EditPickerForm,
         PickerParams = c.EditPickerParams,
         PickerReturn = c.EditPickerReturn,

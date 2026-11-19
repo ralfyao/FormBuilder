@@ -22,6 +22,8 @@ public interface IPickerHost
     IEnumerable<string> ParamColumns => PickerLocalColumns;
     /// <summary>回傳對應改了：重新整理屬性面板</summary>
     void PickerChanged();
+    /// <summary>資料庫連線（讀下拉選單「選項 SQL」的欄位）；null = 交給擁有者視窗</summary>
+    string PickerConnectionString => null;
 }
 
 /// <summary>

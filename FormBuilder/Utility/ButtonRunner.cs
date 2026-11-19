@@ -179,6 +179,15 @@ public static class ButtonRunner
     {
         foreach (var (f, input) in inputs)
         {
+            // 下拉選單的「選取回傳對應」：選了選項就把選項 SQL 那一列的欄位填進畫面（先填，執行後動作的 SQL 才取得到這些值）
+            if (input is ComboBox itemsCombo && !string.IsNullOrWhiteSpace(f.ItemsReturn))
+                itemsCombo.SelectionChangeCommitted += (s, e) =>
+                {
+                    if (itemsCombo.SelectedItem is ComboItem { Cells: not null } item)
+                        FillFields(MapResult(item.Row, f.ItemsReturn), inputs);
+                    else if (itemsCombo.SelectedItem is ComboItem { Value: "" })
+                        FillFields(ParsePairs(f.ItemsReturn).ToDictionary(p => p.Left, p => (object)DBNull.Value, StringComparer.OrdinalIgnoreCase), inputs);
+                };
             if (string.IsNullOrWhiteSpace(f.AfterSelectSql)) continue;
             string before = null;                      // 文字框、日期：上次執行時的值（沒改就不重複執行）
             void Run()

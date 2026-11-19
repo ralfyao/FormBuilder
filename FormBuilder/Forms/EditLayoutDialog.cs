@@ -16,6 +16,7 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
         .Concat(canvas.Controls.OfType<FieldBox>().Where(b => b.Field.IsTextLabel).Select(b => b.Field.Column)).Distinct(StringComparer.OrdinalIgnoreCase);
     string IPickerHost.PickerFolder => null;
     void IPickerHost.PickerChanged() => propertyGrid.Refresh();
+    string IPickerHost.PickerConnectionString => connectionString;
 
     private readonly GridDefinition grid;
     /// <summary>可以放上版面的欄位：Grid 的欄位，加上這裡「JOIN 其他資料表」新帶進來的欄位（接在後面，確定時才加到 Grid）</summary>
@@ -854,6 +855,8 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
             Items = c.EditItems,
             ItemsSql = c.EditItemsSql,
             AllowFreeText = c.EditAllowFreeText,
+            ItemsGrid = c.EditItemsGrid,
+            ItemsReturn = c.EditItemsReturn,
             PickerForm = c.EditPickerForm,
             PickerParams = c.EditPickerParams,
             PickerReturn = c.EditPickerReturn,
@@ -1574,6 +1577,8 @@ public partial class EditLayoutDialog : Form, IPickerHost, IPrintTemplateHost
                 c.EditItems = box.Field.Items;
                 c.EditItemsSql = box.Field.ItemsSql;
                 c.EditAllowFreeText = box.Field.AllowFreeText;
+                c.EditItemsGrid = box.Field.ItemsGrid;
+                c.EditItemsReturn = string.IsNullOrWhiteSpace(box.Field.ItemsReturn) ? null : box.Field.ItemsReturn;
                 c.EditPickerForm = string.IsNullOrWhiteSpace(box.Field.PickerForm) ? null : box.Field.PickerForm.Trim();
                 c.EditPickerParams = string.IsNullOrWhiteSpace(box.Field.PickerParams) ? null : box.Field.PickerParams;
                 c.EditPickerReturn = string.IsNullOrWhiteSpace(box.Field.PickerReturn) ? null : box.Field.PickerReturn;
@@ -1837,6 +1842,17 @@ public class EditFieldView : IPickerField
 
     [DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get => field.AllowFreeText; set => field.AllowFreeText = value; }
+
+    [DisplayName("多欄清單"),
+     Description("True：拉下來時用表格列出「選項 SQL」查出來的每個欄位，SQL 的欄位名稱（或 AS 別名）就是表格標題，例如：SELECT 投保級距, 級數 FROM 投保級距表；"
+               + "選一列後，第一欄是這個欄位的值，下拉選單上也顯示第一欄。要把那一列的其他欄位帶進視窗，設定「選取回傳對應」")]
+    public bool ItemsGrid { get => field.ItemsGrid; set => field.ItemsGrid = value; }
+
+    [DisplayName("選取回傳對應"),
+     Description("選了選項後，把「選項 SQL」那一列的欄位直接填進視窗上的欄位（不用另外寫執行後動作的 SQL）：「視窗欄位=SQL 欄位」，多組用逗號分隔，"
+               + "例如：投保級數=級數, 投保金額=投保級距。選了空白選項時，這些欄位一起清空。空白 = 不帶回。按右邊的「…」用視窗設定（右邊從選項 SQL 的欄位下拉選）"),
+     Editor(typeof(ItemsReturnEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string ItemsReturn { get => field.ItemsReturn; set => field.ItemsReturn = value; }
 
     [DisplayName("開窗畫面"), Description("有設定時，點這個欄位的下拉（或在文字框雙擊、按 F4）就開啟這個畫面當選取視窗，選一筆後把值帶回來。"
                                        + "按右邊的「…」可以看開窗畫面有哪些欄位，直接選要帶回這個視窗的哪個欄位"),

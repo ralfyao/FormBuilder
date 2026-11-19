@@ -504,6 +504,17 @@ public class FieldDefinition : IPickerField
     [Category("下拉選單"), DisplayName("可自行輸入"), Description("True：選項以外的值也可以直接打字輸入")]
     public bool AllowFreeText { get; set; }
 
+    [Category("下拉選單"), DisplayName("多欄清單"),
+     Description("True：拉下來時用表格列出「選項 SQL」查出來的每個欄位，SQL 的欄位名稱（或 AS 別名）就是表格標題，例如：SELECT 投保級距, 級數 FROM 投保級距表；"
+               + "選一列後，第一欄是這個欄位的值，下拉選單上也顯示第一欄。要把那一列的其他欄位帶進畫面，設定「選取回傳對應」")]
+    public bool ItemsGrid { get; set; }
+
+    [Category("下拉選單"), DisplayName("選取回傳對應"),
+     Description("選了選項後，把「選項 SQL」那一列的欄位直接填進畫面上的欄位（不用另外寫執行後動作的 SQL）：「畫面欄位=SQL 欄位」，多組用逗號分隔，"
+               + "例如：投保級數=級數, 投保金額=投保級距。選了空白選項時，這些欄位一起清空。空白 = 不帶回。按右邊的「…」用視窗設定（右邊從選項 SQL 的欄位下拉選）"),
+     Editor(typeof(ItemsReturnEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    public string ItemsReturn { get; set; }
+
     [Category("下拉選單"), DisplayName("執行後動作"),
      Description("使用者在下拉選單選了選項後執行這段 SQL（同一個交易，失敗全部還原），@名稱 取「執行後動作傳入參數」或畫面上任何欄位的值。"
                + "SQL 有 SELECT 時，查出來的第一筆依「執行後動作回傳對應」填進畫面上的欄位，"
@@ -1654,6 +1665,9 @@ public class GridColumnDefinition
     public string EditItems { get; set; }
     public string EditItemsSql { get; set; }
     public bool EditAllowFreeText { get; set; }
+    /// <summary>編輯視窗下拉選單的多欄清單、選取回傳對應（同 FieldDefinition.ItemsGrid / ItemsReturn）</summary>
+    public bool EditItemsGrid { get; set; }
+    public string EditItemsReturn { get; set; }
     /// <summary>
     /// 編輯視窗的開窗選取（同 FieldDefinition.PickerForm / PickerParams / PickerReturn）；
     /// Grid 的輸入方式是「開窗選取」時，Grid 儲存格也用這個設定開窗（帶回同一列）

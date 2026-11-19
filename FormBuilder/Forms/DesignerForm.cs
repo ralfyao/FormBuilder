@@ -13,6 +13,7 @@ public partial class DesignerForm : Form, IPickerHost, IPrintTemplateHost
     IEnumerable<string> IPickerHost.ParamColumns => def.Fields.Select(f => f.Column)
         .Concat(def.Grids.Where(g => g.IsMasterList).SelectMany(g => g.Columns).Select(c => c.Column));
     void IPickerHost.PickerChanged() => propertyGrid.Refresh();
+    string IPickerHost.PickerConnectionString => def.ConnectionString;
 
     private FormDefinition def = new();
     private List<ColumnInfo> defTableColumns = new();      // 畫面所屬資料表的全部欄位（用來提醒漏放的必填欄位）

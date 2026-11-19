@@ -200,10 +200,16 @@ public partial class RuntimeForm : Form, IRecordNavigator
             GridCells.HookAfterSelect(part.Grid, def.ConnectionString, MasterValueOf);
             // 輸入方式 = 開窗選取：「…」或 F4 開選取視窗，選的值帶回同一列
             GridCells.HookPickers(part.Grid, MasterValueOf, def.SourcePath, this, def.ConnectionString);
-            // 逐筆顯示：用單身的編輯視窗版面一次顯示一筆（放進 Grid 的外框，見下面停靠的地方），「修改」= 雙擊那一列
+            // 逐筆顯示：用單身的編輯視窗版面一次顯示一筆（放進 Grid 的外框，見下面停靠的地方），「修改」直接在原畫面改這一筆
             if (g.RecordView)
-                part.View = new DetailRecordView(g, part.Grid, def.ConnectionString, body.Font, index => EditDetailRow(part, index),
-                                                 canEdit: perm.Modify && g.KeyColumns.Count > 0);
+            {
+                var recordPart = part;
+                part.View = new DetailRecordView(g, part.Grid, def.ConnectionString, body.Font,
+                                                 c => c.NoEntry || c.IsIdentity || c.IsKey || IsLinkColumn(recordPart, c.Column),
+                                                 (row, values) => UpdateDetailRow(recordPart, row, values, inPlace: true),
+                                                 RecordViewEditing,
+                                                 canEdit: perm.Modify && g.KeyColumns.Count > 0, sourcePath: def.SourcePath);
+            }
             details.Add(part);
         }
         btnDetail.Visible = HasDetail;
@@ -565,7 +571,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             {
                 if (InputHelper.FocusNext(focusOrder, out bool last)) return true;
                 if (!last && focusOrder.Any(c => c.ContainsFocus)) return base.ProcessCmdKey(ref msg, keyData);   // 多行文字框換行、下拉選單選取
-                if (last && InlineDetail && details.Count > 0)
+                if (last && InlineDetail && details.Count > 0 && details[0].View == null)
                 {
                     details[0].Grid.Focus();
                     return true;
@@ -606,7 +612,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         }
         foreach (var part in details)
         {
-            bool detailEditing = mode == Mode.Detail || InlineDetail;          // 新增、修改單頭時單身也可以一起輸入
+            // 新增、修改單頭時單身也可以一起輸入；逐筆顯示的單身只有按「單身」才換成 Grid 輸入，修改單頭時保持逐筆顯示
+            bool detailEditing = mode == Mode.Detail || InlineDetail && part.View == null;
             part.Grid.ReadOnly = !detailEditing;
             part.Grid.AllowUserToAddRows = detailEditing;
             part.Grid.AllowUserToDeleteRows = detailEditing;
@@ -3100,11 +3107,33 @@ public partial class RuntimeForm : Form, IRecordNavigator
             return;
         }
 
+        UpdateDetailRow(part, row, dlg.Values, inPlace: false);
+    }
+
+    /// <summary>逐筆顯示原地修改中：工具列、單頭清單停用（不能切換單頭、新增、查詢），狀態列提示</summary>
+    private void RecordViewEditing(bool editing)
+    {
+        toolStrip.Enabled = !editing;
+        if (listGrid != null) listGrid.Enabled = !editing && mode == Mode.Browse;
+        const string hint = "修改明細：改完按「確定」存檔，Esc 取消";
+        if (editing) lblMode.Text = hint;
+        else if (lblMode.Text == hint) lblMode.Text = "";
+    }
+
+    /// <summary>
+    /// 瀏覽中修改一筆明細：UPDATE 單身資料表（條件 = 原本的主鍵），存好重新載入單身。
+    /// inPlace = 逐筆顯示原地修改（不跳「明細修改完成」，結果顯示在狀態列）；回傳 true = 存好了
+    /// </summary>
+    private bool UpdateDetailRow(DetailPart part, DataRow row, Dictionary<string, object> values, bool inPlace)
+    {
+        var gridDef = part.Def;
+        var keys = gridDef.KeyColumns;
+        bool saved = false;
         try
         {
             using var conn = Dialect.Open(def.ConnectionString);
             using var cmd = Dialect.CreateCommand(conn);
-            var list = dlg.Values.ToList();
+            var list = values.ToList();
             for (int i = 0; i < list.Count; i++) Dialect.AddParam(cmd, $"p{i}", list[i].Value);
             cmd.CommandText = $"UPDATE {gridDef.FullTableName(Dialect)} SET {string.Join(", ", list.Select((v, i) => $"{Dialect.Quote(v.Key)} = {Dialect.Param($"p{i}")}"))} "
                             + "WHERE " + AddOriginalKeyCondition(cmd, row, keys);
@@ -3113,8 +3142,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
             else
             {
                 Audit.Write(def.FormKey, gridDef.TableName, "修改明細",
-                            Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Column, row[k.Column]))), Audit.Changes(row, dlg.Values));
-                MessageBox.Show("明細修改完成。", "修改");
+                            Audit.KeyText(keys.Select(k => new KeyValuePair<string, object>(k.Column, row[k.Column]))), Audit.Changes(row, values));
+                saved = true;
+                if (!inPlace) MessageBox.Show("明細修改完成。", "修改");
                 AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
             }
         }
@@ -3122,7 +3152,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
         {
             MessageBox.Show("修改失敗：" + ex.Message, "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+        if (!saved && inPlace) return false;                // 原地修改失敗：留在修改中，不重新載入（保留輸入的內容）
         LoadDetail(part);
+        if (saved && inPlace) lblMode.Text = "明細修改完成";
+        return saved;
     }
 
     // ================= 單頭清單 =================
