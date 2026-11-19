@@ -44,8 +44,11 @@ public sealed class DetailRecordView : Panel
         // 欄位照編輯視窗版面擺放；平常全部只顯示，按「修改」才開放可以改的欄位；畫面欄位（不存檔）沒有資料，不放
         g.EnsureEditLayout();
         var fields = g.EditColumns.Where(c => !c.ScreenOnly).Select(c => InputHelper.FromGridColumn(c, readOnly: locked(c))).ToList();
+        // 編輯視窗版面上的文字標籤（說明文字、公式算出來的合計…）也一起放
+        var textLabels = g.EditTextLabels.Select(f => f.Clone()).ToList();
         var body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor, Font = g.EditFont(font) };
-        inputs = InputHelper.LayoutFields(body, fields, connectionString);
+        inputs = InputHelper.LayoutFields(body, fields.Concat(textLabels), connectionString);
+        this.connectionString = connectionString;
         focusOrder = InputHelper.ApplyFocusOrder(inputs);
         SetLocked(true);
         body.DoubleClick += (s, e) => BeginEdit();
@@ -57,6 +60,18 @@ public sealed class DetailRecordView : Panel
         });
         ButtonRunner.AttachAfterSelect(inputs, connectionString, ValueOf);
         InputHelper.AttachDependentItems(inputs, connectionString, ValueOf);
+
+        // 文字標籤的公式：換筆時算，修改中用到的欄位改了也重算
+        labelFormulas = inputs.Keys.Where(f => f.IsTextLabel && f.HasFormula).ToList();
+        var labelUsed = labelFormulas.SelectMany(f => { try { return Formula.Names(f.Formula); } catch (FormatException) { return new List<string>(); } })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (f, input) in inputs.Where(x => !x.Key.IsTextLabel && labelUsed.Contains(x.Key.Column)))
+        {
+            EventHandler changed = (s, e) => { if (IsEditing) RecalcLabelFormulas(); };
+            input.TextChanged += changed;
+            if (input is DateTimePicker dtp) dtp.ValueChanged += changed;
+            if (input is CheckBox cb) cb.CheckedChanged += changed;
+        }
 
         // 上方的切換列
         var bar = new FlowLayoutPanel
@@ -92,6 +107,40 @@ public sealed class DetailRecordView : Panel
         Controls.Add(bar);
 
         grid.DataSourceChanged += (s, e) => ShowRecord();      // 單身重新載入、存檔後換了資料
+    }
+
+    private readonly string connectionString;
+    /// <summary>有公式的文字標籤</summary>
+    private readonly List<FieldDefinition> labelFormulas;
+    private bool recalculatingLabels;
+
+    /// <summary>文字標籤的公式（這裡的欄位、這一筆明細的欄位、其他文字標籤）：數字公式先算，文字公式（&amp; 串接）再算；算不出來顯示空白</summary>
+    private void RecalcLabelFormulas()
+    {
+        if (recalculatingLabels || labelFormulas.Count == 0) return;
+        recalculatingLabels = true;
+        try
+        {
+            decimal AggregateOf(string function, string column) => throw new FormatException("逐筆顯示沒有明細清單可以合計");
+            foreach (var f in labelFormulas.OrderBy(f => Formula.IsText(f.Formula)))
+            {
+                string text;
+                try
+                {
+                    text = Formula.IsText(f.Formula) ? Formula.EvaluateText(f.Formula, ValueOf, f.Decimals, AggregateOf)
+                         : Formula.Evaluate(f.Formula, ValueOf, AggregateOf) is decimal value ? Formula.Display(value, f.Decimals) : null;
+                }
+                catch (Exception)
+                {
+                    text = null;
+                }
+                InputHelper.SetValue(inputs[f], text ?? "");
+            }
+        }
+        finally
+        {
+            recalculatingLabels = false;
+        }
     }
 
     private DataView Rows => (grid.DataSource as DataTable)?.DefaultView;
@@ -131,7 +180,7 @@ public sealed class DetailRecordView : Panel
     /// <summary>locked = 全部只顯示；false = 開放可以改的欄位（不是只顯示、沒有公式的）</summary>
     private void SetLocked(bool locked)
     {
-        foreach (var (f, input) in inputs)
+        foreach (var (f, input) in inputs.Where(p => !p.Key.IsTextLabel))      // 文字標籤一直是顯示文字
         {
             bool canType = !locked && !f.NoEntry && !f.IsReadOnly;
             if (input is TextBox tb) tb.ReadOnly = !canType;
@@ -166,7 +215,7 @@ public sealed class DetailRecordView : Panel
         var values = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            foreach (var (f, input) in inputs.Where(p => !p.Key.NoEntry && !p.Key.QueryOnly))
+            foreach (var (f, input) in inputs.Where(p => !p.Key.NoEntry && !p.Key.QueryOnly && !p.Key.IsTextLabel))
                 values[f.Column] = InputHelper.GetValue(f, input);
         }
         catch (FormatException ex)
@@ -174,7 +223,7 @@ public sealed class DetailRecordView : Panel
             MessageBox.Show(ex.Message, "提醒");
             return;
         }
-        var empty = inputs.Keys.Where(f => !f.NoEntry && !f.QueryOnly && !f.IsNullable && values[f.Column] == DBNull.Value).Select(f => f.Label).ToList();
+        var empty = inputs.Keys.Where(f => !f.NoEntry && !f.QueryOnly && !f.IsTextLabel && !f.IsNullable && values[f.Column] == DBNull.Value).Select(f => f.Label).ToList();
         if (empty.Count > 0)
         {
             MessageBox.Show("請輸入：" + string.Join("、", empty), "提醒");
@@ -220,8 +269,11 @@ public sealed class DetailRecordView : Panel
         int count = Count;
         index = count == 0 ? -1 : Math.Clamp(index < 0 ? 0 : index, 0, count - 1);
         DataRow row = CurrentRow;
-        foreach (var (f, input) in inputs)
+        foreach (var (f, input) in inputs.Where(p => !p.Key.IsTextLabel))
             InputHelper.SetValue(input, row != null && row.Table.Columns.Contains(f.Column) ? row[f.Column] : DBNull.Value);
+        ButtonRunner.RefreshTextLabels(inputs, connectionString, ValueOf);     // 文字標籤先恢復原本的文字，用欄位的執行後動作帶出來
+        if (row != null) ButtonRunner.RunAfterShow(inputs, connectionString, ValueOf);
+        RecalcLabelFormulas();
         lblPosition.Text = count == 0 ? "沒有資料" : $"第 {index + 1} / {count} 筆";
         btnFirst.Enabled = btnPrevious.Enabled = index > 0;
         btnNext.Enabled = btnLast.Enabled = index >= 0 && index < count - 1;

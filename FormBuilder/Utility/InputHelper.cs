@@ -36,6 +36,31 @@ public class RadioGroup : FlowLayoutPanel
     }
 }
 
+/// <summary>
+/// 文字標籤：設成標籤文字（恢復原本的文字）或空白時只顯示標籤；有值時顯示「標籤：值」；沒有標籤時只顯示值。
+/// Value 是值本身（公式、取值用），Text 是畫面上看到的
+/// </summary>
+public sealed class ValueLabel : Label
+{
+    private readonly string caption;
+    public ValueLabel(string caption) => this.caption = caption ?? "";
+
+    /// <summary>帶進來的值（還沒帶值 = 空白）</summary>
+    public string Value { get; private set; } = "";
+
+    [System.Diagnostics.CodeAnalysis.AllowNull]
+    public override string Text
+    {
+        get => base.Text;
+        set
+        {
+            value ??= "";
+            Value = value == caption ? "" : value;
+            base.Text = Value == "" || caption == "" ? (Value == "" ? caption : Value) : caption + "：" + Value;
+        }
+    }
+}
+
 /// <summary>下拉選單的一個選項：存進資料庫的值，以及顯示的文字</summary>
 public record ComboItem(string Value, string Text)
 {
@@ -75,12 +100,13 @@ public static class InputHelper
             case InputKind.日期選擇:
                 return CreateDatePicker(f);
             case InputKind.文字標籤:
-                // 文字標籤：顯示「標籤」的文字，SQL 的回傳對應可以把值填進來（SetValue 改 Text）
-                return new Label
-                {
-                    Text = f.Label ?? "", AutoEllipsis = true, BackColor = Color.Transparent,
-                    TextAlign = f.TextAlignment switch { LabelAlign.置中 => ContentAlignment.MiddleCenter, LabelAlign.靠右 => ContentAlignment.MiddleRight, _ => ContentAlignment.MiddleLeft },
-                };
+                // 文字標籤：沒有值顯示「標籤」，公式、SQL 的回傳對應帶進值時顯示「標籤：值」，沒有標籤就只顯示值（ValueLabel）
+                var label = new ValueLabel(f.Label);
+                label.Text = f.Label ?? "";
+                label.AutoEllipsis = true;
+                label.BackColor = Color.Transparent;
+                label.TextAlign = f.TextAlignment switch { LabelAlign.置中 => ContentAlignment.MiddleCenter, LabelAlign.靠右 => ContentAlignment.MiddleRight, _ => ContentAlignment.MiddleLeft };
+                return label;
         }
         if (TypeHelper.IsBool(f.DataType))
             return new CheckBox();
@@ -308,7 +334,7 @@ public static class InputHelper
                 break;
             default:
                 if (shownDates.TryGetValue(c, out var shown) && shown.Item1 == c.Text && TypeHelper.IsDate(f.DataType)) return shown.Item2;
-                text = c.Text;
+                text = c is ValueLabel valueLabel ? valueLabel.Value : c.Text;
                 if (c is Label && text.Contains(',') && decimal.TryParse(text.Trim(), NumberStyles.Number, CultureInfo.CurrentCulture, out var labelNumber))
                     text = labelNumber.ToString(CultureInfo.InvariantCulture);
                 break;

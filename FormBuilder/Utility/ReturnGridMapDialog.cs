@@ -93,7 +93,9 @@ public class ItemsReturnEditor : UITypeEditor
                 info = "選項 SQL 執行失敗，右邊只能自己輸入欄位名稱：" + ex.Message;
             }
         }
-        var mine = locals?.Where(c => !c.Equals(self, StringComparison.OrdinalIgnoreCase)).ToList();
+        // 下拉選單自己這個欄位也列出來（放第一列）：空白 = 存選項 SQL 的第一欄
+        var mine = locals == null ? null
+            : (string.IsNullOrWhiteSpace(self) ? locals : new[] { self }.Concat(locals)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         using var dialog = new ReturnGridMapDialog(value as string, mine, columns, info);
         return dialog.ShowDialog(owner) == DialogResult.OK ? dialog.ReturnMap : value;
     }
