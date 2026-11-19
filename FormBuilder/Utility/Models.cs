@@ -734,6 +734,13 @@ public class GridDefinition
     [Category("畫面"), DisplayName("標題")]
     public string Title { get; set; }
 
+    [Category("畫面"), DisplayName("逐筆顯示"), DefaultValue(false),
+     Description("單身用：True = 執行時不列成表格，改用這個單身的「編輯視窗版面」一次顯示一筆明細（像 Access 子表單的單一表單），"
+               + "上方有首筆、上筆、下筆、末筆和「第 n / m 筆」，按「修改」開編輯視窗改這一筆；切換單頭時回到第一筆。"
+               + "按「單身」或新增、修改單頭時換回表格（多筆一起輸入），存檔後回到逐筆顯示。"
+               + "版面在 Grid 的欄位設定按「編輯視窗版面…」設計（沒設計過就由上往下排成一欄）；Grid 的大小就是顯示區的大小，放不下時可以捲動")]
+    public bool RecordView { get; set; }
+
     [Category("畫面"), DisplayName("停靠 (Dock)"),
      Description("Bottom：固定在畫面最下方，寬度跟著視窗，只能調整高度；None：照設計時的位置與大小。有多個 Bottom 時，先放的在最下面")]
     public GridDock Dock { get; set; } = GridDock.Bottom;

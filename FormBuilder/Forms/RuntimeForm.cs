@@ -29,6 +29,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         public GridDefinition Def { get; init; }
         public DataGridView Grid { get; init; }
         public DataTable Table { get; set; } = new();
+        /// <summary>單身設了「逐筆顯示」：蓋在 Grid 上一次顯示一筆；null = 照常列成表格</summary>
+        public DetailRecordView View { get; set; }
     }
 
     // 單身：可以有好幾個（各自的資料表與關聯欄位），按「單身」時全部一起輸入、一起存檔
@@ -198,6 +200,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             GridCells.HookAfterSelect(part.Grid, def.ConnectionString, MasterValueOf);
             // 輸入方式 = 開窗選取：「…」或 F4 開選取視窗，選的值帶回同一列
             GridCells.HookPickers(part.Grid, MasterValueOf, def.SourcePath, this, def.ConnectionString);
+            // 逐筆顯示：用單身的編輯視窗版面一次顯示一筆（放進 Grid 的外框，見下面停靠的地方），「修改」= 雙擊那一列
+            if (g.RecordView)
+                part.View = new DetailRecordView(g, part.Grid, def.ConnectionString, body.Font, index => EditDetailRow(part, index),
+                                                 canEdit: perm.Modify && g.KeyColumns.Count > 0);
             details.Add(part);
         }
         btnDetail.Visible = HasDetail;
@@ -279,6 +285,11 @@ public partial class RuntimeForm : Form, IRecordNavigator
                 grid.Height = g.Height;
             }
             var host = RoundedGridHost.Wrap(grid);              // 圓角外框（位置、停靠方式由外框接手）
+            if (details.FirstOrDefault(p => p.Def == g)?.View is { } recordView)
+            {
+                host.Controls.Add(recordView);                   // 逐筆顯示蓋在 Grid 上面（單身輸入中才露出 Grid）
+                recordView.BringToFront();
+            }
             body.Controls.Add(host);
             if (g.Dock == GridDock.Bottom && topBottom.Host == null) topBottom = (g, host);
         }
@@ -600,6 +611,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             part.Grid.AllowUserToAddRows = detailEditing;
             part.Grid.AllowUserToDeleteRows = detailEditing;
             part.Grid.BackgroundColor = detailEditing ? SystemColors.Window : SystemColors.Control;
+            part.View?.SetEditing(detailEditing);                              // 逐筆顯示：輸入中換回 Grid 多筆一起輸入
             // 只顯示、自動編號、關聯欄位（自動帶單頭的值）、有公式的欄位不能輸入
             foreach (DataGridViewColumn col in part.Grid.Columns)
                 if (col.Tag is GridColumnDefinition c && (c.NoEntry || c.IsIdentity || c.HasFormula || IsLinkColumn(part, c.Column)))
@@ -2534,6 +2546,8 @@ public partial class RuntimeForm : Form, IRecordNavigator
         GridCells.HookFormulas(table, gridDef.Columns, MasterValueOf);      // 數量、單價改了，金額跟著重算（可以用單頭畫面上的欄位）
         part.Table = table;
         part.Grid.DataSource = part.Table;
+        // 逐筆顯示：換了單頭回到第一筆，同一筆單頭重讀（例如修改明細後）停在原本那筆
+        part.View?.Bind(HasCurrent && !empty ? string.Join("\u001f", gridDef.Links.Select(l => Convert.ToString(results.Rows[current][l.Master]))) : null);
     }
 
     /// <summary>組出「單身關聯欄位 = 目前單頭的值」條件，參數名稱用 m0、m1…；沒有關聯欄位時回傳空字串</summary>
