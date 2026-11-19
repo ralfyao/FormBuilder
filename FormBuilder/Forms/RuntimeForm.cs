@@ -661,7 +661,9 @@ public partial class RuntimeForm : Form, IRecordNavigator
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, perm)                 // 按鈕「需要的權限」：沒有就一直是灰的
                 && (ButtonRunner.IsGridPicker(b) ? mode == Mode.Detail || InlineDetail
-                    : ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query : IsActionEnabled(ActionOf(b)));
+                    : ButtonRunner.IsPicker(b) ? mode is Mode.Insert or Mode.Modify or Mode.Query
+                    // 「先存檔再執行」的執行SQL：瀏覽時也能直接對目前這筆執行
+                    : IsActionEnabled(ActionOf(b)) || b.SaveBeforeRun && ActionOf(b) == ButtonAction.執行SQL && canRunSql && HasMasterTable && mode == Mode.Browse && HasCurrent);
         RecalcFormulas();                                  // 進入新增、修改時算出有公式的欄位；查詢時清空計算欄位
         foreach (var (g, grid) in AllGrids()) RunGridAfterChange(g, grid);   // 進入新增、修改時把 Grid 的加總填進資料表欄位
         if (mode == Mode.Detail) details[0].Grid.Focus();
@@ -1128,7 +1130,10 @@ public partial class RuntimeForm : Form, IRecordNavigator
             case ButtonAction.取消: CancelEdit(); break;
             case ButtonAction.單身: BeginDetail(); break;
             case ButtonAction.離開: Close(); break;
-            case ButtonAction.執行SQL: RunCustomSql(b); break;
+            case ButtonAction.執行SQL:
+                if (b.SaveBeforeRun && HasMasterTable && mode is Mode.Insert or Mode.Modify && !SaveBeforeRun(b)) break;
+                RunCustomSql(b);
+                break;
             case ButtonAction.開啟畫面: OpenOtherForm(b, preResult); break;
             case ButtonAction.列印報表: PrintReport(b); break;
             case ButtonAction.開啟查詢條件畫面: QueryByConditionForm(b); break;
@@ -1223,6 +1228,31 @@ public partial class RuntimeForm : Form, IRecordNavigator
     /// 先找查詢結果裡的欄位，沒有就找畫面上的輸入欄位；都沒有就是 NULL
     /// </summary>
     private void RunCustomSql(ButtonDefinition b) => RunSqlOnSelection(b, b.Sql, quiet: false);
+
+    /// <summary>true = 存檔時不跳「新增完成」「修改完成」（按鈕「先存檔再執行」：執行完只跳一次「執行完成」）</summary>
+    private bool quietSave;
+
+    /// <summary>
+    /// 按鈕「先存檔再執行」：新增、修改中先照「確定」存檔，存好回到瀏覽才回傳 true（接著對這筆執行 SQL、重讀）。
+    /// 存檔失敗（必填沒填等）留在輸入狀態；單頭存好但進入單身時提醒還沒執行
+    /// </summary>
+    private bool SaveBeforeRun(ButtonDefinition b)
+    {
+        var before = mode;
+        quietSave = true;
+        try
+        {
+            Accept();
+        }
+        finally
+        {
+            quietSave = false;
+        }
+        if (mode == Mode.Browse && HasCurrent) return true;
+        if (mode != before)
+            MessageBox.Show($"已經存檔，但「{b.Text}」還沒執行；完成單身後再按一次「{b.Text}」。", "提醒");
+        return false;
+    }
 
     /// <summary>
     /// 對選取的資料執行 SQL（同一個交易，失敗全部還原）：清單選了多筆時每一筆各執行一次，沒選就用目前這筆；
@@ -1924,7 +1954,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetMode(Mode.Browse);
             Audit.Write(def.FormKey, def.TableName, "新增", HasCurrent && HasKey ? Audit.KeyText(CurrentKey()) : null,
                         values.ToDictionary(v => v.Key, v => Audit.Format(v.Value)));
-            if (notify) MessageBox.Show("新增完成。", "新增");
+            if (notify && !quietSave) MessageBox.Show("新增完成。", "新增");
             AfterSave(HasCurrent && HasKey ? CurrentKey() : null, closing: !HasDetail);   // 有單身時等單身存檔再關
             return true;
         }
@@ -1998,7 +2028,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
             SetMode(Mode.Browse);
             if (notify)
             {
-                MessageBox.Show(doneMessage, Text);
+                if (!quietSave) MessageBox.Show(doneMessage, Text);
                 AfterSave(HasCurrent && HasKey ? CurrentKey() : null);
             }
             return true;
@@ -2929,6 +2959,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         public bool CanPrint => Main.CanPrint;
         public bool CanApprove => Main.CanApprove;
         public FormPermission Permission => Main.Permission;
+        public bool QuietSave { get => form.quietSave; set => form.quietSave = value; }
 
         public void MoveTo(int index)
         {
@@ -2991,6 +3022,7 @@ public partial class RuntimeForm : Form, IRecordNavigator
         return false;
     }
     bool IRecordNavigator.Insert(Dictionary<string, object> values) => InsertValues(values);
+    bool IRecordNavigator.QuietSave { get => quietSave; set => quietSave = value; }
     bool IRecordNavigator.Update(Dictionary<string, object> values)
     {
         values = new Dictionary<string, object>(values, StringComparer.OrdinalIgnoreCase);

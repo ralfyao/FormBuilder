@@ -1355,6 +1355,13 @@ public class ButtonDefinition
      Editor(typeof(SqlEditor), typeof(System.Drawing.Design.UITypeEditor))]
     public string Sql { get; set; }
 
+    [Category("執行SQL"), DisplayName("先存檔再執行"), DefaultValue(false),
+     Description("True = 新增、修改中按這個按鈕時，先照「確定」存檔（必填檢查、一起輸入的明細一起存），存好了才執行 SQL，執行完重讀這筆、回到瀏覽，不用再按「確定」；"
+               + "存檔失敗就不執行。瀏覽時也能按（直接對目前這筆執行）。"
+               + "SQL 會改到畫面上的欄位（例如核准、傳票）時要設 True，不然執行完再按「確定」會用畫面上的舊值蓋回去。"
+               + "False = 新增、修改中執行完留在輸入狀態（例如取號、帶值），再按「確定」存檔")]
+    public bool SaveBeforeRun { get; set; }
+
     [Category("開啟畫面"), DisplayName("畫面定義檔"),
      Description("動作 = 開啟畫面 時開啟的畫面；動作 = 開啟查詢條件畫面 時當查詢條件畫面（欄位名稱跟本畫面的資料表欄位一樣的才能當條件）。"
                + "只寫檔名時，會找跟目前畫面同一個資料夾的檔案；存檔時完整路徑會自動改成相對路徑"),

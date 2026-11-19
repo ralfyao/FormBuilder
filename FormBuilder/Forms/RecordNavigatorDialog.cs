@@ -31,6 +31,8 @@ public interface IRecordNavigator
     /// <summary>只改目前這筆的一個欄位（生效 / 取消生效），成功時顯示 doneMessage</summary>
     bool UpdateColumn(string column, object value, string doneMessage);
     bool Delete();
+    /// <summary>true = 新增、修改存檔成功時不跳完成訊息（按鈕「先存檔再執行」：執行完只跳一次「執行完成」）</summary>
+    bool QuietSave { get => false; set { } }
 }
 
 /// <summary>
@@ -344,7 +346,9 @@ public partial class RecordNavigatorDialog : Form
         // 選取視窗按鈕（有回傳對應）要在新增、修改時才能按，帶回的值填進正在輸入的欄位
         foreach (var (b, button) in customButtons)
             button.Enabled = ButtonRunner.Allowed(b, nav.Permission)       // 按鈕「需要的權限」：沒有就一直是灰的
-                && (ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify : IsActionEnabled(b.Action));
+                && (ButtonRunner.IsPicker(b) ? mode is EditMode.Insert or EditMode.Modify
+                    // 「先存檔再執行」的執行SQL：瀏覽時也能直接對目前這筆執行（不用先按修改）
+                    : IsActionEnabled(b.Action) || b.SaveBeforeRun && b.Action == ButtonAction.執行SQL && nav.Permission.Modify && browsing && hasRow);
         foreach (var view in listViews) view.SetEditing(!browsing);        // 新增、修改時明細清單也可以輸入，按確定跟單頭一起存
         foreach (var view in listViews) RunListAfterChange(view);          // 進入新增、修改時把加總填進資料表欄位
         if (!browsing) InputHelper.FocusFirst(focusOrder);                 // 游標放在第一個可以輸入的欄位（照畫面位置）
@@ -411,6 +415,20 @@ public partial class RecordNavigatorDialog : Form
             case ButtonAction.離開: Close(); break;
             case ButtonAction.執行SQL:
             {
+                // 「先存檔再執行」：新增、修改中先照「確定」存檔，存好回到瀏覽才執行（執行完下面會重讀這筆），存檔失敗留在輸入狀態、不執行
+                if (b.SaveBeforeRun && mode != EditMode.Browse)
+                {
+                    nav.QuietSave = true;
+                    try
+                    {
+                        Accept();
+                    }
+                    finally
+                    {
+                        nav.QuietSave = false;
+                    }
+                    if (mode != EditMode.Browse || nav.CurrentRow == null) break;
+                }
                 // @欄位名稱：有來源清單時先取清單選取那一列，再找視窗上的欄位，沒有就用目前這筆資料；SQL 查出來的值等重讀完再填進視窗上的欄位
                 var sqlValueOf = ButtonRunner.WithSourceList(b, listViews, ValueOf);
                 if (sqlValueOf == null) break;
