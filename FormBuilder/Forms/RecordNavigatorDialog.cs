@@ -465,8 +465,18 @@ public partial class RecordNavigatorDialog : Form
         if (string.IsNullOrWhiteSpace(b.PreCheck)) return true;
         string name = b.SourceList?.Trim();
         if (string.IsNullOrEmpty(name))
+        {
+            // 先從資料庫重讀這筆再檢查：前一個按鈕的 SQL 可能剛改過（例如修改中按「取消覆核」清掉傳票，視窗裡的這筆還是舊的）；
+            // 只重讀資料，不動視窗上正在輸入的內容。已被刪除時（Refresh 會提醒）回到瀏覽
+            if (nav.CurrentRow != null && !nav.Refresh())
+            {
+                ShowRecord();
+                SetMode(EditMode.Browse);
+                return false;
+            }
             return ButtonRunner.PassesPreCheck(b, nav.CurrentRow is { } row ? new[] { row } : Array.Empty<DataRow>(),
                                                null, "沒有資料，不能執行。");
+        }
         var view = listViews.FirstOrDefault(v => v.Definition.TableName.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (view == null)
         {
