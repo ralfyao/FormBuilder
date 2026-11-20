@@ -13,6 +13,10 @@ namespace FormBuilder;
 /// NOW()：目前的日期（yyyy/MM/dd），是文字，用 &amp; 接，例如 "列印日期：" &amp; NOW()
 /// 文字函數：LEFT(欄位, n) 取左邊 n 個字、RIGHT(欄位, n) 取右邊 n 個字、MID(欄位, 起點, n) 從第幾個字（從 1 算）取 n 個字（n 省略 = 取到最後），
 /// 結果是文字，可以用 &amp; 接，例如 "No." &amp; RIGHT(單號, 5)；第一個參數也可以是 "文字" 或用 &amp; 接起來的文字
+/// 條件（像 Access）：IIF(條件, 成立時, 不成立時)，條件用 = &lt;&gt; &lt; &gt; &lt;= &gt;= 比較（兩邊都是數字照數字比，否則照文字比），
+/// 只寫一個值時不是 0 / 不是空白 = 成立；可以一層包一層，例如 IIF(WEEKDAY(日期) = 1, "日", IIF(WEEKDAY(日期) = 2, "一", "六"))
+/// WEEKDAY(日期)：星期幾的數字，星期日 = 1 … 星期六 = 7（同 Access）；日期沒填算不出來。
+/// 從 Access 貼過來前面的 = 可以留著
 /// </summary>
 public static class Formula
 {
@@ -29,6 +33,9 @@ public static class Formula
 
     /// <summary>支援的文字函數</summary>
     public static readonly string[] TextFunctions = { "LEFT", "RIGHT", "MID" };
+
+    /// <summary>其他函數：條件、星期</summary>
+    public static readonly string[] OtherFunctions = { "IIF", "WEEKDAY" };
 
     /// <summary>公式有用到彙總函數（SUM、AVG…）：要從明細加總，Grid 同一列的公式不算這種</summary>
     public static bool HasAggregate(string formula)
@@ -89,7 +96,7 @@ public static class Formula
         if (string.IsNullOrWhiteSpace(formula)) return null;
         try
         {
-            var parser = new Parser(Tokenize(formula), _ => 0m, (_, _) => 1m, _ => "");
+            var parser = new Parser(Tokenize(formula), _ => 0m, (_, _) => 1m, _ => "") { Strict = true };
             if (IsText(formula)) parser.ParseText(v => v.ToString(CultureInfo.InvariantCulture));
             else parser.Parse();
             var known = new HashSet<string>(knownNames, StringComparer.OrdinalIgnoreCase);
@@ -112,7 +119,8 @@ public static class Formula
         try
         {
             return new Parser(Tokenize(formula), name => ToNumber(valueOf(name)),
-                              aggregateOf ?? ((f, name) => throw new FormatException($"這裡不能用 {f}({name})"))).Parse();
+                              aggregateOf ?? ((f, name) => throw new FormatException($"這裡不能用 {f}({name})")),
+                              name => ToText(valueOf(name), -1)).Parse();
         }
         catch (Exception ex) when (ex is FormatException or DivideByZeroException or OverflowException or InvalidCastException)
         {
@@ -172,8 +180,11 @@ public static class Formula
                       : Math.Round(value, 4, MidpointRounding.AwayFromZero).ToString("0.####", CultureInfo.CurrentCulture);
 
     /// <summary>Func = 彙總函數（後面接括號）；Arg = 彙總函數括號裡的明細欄位名稱；Text = 引號括起來的文字；Now = NOW()；
-    /// TextFunc = 文字函數 LEFT / RIGHT / MID（後面接括號）；Comma = 函數參數之間的逗號</summary>
-    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text, Now, TextFunc, Comma }
+    /// TextFunc = 文字函數 LEFT / RIGHT / MID（後面接括號）；Comma = 函數參數之間的逗號；Iif = IIF(；Weekday = WEEKDAY(
+    /// 比較 = &lt;&gt; &lt; &gt; &lt;= &gt;= 也是 Op</summary>
+    private enum TokenKind { Number, Name, Op, LParen, RParen, Func, Arg, Text, Now, TextFunc, Comma, Iif, Weekday }
+
+    private static bool IsCompare(Token t) => t is { Kind: TokenKind.Op, Text: "=" or "<>" or "<" or ">" or "<=" or ">=" };
 
     private record Token(TokenKind Kind, string Text);
 
@@ -187,6 +198,14 @@ public static class Formula
             char c = s[i];
             if (char.IsWhiteSpace(c)) { i++; continue; }
             if ("+-*/&".Contains(c)) { tokens.Add(new Token(TokenKind.Op, c.ToString())); i++; continue; }
+            if (c is '=' or '<' or '>')
+            {
+                // 比較：= <> < > <= >=
+                string op = i + 1 < s.Length && (c, s[i + 1]) is ('<', '>') or ('<', '=') or ('>', '=') ? s.Substring(i, 2) : c.ToString();
+                tokens.Add(new Token(TokenKind.Op, op));
+                i += op.Length;
+                continue;
+            }
             if (c is '"' or '\'')
             {
                 // 文字：同一種引號括起來，裡面連打兩個引號 = 一個引號
@@ -224,9 +243,11 @@ public static class Formula
             }
             // 欄位名稱：連續到空白、運算符號、括號為止（中文欄位名稱不用括起來）
             var sb = new StringBuilder();
-            while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/&()（）[]\"',，".Contains(s[i])) sb.Append(s[i++]);
+            while (i < s.Length && !char.IsWhiteSpace(s[i]) && !"+-*/&()（）[]\"',，=<>".Contains(s[i])) sb.Append(s[i++]);
             tokens.Add(new Token(TokenKind.Name, sb.ToString()));
         }
+        // 從 Access 貼過來的公式前面有 =
+        if (tokens.Count > 0 && tokens[0] is { Kind: TokenKind.Op, Text: "=" }) tokens.RemoveAt(0);
         // NOW()：目前的日期，變成一個 Now 符號
         for (int t = 0; t + 2 < tokens.Count; t++)
         {
@@ -244,8 +265,10 @@ public static class Formula
             string function = tokens[t].Text.ToUpperInvariant();
             if (function == "NOW") throw new FormatException("NOW 的寫法是 NOW()，括號裡不用放東西");
             if (TextFunctions.Contains(function)) { tokens[t] = new Token(TokenKind.TextFunc, function); continue; }   // 參數在 Parser 解析
+            if (function == "IIF") { tokens[t] = new Token(TokenKind.Iif, function); continue; }
+            if (function == "WEEKDAY") { tokens[t] = new Token(TokenKind.Weekday, function); continue; }
             if (!Aggregates.Contains(function))
-                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}、{string.Join("、", TextFunctions)}、NOW()");
+                throw new FormatException($"公式不支援「{tokens[t].Text}( )」，可以用：{string.Join("、", Aggregates)}、{string.Join("、", TextFunctions)}、{string.Join("、", OtherFunctions)}、NOW()");
             if (t + 3 >= tokens.Count || tokens[t + 2].Kind != TokenKind.Name || tokens[t + 3].Kind != TokenKind.RParen)
                 throw new FormatException($"{function} 的寫法是 {function}(明細欄位)，例如 {function}(金額)");
             tokens[t] = new Token(TokenKind.Func, function);
@@ -265,6 +288,9 @@ public static class Formula
         private readonly Func<string, string, decimal> aggregateOf;
         private readonly Func<string, string> textOf;
         private int pos;
+
+        /// <summary>檢查公式用：IIF 兩邊都要算（檢查格式），WEEKDAY 的日期沒填當成可以算</summary>
+        public bool Strict { get; init; }
 
         /// <param name="textOf">欄位原本的文字（文字公式裡單獨接起來的欄位用）</param>
         public Parser(List<Token> tokens, Func<string, decimal> valueOf, Func<string, string, decimal> aggregateOf, Func<string, string> textOf = null)
@@ -308,9 +334,10 @@ public static class Formula
             return text.ToString();
         }
 
-        /// <summary>這個位置是一段文字的結尾：後面沒東西、接 &amp;、或是函數參數的 , )</summary>
+        /// <summary>這個位置是一段文字的結尾：後面沒東西、接 &amp;、函數參數的 , )、或是 IIF 條件的比較符號</summary>
         private bool EndsPiece(int index) =>
-            index >= tokens.Count || tokens[index] is { Kind: TokenKind.Op, Text: "&" } or { Kind: TokenKind.Comma } or { Kind: TokenKind.RParen };
+            index >= tokens.Count || tokens[index] is { Kind: TokenKind.Op, Text: "&" } or { Kind: TokenKind.Comma } or { Kind: TokenKind.RParen }
+            || IsCompare(tokens[index]);
 
         private string Piece()
         {
@@ -326,7 +353,121 @@ public static class Formula
                 if (EndsPiece(pos)) return text;
                 pos = start;                                     // 後面還有 + - * /：當成數字算
             }
+            if (t.Kind == TokenKind.Iif)
+            {
+                int start = pos;
+                string text = CallIif(numeric: false);
+                if (EndsPiece(pos)) return text;
+                pos = start;                                     // 後面還有 + - * /：兩邊當成數字算
+            }
             return format(Expression());
+        }
+
+        /// <summary>IIF(條件, 成立時, 不成立時)；pos 在 IIF 上。numeric = 兩邊照數字算（回傳數字的文字，不四捨五入）</summary>
+        private string CallIif(bool numeric)
+        {
+            const string usage = "IIF 的寫法是 IIF(條件, 成立時, 不成立時)，例如 IIF(數量 > 0, \"有\", \"無\")";
+            pos += 2;                                            // IIF、(（Tokenize 確認過後面是左括號）
+            if (Peek is null or { Kind: TokenKind.RParen or TokenKind.Comma }) throw new FormatException(usage);
+            bool condition = Condition();
+            string result = null;
+            for (int branch = 0; branch < 2; branch++)
+            {
+                if (Peek is not { Kind: TokenKind.Comma }) throw new FormatException(usage);
+                pos++;
+                if (Peek is null or { Kind: TokenKind.RParen or TokenKind.Comma }) throw new FormatException(usage);
+                bool chosen = condition == (branch == 0);
+                if (chosen || Strict)
+                {
+                    string value = numeric ? Expression().ToString(CultureInfo.InvariantCulture) : TextExpression();
+                    if (chosen) result = value;
+                }
+                else pos = ArgumentEnd(pos);                     // 沒選到的那邊不用算（例如欄位不是數字也沒關係）
+            }
+            if (Peek is not { Kind: TokenKind.RParen }) throw new FormatException(Peek is { Kind: TokenKind.Comma } ? usage : "IIF( ) 的括號沒有成對");
+            pos++;
+            return result;
+        }
+
+        /// <summary>從 index 開始的函數參數到哪裡結束（同一層的 , 或 )）</summary>
+        private int ArgumentEnd(int index)
+        {
+            for (int depth = 0; index < tokens.Count; index++)
+            {
+                if (tokens[index].Kind == TokenKind.LParen) depth++;
+                else if (tokens[index].Kind == TokenKind.RParen) { if (depth-- == 0) return index; }
+                else if (tokens[index].Kind == TokenKind.Comma && depth == 0) return index;
+            }
+            return index;
+        }
+
+        /// <summary>IIF 的條件：值 比較 值；只有一個值時不是 0、不是空白 = 成立</summary>
+        private bool Condition()
+        {
+            int leftStart = pos;
+            object left = Operand();
+            if (!IsCompare(Peek ?? new Token(TokenKind.Comma, "")))
+                return left is decimal d ? d != 0 : ((string)left).Trim() != "";
+            string op = tokens[pos++].Text;
+            if (Peek is null or { Kind: TokenKind.Comma or TokenKind.RParen }) throw new FormatException($"IIF 的條件「{op}」後面少了要比較的值");
+            int rightStart = pos;
+            object right = Operand();
+            int end = pos;
+            int compare;
+            if (left is decimal a && right is decimal b) compare = a.CompareTo(b);
+            else
+            {
+                // 有一邊是文字：兩邊都照文字比（數字那邊重新取成文字）
+                string x = left as string ?? OperandText(leftStart);
+                string y = right as string ?? OperandText(rightStart);
+                pos = end;
+                compare = string.Compare(x.TrimEnd(), y.TrimEnd(), StringComparison.CurrentCultureIgnoreCase);
+            }
+            if (IsCompare(Peek ?? new Token(TokenKind.Comma, ""))) throw new FormatException("IIF 的條件一次只能比一次，要比多個請把 IIF 包起來");
+            return op switch
+            {
+                "=" => compare == 0,
+                "<>" => compare != 0,
+                "<" => compare < 0,
+                ">" => compare > 0,
+                "<=" => compare <= 0,
+                _ => compare >= 0,
+            };
+        }
+
+        /// <summary>條件的一邊：算得出數字就是數字（decimal），不然當成文字（string）</summary>
+        private object Operand()
+        {
+            int start = pos;
+            try
+            {
+                decimal value = Expression();
+                if (EndsPiece(pos)) return value;
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException) { }
+            return OperandText(start);
+        }
+
+        private string OperandText(int start)
+        {
+            pos = start;
+            return TextExpression();
+        }
+
+        /// <summary>WEEKDAY(日期)：星期日 = 1 … 星期六 = 7；pos 在 WEEKDAY 上</summary>
+        private decimal CallWeekday()
+        {
+            const string usage = "WEEKDAY 的寫法是 WEEKDAY(日期欄位)，例如 WEEKDAY(日期)";
+            pos += 2;                                            // WEEKDAY、(
+            if (Peek is null or { Kind: TokenKind.RParen or TokenKind.Comma }) throw new FormatException(usage);
+            string text = TextExpression().Trim();
+            if (Peek is not { Kind: TokenKind.RParen }) throw new FormatException(Peek is { Kind: TokenKind.Comma } ? usage : "WEEKDAY( ) 的括號沒有成對");
+            pos++;
+            if (text == "" && Strict) return 1m;
+            if (!DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out var date)
+                && !DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out date))
+                throw new FormatException(text == "" ? "WEEKDAY 的日期沒有填" : $"WEEKDAY 的「{text}」不是日期");
+            return (int)date.DayOfWeek + 1;
         }
 
         /// <summary>LEFT(文字, n)、RIGHT(文字, n)、MID(文字, 起點[, n])；pos 在函數名稱上</summary>
@@ -433,8 +574,19 @@ public static class Formula
                         throw new FormatException($"{t.Text}( ) 取出來的「{text}」不是數字，不能做 + - * /（要接文字請用 &）");
                     return parsed;
                 }
+                case TokenKind.Iif:
+                {
+                    pos--;
+                    string text = CallIif(numeric: true);
+                    return decimal.Parse(text, NumberStyles.Number, CultureInfo.InvariantCulture);
+                }
+                case TokenKind.Weekday:
+                    pos--;
+                    return CallWeekday();
+                case TokenKind.Op when IsCompare(t):
+                    throw new FormatException($"比較符號「{t.Text}」只能放在 IIF 的條件裡，例如 IIF(數量 {t.Text} 0, \"是\", \"否\")");
                 case TokenKind.Comma:
-                    throw new FormatException("逗號只能放在 LEFT / RIGHT / MID 的括號裡分隔參數");
+                    throw new FormatException("逗號只能放在函數的括號裡分隔參數");
                 case TokenKind.Op when t.Text == "&":
                     throw new FormatException("& 要放在兩段文字或算式中間，而且不能放在括號裡");
                 default:

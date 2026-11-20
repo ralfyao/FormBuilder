@@ -141,7 +141,18 @@ public partial class SqlListDialog : Form
         btnUp.Click += (s, e) => MoveRow(-1);
         toolTip.SetToolTip(btnUp, "選的欄位往上移（清單上往左）；也可以按 Alt+↑");
         toolTip.SetToolTip(btnDown, "選的欄位往下移（清單上往右）；也可以按 Alt+↓");
+        // 顯示欄：全選 / 全不選
+        var btnNone = new Button { Text = "全不選", Dock = DockStyle.Top, Height = 30 };
+        btnNone.Click += (s, e) => SetAllVisible(false);
+        var btnAll = new Button { Text = "全選", Dock = DockStyle.Top, Height = 30 };
+        btnAll.Click += (s, e) => SetAllVisible(true);
+        toolTip.SetToolTip(btnAll, "所有欄位都勾選顯示");
+        toolTip.SetToolTip(btnNone, "所有欄位都取消顯示");
         var movePanel = new Panel { Dock = DockStyle.Right, Width = 78, Padding = new Padding(6, 0, 0, 0) };
+        movePanel.Controls.Add(btnNone);
+        movePanel.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 4 });
+        movePanel.Controls.Add(btnAll);
+        movePanel.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 16 });
         movePanel.Controls.Add(btnDown);
         movePanel.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 4 });
         movePanel.Controls.Add(btnUp);                     // Dock Top：後加的在上面
@@ -253,6 +264,12 @@ public partial class SqlListDialog : Form
 
     /// <summary>最近一次讀到的欄位（資料型別用）</summary>
     private List<GridColumnDefinition> readColumns;
+
+    private void SetAllVisible(bool visible)
+    {
+        dgvColumns.EndEdit();
+        foreach (DataRow row in columnTable.Rows) row["Visible"] = visible;
+    }
 
     private void Apply()
     {
